@@ -9,3 +9,5 @@ data/processed/
 outputs/reports/
 *.py[cod]
 *.parquet
+
+*.egg-info/
