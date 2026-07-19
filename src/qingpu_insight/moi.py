@@ -12,6 +12,7 @@ COLUMN_MAP = {
     "總價元": "total_price_twd",
     "單價元平方公尺": "unit_price_sqm_twd",
     "建物型態": "building_type",
+    "建築型態": "building_type",
     "移轉層次": "floor",
     "總樓層數": "total_floors",
     "車位類別": "parking_type",
@@ -66,7 +67,11 @@ def read_moi_csv(
     path: Path,
     transaction_type: Literal["resale", "presale"],
 ) -> pd.DataFrame:
-    frame = pd.read_csv(path, dtype=str, encoding="utf-8-sig", low_memory=False)
+    frame = pd.read_csv(
+        path, dtype=str, encoding="utf-8-sig", low_memory=False, on_bad_lines="warn"
+    )
+    known = {key for key in COLUMN_MAP if key in frame.columns}
+    frame = frame[list(known)]
     frame = frame.rename(columns={key: value for key, value in COLUMN_MAP.items() if key in frame})
     required = {"district", "address", "transaction_date", "total_price_twd"}
     missing = required.difference(frame.columns)

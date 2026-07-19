@@ -65,46 +65,56 @@ def match_addresses(transactions: pd.DataFrame, doorplates: pd.DataFrame) -> pd.
     output["normalized_address"] = output["address"].map(normalize_address)
     output["road_key"] = output["normalized_address"].map(_road_key)
     output["house_number"] = output["normalized_address"].map(_house_number)
-    exact_lookup = doorplates.drop_duplicates(["district", "normalized_address"]).set_index(
-        ["district", "normalized_address"]
+    output["match_quality"] = "unmatched"
+    output["twd97_x"] = pd.NA
+    output["twd97_y"] = pd.NA
+    best = doorplates.drop_duplicates(["district", "normalized_address"])
+    exact = output.merge(
+        best[["district", "normalized_address", "twd97_x", "twd97_y"]].rename(
+            columns={"twd97_x": "exact_x", "twd97_y": "exact_y"}
+        ),
+        on=["district", "normalized_address"],
+        how="left",
     )
-    rows: list[dict[str, object]] = []
-    for row in output.itertuples(index=False):
-        key = (row.district, row.normalized_address)
-        if key in exact_lookup.index:
-            match = exact_lookup.loc[key]
-            rows.append(
-                {"twd97_x": match.twd97_x, "twd97_y": match.twd97_y, "match_quality": "exact"}
+    has_exact = exact["exact_x"].notna()
+    output.loc[has_exact, "twd97_x"] = exact.loc[has_exact, "exact_x"]
+    output.loc[has_exact, "twd97_y"] = exact.loc[has_exact, "exact_y"]
+    output.loc[has_exact, "match_quality"] = "exact"
+    if not has_exact.all():
+        remaining = output[~has_exact].copy()
+        remaining["_orig_idx"] = remaining.index
+        nn = doorplates[doorplates["house_number"].notna()][
+            ["district", "road_key", "twd97_x", "twd97_y", "house_number"]
+        ].rename(columns={"twd97_x": "nn_x", "twd97_y": "nn_y", "house_number": "nn_house"})
+        candidates = remaining.merge(nn, on=["district", "road_key"], how="left")
+        candidates["number_gap"] = (
+            (candidates["nn_house"] - candidates["house_number"]).abs()
+        )
+        best_nn = (
+            candidates.loc[candidates["house_number"].notna()]
+            .sort_values("number_gap")
+            .drop_duplicates(subset=["_orig_idx"])
+        )
+        close = best_nn[best_nn["number_gap"] <= 10]
+        if not close.empty:
+            for _, row in close.iterrows():
+                orig = row["_orig_idx"]
+                if orig in output.index:
+                    output.at[orig, "twd97_x"] = row["nn_x"]
+                    output.at[orig, "twd97_y"] = row["nn_y"]
+                    output.at[orig, "match_quality"] = "nearest_number"
+        road_idx = output[output["match_quality"] == "unmatched"].index
+        if not road_idx.empty:
+            road_med = (
+                doorplates.groupby(["district", "road_key"])[["twd97_x", "twd97_y"]]
+                .median()
+                .rename(columns={"twd97_x": "road_x", "twd97_y": "road_y"})
             )
-            continue
-        candidates = doorplates[
-            (doorplates["district"] == row.district)
-            & (doorplates["road_key"] == row.road_key)
-            & doorplates["house_number"].notna()
-        ].copy()
-        if row.house_number is not None and not candidates.empty:
-            candidates["number_gap"] = (candidates["house_number"] - row.house_number).abs()
-            match = candidates.sort_values("number_gap").iloc[0]
-            if match["number_gap"] <= 10:
-                rows.append(
-                    {
-                        "twd97_x": match.twd97_x,
-                        "twd97_y": match.twd97_y,
-                        "match_quality": "nearest_number",
-                    }
-                )
-                continue
-        if not candidates.empty:
-            rows.append(
-                {
-                    "twd97_x": candidates["twd97_x"].median(),
-                    "twd97_y": candidates["twd97_y"].median(),
-                    "match_quality": "road_only",
-                }
-            )
-        else:
-            rows.append({"twd97_x": pd.NA, "twd97_y": pd.NA, "match_quality": "unmatched"})
-    matches = pd.DataFrame(rows, index=output.index)
-    output[["twd97_x", "twd97_y", "match_quality"]] = matches
+            for idx in road_idx:
+                key = (output.at[idx, "district"], output.at[idx, "road_key"])
+                if key in road_med.index and pd.notna(road_med.at[key, "road_x"]):
+                    output.at[idx, "twd97_x"] = road_med.at[key, "road_x"]
+                    output.at[idx, "twd97_y"] = road_med.at[key, "road_y"]
+                    output.at[idx, "match_quality"] = "road_only"
     output["coordinate_eligible"] = output["match_quality"].isin(("exact", "nearest_number"))
     return output
