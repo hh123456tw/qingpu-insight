@@ -1,7 +1,18 @@
 from pathlib import Path, PurePosixPath
-from zipfile import ZipFile
+from zipfile import BadZipFile, ZipFile
 
 TARGET_NAMES = {"h_lvr_land_a.csv", "h_lvr_land_b.csv"}
+
+
+def validate_taoyuan_archive(archive: Path) -> bool:
+    if not archive.is_file():
+        return False
+    try:
+        with ZipFile(archive) as bundle:
+            names = {PurePosixPath(name).name.lower() for name in bundle.namelist()}
+            return TARGET_NAMES.issubset(names) and bundle.testzip() is None
+    except (BadZipFile, OSError):
+        return False
 
 
 def extract_taoyuan_tables(archive: Path, destination: Path) -> tuple[Path, ...]:

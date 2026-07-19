@@ -53,20 +53,32 @@ def iter_seasons(start: str, end: str) -> tuple[str, ...]:
 
 def acquire(root: Path, start: str, end: str) -> None:
     settings = get_settings(root)
-    records = []
+    manifest = settings.raw_dir / "manifest.json"
+    errors: list[str] = []
     for season in iter_seasons(start, end):
         archive = settings.raw_dir / "seasons" / f"{season}.zip"
-        records.append(download_season(settings.sources.moi_base_url, season, archive))
-        extract_taoyuan_tables(archive, settings.raw_dir / "seasons" / season)
+        try:
+            record = download_season(settings.sources.moi_base_url, season, archive)
+            write_manifest([record], manifest)
+            extract_taoyuan_tables(archive, settings.raw_dir / "seasons" / season)
+        except Exception as error:
+            errors.append(f"{season}: {error}")
     current = settings.raw_dir / "current"
     for name in ("h_lvr_land_a.csv", "h_lvr_land_b.csv"):
-        records.append(
-            download_current_table(settings.sources.moi_base_url, name, current / name)
+        try:
+            record = download_current_table(settings.sources.moi_base_url, name, current / name)
+            write_manifest([record], manifest)
+        except Exception as error:
+            errors.append(f"{name}: {error}")
+    try:
+        record = download_file(
+            settings.sources.doorplate_url, settings.raw_dir / "doorplates.csv"
         )
-    records.append(
-        download_file(settings.sources.doorplate_url, settings.raw_dir / "doorplates.csv")
-    )
-    write_manifest(records, settings.raw_dir / "manifest.json")
+        write_manifest([record], manifest)
+    except Exception as error:
+        errors.append(f"doorplates.csv: {error}")
+    if errors:
+        raise RuntimeError("acquisition incomplete: " + "; ".join(errors))
 
 
 def _transaction_files(raw_dir: Path) -> list[tuple[Path, str]]:
