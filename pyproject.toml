@@ -12,6 +12,7 @@ dependencies = [
   "pyarrow>=18,<22",
   "pyproj>=3.7,<4",
   "requests>=2.32,<3",
+  "tabulate>=0.9,<1",
 ]
 
 [project.optional-dependencies]
