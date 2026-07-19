@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.env
+.superpowers/
+data/raw/
+data/processed/
+outputs/reports/
+*.py[cod]
+*.parquet
