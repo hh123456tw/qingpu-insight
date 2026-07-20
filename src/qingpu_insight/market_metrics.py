@@ -3,6 +3,25 @@ from typing import Any
 
 import pandas as pd
 
+PUBLIC_TRANSACTION_COLUMNS: tuple[str, ...] = (
+    "transaction_type",
+    "record_id",
+    "station_code",
+    "transaction_date",
+    "building_area_ping",
+    "unit_price_per_ping_twd",
+    "total_price_twd",
+    "building_type",
+    "bedrooms",
+    "living_rooms",
+    "bathrooms",
+    "building_age_years",
+    "station_distance_m",
+    "longitude",
+    "latitude",
+    "match_quality",
+)
+
 
 @dataclass(frozen=True)
 class MarketFilters:
@@ -61,8 +80,10 @@ def market_summary(frame: pd.DataFrame, filters: MarketFilters) -> dict[str, Any
         "transaction_type": filters.transaction_type,
         "station_codes": list(filters.station_codes),
         "record_count": int(count),
-        "median_unit_price_per_ping_twd": float(median_price),
-        "median_total_price_twd": float(median_total),
+        "median_unit_price_per_ping_twd": (
+            float(median_price) if pd.notna(median_price) else None
+        ),
+        "median_total_price_twd": float(median_total) if pd.notna(median_total) else None,
         "latest_transaction_date": latest_date_str,
     }
 
@@ -90,9 +111,17 @@ def recent_transactions(
     subset = filter_market(frame, filters)
     sorted_subset = subset.sort_values("transaction_date", ascending=False)
     cap = min(limit, 100)
-    rows = sorted_subset.head(cap).to_dict(orient="records")
+    public_columns = [
+        column for column in PUBLIC_TRANSACTION_COLUMNS if column in sorted_subset.columns
+    ]
+    rows = sorted_subset.head(cap)[public_columns].to_dict(orient="records")
     for row in rows:
-        row.pop("address", None)
+        for key, value in row.items():
+            try:
+                if pd.isna(value):
+                    row[key] = None
+            except (TypeError, ValueError):
+                pass
         if "latitude" in row and row["latitude"] is not None and pd.notna(row["latitude"]):
             row["latitude"] = round(float(row["latitude"]), 4)
         if "longitude" in row and row["longitude"] is not None and pd.notna(row["longitude"]):

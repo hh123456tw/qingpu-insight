@@ -34,6 +34,21 @@ ALLOWLISTED_COLUMNS: tuple[str, ...] = (
 
 COLUMNS_SQL = ", ".join(ALLOWLISTED_COLUMNS)
 
+NUMERIC_COLUMNS: tuple[str, ...] = (
+    "building_area_sqm",
+    "building_area_ping",
+    "unit_price_sqm_twd",
+    "unit_price_per_ping_twd",
+    "total_price_twd",
+    "bedrooms",
+    "living_rooms",
+    "bathrooms",
+    "building_age_years",
+    "station_distance_m",
+    "longitude",
+    "latitude",
+)
+
 
 class MarketDataSource(ABC):
     @abstractmethod
@@ -141,7 +156,11 @@ class MySQLMarketDataSource(MarketDataSource):
         finally:
             if self._test_connection is None:
                 conn.close()
-        return pd.DataFrame(rows, columns=list(ALLOWLISTED_COLUMNS))
+        frame = pd.DataFrame(rows, columns=list(ALLOWLISTED_COLUMNS))
+        frame["transaction_date"] = pd.to_datetime(frame["transaction_date"])
+        for column in NUMERIC_COLUMNS:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+        return frame
 
 
 def repository_from_env(root: Path) -> MarketDataSource:

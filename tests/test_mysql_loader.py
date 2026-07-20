@@ -3,7 +3,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
-from qingpu_insight.mysql_loader import _UPSERT_SQL, load_market_rows
+from qingpu_insight.mysql_loader import _UPSERT_SQL, INSERT_COLUMNS, load_market_rows
 
 
 class FakeCursor:
@@ -116,7 +116,7 @@ def test_loader_converts_nan_to_none(fake_connection: FakeConnection) -> None:
         "bedrooms": [None],
         "living_rooms": [None],
         "bathrooms": [None],
-        "building_age_years": [None],
+        "building_age_years": [float("nan")],
         "station_distance_m": [500.0],
         "longitude": [121.21],
         "latitude": [25.01],
@@ -132,6 +132,7 @@ def test_loader_converts_nan_to_none(fake_connection: FakeConnection) -> None:
     row = rows[0]
     assert row[10] is None  # building_type
     assert row[11] is None  # bedrooms
+    assert row[14] is None  # building_age_years (float column)
     assert fake_connection.committed
 
 
@@ -182,4 +183,10 @@ def test_loader_rollback_on_error(fake_connection: FakeConnection) -> None:
     with pytest.raises(RuntimeError, match="Deadlock found"):
         load_market_rows(fc, df, batch_size=10)
     assert fc.rolled_back
+    assert not fc.committed
     assert len(bad_cursor.executemany_calls) == 1
+
+
+def test_upsert_refreshes_all_mutable_market_fields() -> None:
+    for column in INSERT_COLUMNS[1:]:
+        assert f"{column}=VALUES({column})" in _UPSERT_SQL

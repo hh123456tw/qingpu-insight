@@ -28,28 +28,42 @@ INSERT_COLUMNS: tuple[str, ...] = (
 _placeholders = ", ".join("%s" for _ in INSERT_COLUMNS)
 _columns_sql = ", ".join(INSERT_COLUMNS)
 
+_updates_sql = ",\n  ".join(
+    f"{column}=VALUES({column})" for column in INSERT_COLUMNS[1:]
+)
+
 _UPSERT_SQL = f"""INSERT INTO market_transactions ({_columns_sql})
 VALUES ({_placeholders})
 ON DUPLICATE KEY UPDATE
-  station_code=VALUES(station_code),
-  transaction_date=VALUES(transaction_date),
-  unit_price_per_ping_twd=VALUES(unit_price_per_ping_twd),
-  total_price_twd=VALUES(total_price_twd),
+  {_updates_sql},
   updated_at=CURRENT_TIMESTAMP"""
 
 
+def _mysql_value(value: Any) -> Any:
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if hasattr(value, "item"):
+        return value.item()
+    return value
+
+
 def load_market_rows(connection: Any, frame: pd.DataFrame, batch_size: int = 1000) -> int:
-    clean = frame.where(pd.notna(frame), None)
     total = 0
-    for start in range(0, len(clean), batch_size):
-        batch = clean.iloc[start : start + batch_size]
-        rows = [tuple(row) for row in batch[list(INSERT_COLUMNS)].to_numpy()]
-        try:
+    try:
+        for start in range(0, len(frame), batch_size):
+            batch = frame.iloc[start : start + batch_size]
+            rows = [
+                tuple(_mysql_value(value) for value in row)
+                for row in batch[list(INSERT_COLUMNS)].itertuples(index=False, name=None)
+            ]
             with connection.cursor() as cursor:
                 cursor.executemany(_UPSERT_SQL, rows)
-            connection.commit()
             total += len(rows)
-        except Exception:
-            connection.rollback()
-            raise
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
     return total

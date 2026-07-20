@@ -1,6 +1,13 @@
 document.addEventListener("DOMContentLoaded", function () {
   const typeSelect = document.getElementById("transaction-type");
   const stationFilter = document.getElementById("station-filter");
+  const controls = document.querySelector(".controls");
+  const dateFrom = document.getElementById("date-from");
+  const dateTo = document.getElementById("date-to");
+  const areaPingMin = document.getElementById("area-ping-min");
+  const areaPingMax = document.getElementById("area-ping-max");
+  const buildingType = document.getElementById("building-type");
+  const bedrooms = document.getElementById("bedrooms");
   const statusEl = document.getElementById("status");
   const medianPrice = document.getElementById("median-price");
   const recordCount = document.getElementById("record-count");
@@ -38,6 +45,12 @@ document.addEventListener("DOMContentLoaded", function () {
     checks.forEach(function (cb) {
       params.append("station", cb.value);
     });
+    if (dateFrom.value) params.set("date_from", dateFrom.value);
+    if (dateTo.value) params.set("date_to", dateTo.value);
+    if (areaPingMin.value) params.set("area_ping_min", areaPingMin.value);
+    if (areaPingMax.value) params.set("area_ping_max", areaPingMax.value);
+    if (buildingType.value) params.append("building_type", buildingType.value);
+    if (bedrooms.value) params.append("bedrooms", bedrooms.value);
     return params;
   }
 
@@ -101,7 +114,7 @@ document.addEventListener("DOMContentLoaded", function () {
       return t.month.replace("-", "年") + "月";
     });
     var prices = trends.map(function (t) {
-      return t.median_unit_price_per_ping_twd;
+      return t.median_unit_price_per_ping_twd / 10000;
     });
     var volumes = trends.map(function (t) {
       return t.record_count;
@@ -232,6 +245,5 @@ document.addEventListener("DOMContentLoaded", function () {
 
   fetchData();
 
-  typeSelect.addEventListener("change", fetchData);
-  stationFilter.addEventListener("change", fetchData);
+  controls.addEventListener("change", fetchData);
 });

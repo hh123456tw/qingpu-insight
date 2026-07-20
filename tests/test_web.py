@@ -46,11 +46,28 @@ def test_homepage_contains_market_dashboard_contract(client) -> None:
     assert response.status_code == 200
     assert 'id="transaction-type"' in html
     assert 'id="station-filter"' in html
+    assert 'id="date-from"' in html
+    assert 'id="date-to"' in html
+    assert 'id="area-ping-min"' in html
+    assert 'id="area-ping-max"' in html
+    assert 'id="building-type"' in html
+    assert 'id="bedrooms"' in html
+    assert 'value="住宅大樓(11層含以上有電梯)"' in html
+    assert 'value="華廈(10層含以下有電梯)"' in html
+    assert 'value="公寓(5樓含以下無電梯)"' in html
     assert 'id="market-map"' in html
     assert 'id="price-trend"' in html
     assert 'id="recent-transactions"' in html
     assert "資料更新至" in html
     assert "僅供市場研究" in html
+
+
+def test_frontend_assets_keep_units_and_map_size_consistent(client) -> None:
+    script = client.get("/static/app.js").get_data(as_text=True)
+    styles = client.get("/static/app.css").get_data(as_text=True)
+    assert "t.median_unit_price_per_ping_twd / 10000" in script
+    assert "height: 440px" in styles
+    assert "min-width: 0" in styles
 
 
 class TestMarketApi:
@@ -102,3 +119,35 @@ class TestMarketApi:
         assert payload is not None
         assert payload["limit"] == 1
         assert isinstance(payload["items"], list)
+        assert "NaN" not in response.get_data(as_text=True)
+
+    def test_empty_summary_serializes_missing_medians_as_null(
+        self, client: FlaskClient
+    ) -> None:
+        response = client.get(
+            "/api/market/summary?transaction_type=resale&date_from=2099-01-01"
+        )
+        assert response.status_code == 200
+        assert response.get_json()["median_unit_price_per_ping_twd"] is None
+        assert "NaN" not in response.get_data(as_text=True)
+
+    def test_transactions_do_not_expose_internal_location_fields(
+        self, client: FlaskClient
+    ) -> None:
+        response = client.get("/api/transactions?transaction_type=resale&limit=1")
+        raw = response.get_data(as_text=True)
+        assert response.status_code == 200
+        private_fields = (
+            "normalized_address",
+            "road_key",
+            "house_number",
+            "twd97_x",
+            "twd97_y",
+            "remarks",
+        )
+        for field in private_fields:
+            assert field not in raw
+
+
+def test_unknown_route_preserves_http_404(client: FlaskClient) -> None:
+    assert client.get("/does-not-exist").status_code == 404

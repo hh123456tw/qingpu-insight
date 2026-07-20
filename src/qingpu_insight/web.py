@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 from flask import Flask, jsonify, render_template, request
 from werkzeug.datastructures import MultiDict
+from werkzeug.exceptions import HTTPException
 
 from qingpu_insight.market_metrics import (
     MarketFilters,
@@ -99,6 +100,8 @@ def create_app(
 
     @app.errorhandler(Exception)
     def handle_unhandled(error: Exception):
+        if isinstance(error, HTTPException):
+            return error
         app.logger.exception("unhandled error serving request")
         return jsonify(
             {

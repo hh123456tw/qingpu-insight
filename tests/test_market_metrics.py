@@ -42,6 +42,44 @@ def test_recent_transactions_limit_and_round_coordinates(market_frame: pd.DataFr
     assert len(str(result[0]["latitude"]).split(".")[-1]) <= 4
 
 
+def test_recent_transactions_exposes_only_public_fields(
+    market_frame: pd.DataFrame,
+) -> None:
+    result = recent_transactions(
+        market_frame, MarketFilters(transaction_type="resale"), limit=1
+    )
+    assert set(result[0]) == {
+        "transaction_type",
+        "record_id",
+        "station_code",
+        "transaction_date",
+        "building_area_ping",
+        "unit_price_per_ping_twd",
+        "total_price_twd",
+        "building_type",
+        "bedrooms",
+        "living_rooms",
+        "bathrooms",
+        "building_age_years",
+        "station_distance_m",
+        "longitude",
+        "latitude",
+        "match_quality",
+    }
+
+
+def test_empty_summary_uses_none_instead_of_nan(market_frame: pd.DataFrame) -> None:
+    result = market_summary(
+        market_frame,
+        MarketFilters(
+            transaction_type="resale", date_from=pd.Timestamp("2099-01-01")
+        ),
+    )
+    assert result["record_count"] == 0
+    assert result["median_unit_price_per_ping_twd"] is None
+    assert result["median_total_price_twd"] is None
+
+
 def test_invalid_transaction_type_raises_value_error() -> None:
     with pytest.raises(ValueError, match="transaction_type must be resale or presale"):
         MarketFilters(transaction_type="invalid")

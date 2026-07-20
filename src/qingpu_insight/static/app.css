@@ -78,11 +78,11 @@ main {
   min-height: 44px;
 }
 
-select, input[type="checkbox"] {
+select, input[type="checkbox"], input[type="date"], input[type="number"] {
   min-height: 44px;
 }
 
-select {
+select, input[type="date"], input[type="number"] {
   font-size: 0.9rem;
   padding: 0.3rem 0.5rem;
   border: 1px solid var(--line);
@@ -92,7 +92,7 @@ select {
   cursor: pointer;
 }
 
-select:focus, input[type="checkbox"]:focus {
+select:focus, input:focus {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -156,6 +156,7 @@ legend {
 }
 
 .dashboard-grid article {
+  min-width: 0;
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -169,7 +170,7 @@ legend {
 }
 
 #market-map {
-  min-height: 440px;
+  height: 440px;
   border-radius: 4px;
   overflow: hidden;
 }

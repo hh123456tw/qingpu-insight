@@ -27,6 +27,37 @@
       <label><input type="checkbox" value="A18" checked>A18</label>
       <label><input type="checkbox" value="A19" checked>A19</label>
     </fieldset>
+    <label>起始日期
+      <input id="date-from" type="date">
+    </label>
+    <label>結束日期
+      <input id="date-to" type="date">
+    </label>
+    <label>最小坪數
+      <input id="area-ping-min" type="number" min="0" step="1" inputmode="decimal" placeholder="不限">
+    </label>
+    <label>最大坪數
+      <input id="area-ping-max" type="number" min="0" step="1" inputmode="decimal" placeholder="不限">
+    </label>
+    <label>建物類型
+      <select id="building-type">
+        <option value="">全部</option>
+        <option value="住宅大樓(11層含以上有電梯)">住宅大樓</option>
+        <option value="華廈(10層含以下有電梯)">華廈</option>
+        <option value="公寓(5樓含以下無電梯)">公寓</option>
+        <option value="透天厝">透天厝</option>
+      </select>
+    </label>
+    <label>房數
+      <select id="bedrooms">
+        <option value="">全部</option>
+        <option value="1">1 房</option>
+        <option value="2">2 房</option>
+        <option value="3">3 房</option>
+        <option value="4">4 房</option>
+        <option value="5">5 房</option>
+      </select>
+    </label>
   </section>
   <section id="status" role="status" aria-live="polite"></section>
   <section class="kpis" aria-label="市場摘要">

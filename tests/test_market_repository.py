@@ -1,10 +1,11 @@
+from datetime import date
 from pathlib import Path
 from urllib.parse import urlparse
 
 import pandas as pd
 import pytest
 
-from qingpu_insight.market_metrics import MarketFilters
+from qingpu_insight.market_metrics import MarketFilters, market_trends
 from qingpu_insight.market_repository import (
     ALLOWLISTED_COLUMNS,
     MySQLMarketDataSource,
@@ -69,7 +70,7 @@ def test_mysql_source_generates_parameterized_sql() -> None:
     fake = FakeConnection()
     cursor = fake.cursor_instance
     cursor.fetchall_result = [
-        ("k1", "resale", "R1", "A18", "2026-01-15", 99.17355, 30.0, 181500, 600000.0, 18000000,
+        ("k1", "resale", "R1", "A18", date(2026, 1, 15), 99.17355, 30.0, 181500, 600000.0, 18000000,
          "住宅大樓", 3, 2, 2, 6.04, 500.0, 121.21, 25.01, "exact", "a.csv")
     ]
 
@@ -97,6 +98,8 @@ def test_mysql_source_generates_parameterized_sql() -> None:
     assert list(df.columns) == list(ALLOWLISTED_COLUMNS)
     assert len(df) == 1
     assert df.iloc[0]["transaction_key"] == "k1"
+    assert pd.api.types.is_datetime64_any_dtype(df["transaction_date"])
+    assert market_trends(df, filters)[0]["month"] == "2026-01"
 
 
 def test_parquet_source_filters_by_transaction_type(tmp_path: Path) -> None:
