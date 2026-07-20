@@ -1,7 +1,6 @@
 import json
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
 from qingpu_insight import cli
@@ -87,3 +86,39 @@ def test_market_build_command_creates_clean_dataset_and_quality_report(
         (tmp_path / "outputs" / "reports" / "m1-market-quality.json").read_text("utf-8")
     )
     assert payload["output_records"] == 2
+
+
+def test_mysql_load_requires_database_url(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("QINGPU_DATABASE_URL", raising=False)
+    with pytest.raises(RuntimeError, match="QINGPU_DATABASE_URL is required"):
+        main(["mysql-load", "--input", str(tmp_path / "market.parquet")])
+
+
+def test_mysql_load_success(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv(
+        "QINGPU_DATABASE_URL",
+        "mysql+pymysql://qingpu:password@127.0.0.1:3306/qingpu_insight",
+    )
+    from qingpu_insight.market_cleaning import build_market_dataset
+
+    clean, _ = build_market_dataset(sample_rows())
+    output = tmp_path / "market.parquet"
+    clean.to_parquet(output, index=False)
+    called_with: list = []
+
+    def fake_load(connection, frame, batch_size=1000):
+        called_with.append(frame)
+        return len(frame)
+
+    monkeypatch.setattr(cli, "load_market_rows", fake_load)
+
+    import types
+
+    fake_conn = types.SimpleNamespace(close=lambda: None)
+    monkeypatch.setattr(cli.pymysql, "connect", lambda **kw: fake_conn)
+
+    exit_code = main(["mysql-load", "--input", str(output)])
+
+    assert exit_code == 0
+    assert len(called_with) == 1
+    assert len(called_with[0]) == len(clean)

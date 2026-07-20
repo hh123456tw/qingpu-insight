@@ -1,9 +1,8 @@
-import hashlib
 
 import pandas as pd
 import pytest
 
-from qingpu_insight.market_cleaning import PRICE_PER_PING_MAX, PRICE_PER_PING_MIN, SQM_PER_PING, build_market_dataset
+from qingpu_insight.market_cleaning import build_market_dataset
 
 
 def sample_rows() -> pd.DataFrame:

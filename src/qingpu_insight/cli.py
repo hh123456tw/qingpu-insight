@@ -1,9 +1,12 @@
 import argparse
 import json
+import os
 import sys
+import urllib.parse
 from pathlib import Path
 
 import pandas as pd
+import pymysql
 
 from qingpu_insight.addresses import build_doorplate_frame, match_addresses
 from qingpu_insight.archives import extract_taoyuan_tables
@@ -18,6 +21,7 @@ from qingpu_insight.feasibility import evaluate_feasibility
 from qingpu_insight.geo import assign_life_circle, station_points
 from qingpu_insight.market_cleaning import build_market_dataset
 from qingpu_insight.moi import read_moi_csv
+from qingpu_insight.mysql_loader import load_market_rows
 from qingpu_insight.reporting import write_report
 
 SOURCES = (
@@ -128,6 +132,28 @@ def market_build(root: Path, input_path: str, output_path: str, quality_output_p
     return 0
 
 
+def mysql_load(root: Path, input_path: str) -> int:
+    url = os.environ.get("QINGPU_DATABASE_URL")
+    if url is None:
+        raise RuntimeError("QINGPU_DATABASE_URL is required")
+    frame = pd.read_parquet(root / input_path)
+    parsed = urllib.parse.urlparse(url)
+    connection = pymysql.connect(
+        host=parsed.hostname or "localhost",
+        port=parsed.port or 3306,
+        user=parsed.username or "",
+        password=parsed.password or "",
+        database=parsed.path.lstrip("/"),
+        charset="utf8mb4",
+    )
+    try:
+        n = load_market_rows(connection, frame)
+    finally:
+        connection.close()
+    print(f"Loaded {n} market rows into MySQL.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="qingpu-data")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -141,6 +167,8 @@ def build_parser() -> argparse.ArgumentParser:
     market_parser.add_argument("--input", default="data/processed/transactions.parquet")
     market_parser.add_argument("--output", default="data/processed/market_transactions.parquet")
     market_parser.add_argument("--quality-output", default="outputs/reports/m1-market-quality.json")
+    mysql_parser = subparsers.add_parser("mysql-load")
+    mysql_parser.add_argument("--input", default="data/processed/market_transactions.parquet")
     return parser
 
 
@@ -153,6 +181,8 @@ def main(argv: list[str] | None = None) -> int:
         return analyse(root, getattr(args, "allow_no_go", False))
     if args.command == "market-build":
         return market_build(root, args.input, args.output, args.quality_output)
+    if args.command == "mysql-load":
+        return mysql_load(root, args.input)
     return 0
 
 

@@ -76,7 +76,9 @@ def build_market_dataset(frame: pd.DataFrame) -> tuple[pd.DataFrame, MarketQuali
         "outside_life_circle": int((residential & ~in_circle).sum()),
         "invalid_price": int((residential & in_circle & ~valid_price).sum()),
         "invalid_area": int((residential & in_circle & valid_price & ~valid_area).sum()),
-        "invalid_date": int((residential & in_circle & valid_price & valid_area & ~valid_date).sum()),
+        "invalid_date": int(
+            (residential & in_circle & valid_price & valid_area & ~valid_date).sum()
+        ),
     }
     reasons = {name: count for name, count in reasons.items() if count}
     clean = output.loc[output["analysis_eligible"]].drop_duplicates("transaction_key").copy()
