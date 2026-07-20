@@ -58,3 +58,18 @@ def test_parser_rejects_malformed_rows_inside_project_districts(
 
     with pytest.raises(ValueError, match="malformed in-scope MOI row 2"):
         read_moi_csv(source, "resale")
+
+
+def test_resale_parser_exposes_residential_analysis_fields() -> None:
+    frame = read_moi_csv(FIXTURES / "moi_resale.csv", "resale")
+    row = frame.iloc[0]
+    assert row["transaction_subject"] == "房地(土地+建物)+車位"
+    assert row["main_use"] == "住家用"
+    assert row["completion_date"] == pd.Timestamp("2020-01-15")
+    assert row[["bedrooms", "living_rooms", "bathrooms"]].tolist() == [3, 2, 2]
+    assert row["has_management"] == "有"
+
+
+def test_presale_parser_allows_missing_completion_date() -> None:
+    frame = read_moi_csv(FIXTURES / "moi_presale.csv", "presale")
+    assert pd.isna(frame.loc[0, "completion_date"])

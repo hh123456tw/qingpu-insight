@@ -21,6 +21,14 @@ COLUMN_MAP = {
     "車位移轉總面積平方公尺": "parking_area_sqm",
     "車位總價元": "parking_price_twd",
     "編號": "record_id",
+    "交易標的": "transaction_subject",
+    "主要用途": "main_use",
+    "建築完成年月": "completion_date",
+    "建物現況格局-房": "bedrooms",
+    "建物現況格局-廳": "living_rooms",
+    "建物現況格局-衛": "bathrooms",
+    "有無管理組織": "has_management",
+    "備註": "remarks",
 }
 
 CANONICAL_COLUMNS = [
@@ -39,6 +47,14 @@ CANONICAL_COLUMNS = [
     "parking_area_sqm",
     "parking_price_twd",
     "source_file",
+    "transaction_subject",
+    "main_use",
+    "completion_date",
+    "bedrooms",
+    "living_rooms",
+    "bathrooms",
+    "has_management",
+    "remarks",
 ]
 
 NUMERIC_COLUMNS = [
@@ -64,6 +80,20 @@ def roc_date_to_timestamp(value: object) -> pd.Timestamp:
         return pd.Timestamp(year=year, month=month, day=day)
     except ValueError:
         return pd.NaT
+
+
+def roc_month_or_date_to_timestamp(value: object) -> pd.Timestamp:
+    text = str(value).strip().split(".")[0]
+    if not text or text.lower() == "nan" or not text.isdigit():
+        return pd.NaT
+    if len(text) in (5, 6):
+        text = text.ljust(7, "0")
+        text = text[:-2] + "15"
+    elif len(text) == 7:
+        text = text.zfill(7)
+    else:
+        return pd.NaT
+    return roc_date_to_timestamp(text)
 
 
 def read_moi_csv(
@@ -102,7 +132,21 @@ def read_moi_csv(
     for column in ("record_id", "building_type", "floor", "total_floors", "parking_type"):
         if column not in frame:
             frame[column] = pd.NA
+    for column in (
+        "transaction_subject",
+        "main_use",
+        "completion_date",
+        "has_management",
+        "remarks",
+    ):
+        if column not in frame:
+            frame[column] = pd.NA
+    for column in ("bedrooms", "living_rooms", "bathrooms"):
+        if column not in frame:
+            frame[column] = pd.NA
+        frame[column] = pd.to_numeric(frame[column], errors="coerce").astype("Int64")
     frame["transaction_date"] = frame["transaction_date"].map(roc_date_to_timestamp)
+    frame["completion_date"] = frame["completion_date"].map(roc_month_or_date_to_timestamp)
     frame.insert(0, "transaction_type", transaction_type)
     frame["source_file"] = path.name
     return frame[CANONICAL_COLUMNS].reset_index(drop=True)

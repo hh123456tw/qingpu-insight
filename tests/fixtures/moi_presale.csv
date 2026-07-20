@@ -1,3 +1,3 @@
-﻿鄉鎮市區,土地位置建物門牌,交易年月日,建物移轉總面積平方公尺,總價元,單價元平方公尺,建物型態,移轉層次,總樓層數,車位類別,車位移轉總面積(平方公尺),車位總價元,編號
-The villages and towns urban district,land sector position building sector house number,transaction year month and day,building shifting total area,Total price NTD,the unit price,building state,shifting level,total floor number,the berth category,berth shifting total area,berth total price NTD,serial number
-大園區,領航北路四段351號,1141220,32.5,18000000,553846,住宅大樓(11層含以上有電梯),十二層,二十層,坡道平面,10.0,1800000,H-101
+﻿鄉鎮市區,土地位置建物門牌,交易年月日,建物移轉總面積平方公尺,總價元,單價元平方公尺,建物型態,移轉層次,總樓層數,車位類別,車位移轉總面積(平方公尺),車位總價元,編號,交易標的,主要用途,建築完成年月,建物現況格局-房,建物現況格局-廳,建物現況格局-衛,有無管理組織,備註
+The villages and towns urban district,land sector position building sector house number,transaction year month and day,building shifting total area,Total price NTD,the unit price,building state,shifting level,total floor number,the berth category,berth shifting total area,berth total price NTD,serial number,transaction subject,main use,completion year month,bedrooms,living rooms,bathrooms,has management,remarks
+大園區,領航北路四段351號,1141220,32.5,18000000,553846,住宅大樓(11層含以上有電梯),十二層,二十層,坡道平面,10.0,1800000,H-101,房地(土地+建物)+車位,住家用,,2,1,1,有,
