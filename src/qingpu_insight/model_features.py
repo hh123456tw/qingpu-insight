@@ -1,5 +1,5 @@
-import re
 from dataclasses import dataclass
+from typing import Literal
 
 import pandas as pd
 
@@ -96,6 +96,7 @@ def build_model_frame(frame: pd.DataFrame, transaction_type: str) -> pd.DataFram
 
 @dataclass(frozen=True)
 class ValuationInput:
+    transaction_type: Literal["resale", "presale"]
     station_code: str
     station_distance_m: float
     building_area_ping: float
@@ -124,9 +125,10 @@ class ValuationInput:
             raise ValueError("floor must not exceed total_floors")
         if not (0 <= self.parking_area_ping <= 60):
             raise ValueError("parking_area_ping must be between 0 and 60")
-        if self.building_age_years is not None:
-            if not (0 <= self.building_age_years <= 100):
-                raise ValueError("building_age_years must be between 0 and 100")
+        if self.transaction_type == "presale" and self.building_age_years is not None:
+            raise ValueError("building_age_years must be omitted for presale")
+        if self.building_age_years is not None and not (0 <= self.building_age_years <= 100):
+            raise ValueError("building_age_years must be between 0 and 100")
 
 
 def input_frame(value: ValuationInput, data_date: pd.Timestamp) -> pd.DataFrame:

@@ -25,6 +25,7 @@ def fixture_frame() -> pd.DataFrame:
 @pytest.fixture
 def valid_resale_input() -> ValuationInput:
     return ValuationInput(
+        transaction_type="resale",
         station_code="A17",
         station_distance_m=500,
         building_area_ping=30,
@@ -43,6 +44,7 @@ def valid_resale_input() -> ValuationInput:
 @pytest.fixture
 def valid_presale_input() -> ValuationInput:
     return ValuationInput(
+        transaction_type="presale",
         station_code="A18",
         station_distance_m=700,
         building_area_ping=35,
@@ -78,7 +80,7 @@ def test_input_frame_matches_training_feature_columns(valid_resale_input):
 
 
 def test_presale_input_rejects_age_and_floor_above_total(valid_presale_input):
-    with pytest.raises(ValueError, match="building_age_years must be between 0 and 100"):
-        replace(valid_presale_input, building_age_years=-1.0)
+    with pytest.raises(ValueError, match="building_age_years must be omitted"):
+        replace(valid_presale_input, building_age_years=1.0)
     with pytest.raises(ValueError, match="floor must not exceed total_floors"):
         replace(valid_presale_input, floor=21, total_floors=20)
