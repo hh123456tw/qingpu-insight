@@ -34,9 +34,9 @@ def build_doorplate_frame(path: Path) -> pd.DataFrame:
         columns={
             "鄉鎮市區代碼": "district_code",
             "街路段": "street",
-            "村里": "area",
-            "鄰": "lane",
+            "地區": "locality",
             "巷": "alley",
+            "弄": "lane",
             "號": "number",
             "橫座標": "twd97_x",
             "縱座標": "twd97_y",
@@ -47,9 +47,11 @@ def build_doorplate_frame(path: Path) -> pd.DataFrame:
     frame = frame[frame["district"].notna()].copy()
     frame["number"] = frame["number"].fillna("").astype(str)
     has_number = frame["number"].ne("")
-    needs_suffix = has_number & ~frame["number"].str.endswith("號")
+    needs_suffix = has_number & ~frame["number"].str.contains("號", regex=False)
     frame.loc[needs_suffix, "number"] = frame.loc[needs_suffix, "number"] + "號"
-    parts = frame[["street", "area", "lane", "alley", "number"]].fillna("")
+    # 村里與鄰是行政中繼資料，不是門牌字串的一部分。把它們接進地址會讓
+    # 鄰別（例如 013）被誤判為門牌號碼，並使精確比對完全失效。
+    parts = frame[["street", "locality", "alley", "lane", "number"]].fillna("")
     frame["normalized_address"] = parts.agg("".join, axis=1).map(normalize_address)
     frame["road_key"] = frame["normalized_address"].map(_road_key)
     frame["house_number"] = frame["normalized_address"].map(_house_number)

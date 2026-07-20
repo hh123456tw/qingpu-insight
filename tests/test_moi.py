@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from qingpu_insight.moi import read_moi_csv, roc_date_to_timestamp
 
@@ -27,3 +28,33 @@ def test_presale_parser_keeps_type_separate() -> None:
     assert frame["district"].tolist() == ["大園區"]
     assert frame["transaction_type"].tolist() == ["presale"]
     assert frame.loc[0, "parking_price_twd"] == 1_800_000
+
+
+def test_parser_ignores_malformed_rows_outside_project_districts(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "moi.csv"
+    source.write_text(
+        "鄉鎮市區,土地位置建物門牌,交易年月日,總價元\n"
+        "觀音區,長春街,1150101,10000000,未引用逗號\n"
+        "中壢區,高鐵北路一段5號,1150102,20000000\n",
+        encoding="utf-8-sig",
+    )
+
+    result = read_moi_csv(source, "resale")
+
+    assert result["district"].tolist() == ["中壢區"]
+
+
+def test_parser_rejects_malformed_rows_inside_project_districts(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "moi.csv"
+    source.write_text(
+        "鄉鎮市區,土地位置建物門牌,交易年月日,總價元\n"
+        "中壢區,高鐵北路一段5號,1150102,20000000,未引用逗號\n",
+        encoding="utf-8-sig",
+    )
+
+    with pytest.raises(ValueError, match="malformed in-scope MOI row 2"):
+        read_moi_csv(source, "resale")
