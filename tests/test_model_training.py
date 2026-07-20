@@ -1,0 +1,220 @@
+import numpy as np
+import pandas as pd
+import pytest
+
+from qingpu_insight.model_features import FEATURE_COLUMNS
+from qingpu_insight.model_training import (
+    RecentMedianBaseline,
+    TimeSplit,
+    evaluate_candidate,
+    leakage_audit,
+    metric_rows,
+    split_by_time,
+)
+
+
+def _build_synthetic_frame(n_rows: int = 800) -> pd.DataFrame:
+    np.random.seed(42)
+    base = pd.Timestamp("2023-01-01")
+    total_days = 1095
+    dates = [base + pd.DateOffset(days=int(i * total_days / n_rows)) for i in range(n_rows)]
+
+    stations = ["A17", "A18", "A19"]
+    types = ["住宅大樓", "華廈"]
+    ptypes = ["坡道平面", "坡道機械", ""]
+
+    rows = []
+    for i in range(n_rows):
+        s = stations[i % 3]
+        t = types[i % 2]
+        pt = ptypes[i % 3]
+
+        base_price = {"A17": 600_000, "A18": 500_000, "A19": 550_000}[s]
+        type_mult = {"住宅大樓": 1.0, "華廈": 0.85}[t]
+        target = base_price * type_mult + np.random.uniform(-50_000, 50_000)
+
+        building_age = float(np.random.uniform(0, 30))
+        fl = int(np.random.randint(1, 15))
+        tfl = int(np.random.randint(5, 25))
+
+        rows.append(
+            {
+                "transaction_date": dates[i],
+                "station_code": s,
+                "station_distance_m": float(np.random.randint(100, 1500)),
+                "building_area_ping": float(np.random.uniform(15, 60)),
+                "building_type": t,
+                "bedrooms": int(np.random.randint(1, 5)),
+                "living_rooms": int(np.random.randint(1, 3)),
+                "bathrooms": int(np.random.randint(1, 3)),
+                "building_age_years": building_age,
+                "floor": fl,
+                "total_floors": tfl,
+                "floor_ratio": fl / tfl,
+                "parking_type": pt,
+                "parking_area_ping": float(np.random.uniform(0, 15) if pt else 0),
+                "transaction_year": dates[i].year,
+                "transaction_month": dates[i].month,
+                "target_unit_price_twd": target,
+                "transaction_key": f"T{i}",
+                "road_key": f"R{i % 10}",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+@pytest.fixture
+def model_frame() -> pd.DataFrame:
+    return _build_synthetic_frame(800)
+
+
+def test_split_by_time_rejects_small_frame():
+    small = pd.DataFrame({"transaction_date": [pd.Timestamp("2024-01-01")] * 10, "x": range(10)})
+    with pytest.raises(ValueError, match="at least 100 rows"):
+        split_by_time(small)
+
+
+def test_time_split_never_trains_on_future_rows(model_frame):
+    split = split_by_time(model_frame, test_months=12, calibration_months=6)
+    assert split.train.transaction_date.max() < split.calibration.transaction_date.min()
+    assert split.calibration.transaction_date.max() < split.test.transaction_date.min()
+
+
+@pytest.fixture
+def fallback_frame() -> pd.DataFrame:
+    np.random.seed(42)
+    rows = []
+    for i in range(25):
+        rows.append(
+            {
+                "transaction_date": pd.Timestamp("2024-01-01") + pd.DateOffset(days=i),
+                "station_code": "A17",
+                "building_type": "住宅大樓",
+                "target_unit_price_twd": 600_000 + i * 1000,
+            }
+        )
+    for i in range(5):
+        rows.append(
+            {
+                "transaction_date": pd.Timestamp("2024-01-01") + pd.DateOffset(days=i),
+                "station_code": "A17",
+                "building_type": "華廈",
+                "target_unit_price_twd": 500_000 + i * 1000,
+            }
+        )
+    for i in range(30):
+        rows.append(
+            {
+                "transaction_date": pd.Timestamp("2024-01-01") + pd.DateOffset(days=i),
+                "station_code": "A18",
+                "building_type": "住宅大樓",
+                "target_unit_price_twd": 700_000 + i * 500,
+            }
+        )
+    for i in range(30):
+        rows.append(
+            {
+                "transaction_date": pd.Timestamp("2024-01-01") + pd.DateOffset(days=i),
+                "station_code": "A18",
+                "building_type": "華廈",
+                "target_unit_price_twd": 450_000 + i * 500,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def test_recent_median_falls_back_from_group_to_station_then_global(fallback_frame):
+    baseline = RecentMedianBaseline(months=24).fit(fallback_frame)
+    a17_median = fallback_frame.loc[fallback_frame.station_code.eq("A17"), "target_unit_price_twd"].median()
+    global_median = fallback_frame["target_unit_price_twd"].median()
+    group_median = fallback_frame.loc[
+        (fallback_frame.station_code == "A17") & (fallback_frame.building_type == "住宅大樓"),
+        "target_unit_price_twd",
+    ].median()
+
+    test_unseen_type = pd.DataFrame({"station_code": ["A17"], "building_type": ["辦公大樓"]})
+    assert baseline.predict(test_unseen_type)[0] == pytest.approx(a17_median)
+
+    test_unknown_station = pd.DataFrame({"station_code": ["A99"], "building_type": ["住宅大樓"]})
+    assert baseline.predict(test_unknown_station)[0] == pytest.approx(global_median)
+
+    test_known_group = pd.DataFrame({"station_code": ["A17"], "building_type": ["住宅大樓"]})
+    assert baseline.predict(test_known_group)[0] == pytest.approx(group_median)
+
+
+def test_metrics_include_overall_station_and_building_type_rows():
+    np.random.seed(42)
+    n = 100
+    frame = pd.DataFrame(
+        {
+            "station_code": ["A17"] * 40 + ["A18"] * 35 + ["A19"] * 25,
+            "building_type": ["住宅大樓"] * 50 + ["華廈"] * 50,
+        }
+    )
+    actual = np.random.uniform(400_000, 800_000, n)
+    predicted = actual + np.random.normal(0, 30_000, n)
+
+    rows = metric_rows(actual, predicted, frame)
+    assert {"overall", "station:A17", "building_type:住宅大樓"} <= set(rows.index)
+    assert {"mae", "mape", "rmse", "r2", "count"} <= set(rows.columns)
+
+
+def test_metrics_excludes_small_groups():
+    frame = pd.DataFrame(
+        {
+            "station_code": ["A99"] * 20,
+            "building_type": ["透天厝"] * 20,
+        }
+    )
+    actual = np.random.uniform(400_000, 800_000, 20)
+    predicted = actual + np.random.normal(0, 30_000, 20)
+    rows = metric_rows(actual, predicted, frame)
+    assert "station:A99" not in rows.index
+    assert "building_type:透天厝" not in rows.index
+
+
+def test_leakage_audit_detects_no_overlap():
+    train = pd.DataFrame(
+        {"transaction_key": ["a", "b"], "road_key": ["r1", "r2"], "target_unit_price_twd": [1.0, 2.0]}
+    )
+    test = pd.DataFrame(
+        {"transaction_key": ["c", "d"], "road_key": ["r3", "r4"], "target_unit_price_twd": [3.0, 4.0]}
+    )
+    cal = pd.DataFrame(
+        {"transaction_key": ["e"], "road_key": ["r5"], "target_unit_price_twd": [5.0]}
+    )
+    split = TimeSplit(train=train, calibration=cal, test=test)
+    audit = leakage_audit(split)
+    assert audit["target_in_features"] == ("target_unit_price_twd" in FEATURE_COLUMNS)
+    assert not audit["transaction_key_overlap"]
+    assert audit["road_group_overlap_count"] == 0
+
+
+def test_leakage_audit_detects_overlaps():
+    train = pd.DataFrame(
+        {"transaction_key": ["a", "b"], "road_key": ["r1", "r2"], "target_unit_price_twd": [1.0, 2.0]}
+    )
+    test = pd.DataFrame(
+        {"transaction_key": ["a", "c"], "road_key": ["r1", "r3"], "target_unit_price_twd": [3.0, 4.0]}
+    )
+    cal = pd.DataFrame(
+        {"transaction_key": ["d"], "road_key": ["r4"], "target_unit_price_twd": [5.0]}
+    )
+    split = TimeSplit(train=train, calibration=cal, test=test)
+    audit = leakage_audit(split)
+    assert audit["transaction_key_overlap"]
+    assert audit["road_group_overlap_count"] == 1
+
+
+def test_evaluate_candidate_returns_evaluation(model_frame):
+    from sklearn.dummy import DummyRegressor
+
+    split = split_by_time(model_frame, test_months=12, calibration_months=6)
+    estimator = DummyRegressor(strategy="mean")
+    result = evaluate_candidate("dummy_mean", estimator, split)
+    assert result.name == "dummy_mean"
+    assert result.estimator is estimator
+    assert isinstance(result.overall_mae, float)
+    assert isinstance(result.station_mape, dict)
+    assert isinstance(result.metrics, pd.DataFrame)
+    assert "overall" in result.metrics.index
