@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,9 @@ from qingpu_insight.market_metrics import (
     recent_transactions,
 )
 from qingpu_insight.market_repository import MarketDataSource, repository_from_env
+from qingpu_insight.model_features import ValuationInput, build_model_frame
+from qingpu_insight.valuation import ModelRegistry, valuate
+from qingpu_insight.valuation_store import FileValuationStore
 
 
 class ApiInputError(Exception):
@@ -60,9 +64,38 @@ def _json_default(obj: Any) -> Any:
     raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
 
+def parse_valuation_payload(payload: dict[str, Any]) -> ValuationInput:
+    required = (
+        "transaction_type", "station_code", "building_area_ping",
+        "station_distance_m", "building_type", "bedrooms", "living_rooms",
+        "bathrooms", "floor", "total_floors",
+    )
+    missing = {name: "required" for name in required if payload.get(name) in (None, "")}
+    if missing:
+        raise ApiInputError("請完整填寫估價條件。", missing)
+    return ValuationInput(
+        transaction_type=str(payload["transaction_type"]),
+        station_code=str(payload["station_code"]),
+        building_area_ping=float(payload["building_area_ping"]),
+        station_distance_m=float(payload["station_distance_m"]),
+        building_type=str(payload["building_type"]),
+        bedrooms=int(payload["bedrooms"]),
+        living_rooms=int(payload["living_rooms"]),
+        bathrooms=int(payload["bathrooms"]),
+        building_age_years=float(payload["building_age_years"]) if payload.get("building_age_years") is not None else None,
+        floor=int(payload["floor"]),
+        total_floors=int(payload["total_floors"]),
+        parking_type=payload.get("parking_type"),
+        parking_area_ping=float(payload.get("parking_area_ping", 0)),
+        asking_total_price_twd=int(payload["asking_total_price_twd"]) if payload.get("asking_total_price_twd") else None,
+    )
+
+
 def create_app(
     data_source: MarketDataSource | None = None,
     root: Path | None = None,
+    valuation_store: FileValuationStore | None = None,
+    model_registry: ModelRegistry | None = None,
 ) -> Flask:
     app = Flask(__name__)
     app.json.default = _json_default
@@ -71,6 +104,8 @@ def create_app(
         data_source = repository_from_env(root)
 
     ds = data_source
+    store = valuation_store or FileValuationStore(Path.cwd() / "outputs" / "valuations")
+    registry = model_registry or ModelRegistry(Path.cwd() / "artifacts")
 
     @app.errorhandler(ApiInputError)
     def handle_api_input_error(error: ApiInputError):
@@ -137,6 +172,32 @@ def create_app(
                 "limit": limit,
             }
         )
+
+    @app.post("/api/valuations")
+    def create_valuation():
+        try:
+            input_ = parse_valuation_payload(request.get_json(force=True))
+        except ApiInputError as error:
+            return jsonify({
+                "error": {"code": "invalid_request", "message": error.message, "fields": error.fields}
+            }), 400
+
+        market = ds.load(MarketFilters(transaction_type=input_.transaction_type))
+        market_model = build_model_frame(market, input_.transaction_type)
+
+        result = valuate(input_, registry, market_model)
+        result["valuation_id"] = str(uuid.uuid4())
+        store.save_with_id(result["valuation_id"], result)
+        return jsonify(result), 201
+
+    @app.get("/api/valuations/<valuation_id>")
+    def get_valuation(valuation_id: str):
+        record = store.get(valuation_id)
+        if record is None:
+            return jsonify({
+                "error": {"code": "not_found", "message": "估價記錄不存在。", "fields": None}
+            }), 404
+        return jsonify(record)
 
     return app
 

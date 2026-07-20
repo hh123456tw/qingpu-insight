@@ -151,3 +151,135 @@ class TestMarketApi:
 
 def test_unknown_route_preserves_http_404(client: FlaskClient) -> None:
     assert client.get("/does-not-exist").status_code == 404
+
+
+# --- Valuation API tests ---
+
+from dataclasses import replace
+
+import numpy as np
+from sklearn.dummy import DummyRegressor
+
+from qingpu_insight.valuation import ModelRegistry, ValuationBundle
+
+
+@pytest.fixture
+def trained_registry(tmp_path) -> ModelRegistry:
+    import joblib
+    dummy = DummyRegressor(strategy="constant", constant=500_000)
+    dummy.fit(np.zeros((5, 5)), np.ones(5))
+    bundle = ValuationBundle(
+        transaction_type="resale", model_name="ridge", model_version="v1",
+        pipeline=dummy, interval_abs_residual_twd_per_ping=50000,
+        feature_ranges={
+            "building_area_ping": (20, 80), "station_distance_m": (100, 1500),
+            "bedrooms": (1, 5), "living_rooms": (1, 4), "bathrooms": (1, 4),
+            "building_age_years": (0, 30), "floor": (1, 20),
+            "total_floors": (5, 25), "parking_area_ping": (0, 20),
+        },
+        feature_hard_ranges={
+            "building_area_ping": (15, 90), "station_distance_m": (50, 1800),
+            "bedrooms": (1, 5), "living_rooms": (1, 4), "bathrooms": (1, 4),
+            "building_age_years": (0, 40), "floor": (1, 22),
+            "total_floors": (3, 28), "parking_area_ping": (0, 25),
+        },
+        feature_medians={
+            "building_area_ping": 35.0, "station_distance_m": 500.0,
+            "bedrooms": 3.0, "living_rooms": 2.0, "bathrooms": 2.0,
+            "building_age_years": 8.0, "floor": 8.0, "total_floors": 15.0,
+            "parking_area_ping": 5.0,
+        },
+        global_importance=[], reference_rows=pd.DataFrame({"dummy": [1]}),
+        data_min_date="2024-01-01", data_max_date="2026-06-01", metrics={},
+    )
+    joblib.dump(bundle, tmp_path / "resale.joblib")
+    return ModelRegistry(tmp_path)
+
+
+@pytest.fixture
+def valuation_client(market_frame: pd.DataFrame, trained_registry, tmp_path) -> FlaskClient:
+    from qingpu_insight.web import create_app
+    from qingpu_insight.valuation_store import FileValuationStore
+    mf = market_frame.copy()
+    mf["floor"] = "五層"
+    mf["total_floors"] = 15
+    mf["parking_type"] = "坡道平面"
+    mf["parking_area_sqm"] = 0
+    ds = InMemoryMarketDataSource(mf)
+    store = FileValuationStore(tmp_path / "vals")
+    app = create_app(data_source=ds, valuation_store=store, model_registry=trained_registry)
+    with app.test_client() as client:
+        yield client
+
+
+VALID_RESALE_PAYLOAD = {
+    "transaction_type": "resale",
+    "station_code": "A17",
+    "building_area_ping": 30,
+    "station_distance_m": 500,
+    "building_type": "住宅大樓(11層含以上有電梯)",
+    "bedrooms": 3,
+    "living_rooms": 2,
+    "bathrooms": 2,
+    "building_age_years": 6.0,
+    "floor": 12,
+    "total_floors": 15,
+    "parking_type": "坡道平面",
+    "parking_area_ping": 10,
+    "asking_total_price_twd": 18000000,
+}
+
+
+@pytest.fixture
+def client_without_models(market_frame: pd.DataFrame, tmp_path) -> FlaskClient:
+    from qingpu_insight.web import create_app
+    from qingpu_insight.valuation_store import FileValuationStore
+    from qingpu_insight.valuation import ModelRegistry
+    mf = market_frame.copy()
+    mf["floor"] = "五層"
+    mf["total_floors"] = 15
+    mf["parking_type"] = "坡道平面"
+    mf["parking_area_sqm"] = 0
+    ds = InMemoryMarketDataSource(mf)
+    store = FileValuationStore(tmp_path / "vals")
+    registry = ModelRegistry(tmp_path / "empty")
+    app = create_app(data_source=ds, valuation_store=store, model_registry=registry)
+    with app.test_client() as client:
+        yield client
+
+
+def test_post_valuation_returns_evidence(valuation_client):
+    response = valuation_client.post("/api/valuations", json=VALID_RESALE_PAYLOAD)
+    assert response.status_code == 201
+    body = response.get_json()
+    assert body["transaction_type"] == "resale"
+    assert body["interval_total_price_twd"][0] <= body["estimated_total_price_twd"]
+    assert {"confidence", "factors", "comparables", "model", "data_date"} <= body.keys()
+
+
+def test_post_valuation_reports_field_errors(valuation_client):
+    response = valuation_client.post("/api/valuations", json={"transaction_type": "resale"})
+    assert response.status_code == 400
+    assert "building_area_ping" in response.get_json()["error"]["fields"]
+
+
+def test_missing_artifact_uses_explicit_baseline(client_without_models):
+    response = client_without_models.post("/api/valuations", json=VALID_RESALE_PAYLOAD)
+    assert response.status_code == 201
+    body = response.get_json()
+    assert body["degraded"] is True
+    assert body["model"]["name"] == "recent_median_baseline"
+
+
+def test_get_valuation_returns_saved_record(valuation_client):
+    post = valuation_client.post("/api/valuations", json=VALID_RESALE_PAYLOAD)
+    assert post.status_code == 201
+    vid = post.get_json()["valuation_id"]
+    response = valuation_client.get(f"/api/valuations/{vid}")
+    assert response.status_code == 200
+    assert response.get_json()["valuation_id"] == vid
+
+
+def test_get_nonexistent_valuation_returns_404(valuation_client):
+    response = valuation_client.get("/api/valuations/nonexistent")
+    assert response.status_code == 404
