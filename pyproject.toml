@@ -26,6 +26,7 @@ dev = [
 
 [project.scripts]
 qingpu-data = "qingpu_insight.cli:main"
+qingpu-web = "qingpu_insight.web:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
