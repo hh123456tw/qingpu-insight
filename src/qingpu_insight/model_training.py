@@ -3,6 +3,12 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import Ridge
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from qingpu_insight.model_features import FEATURE_COLUMNS
 
@@ -148,3 +154,47 @@ def evaluate_candidate(
     return CandidateEvaluation(
         name=name, estimator=estimator, overall_mae=overall_mae, station_mape=station_mape, metrics=metrics
     )
+
+
+NUMERIC_FEATURES = [
+    "station_distance_m", "building_area_ping", "bedrooms", "living_rooms",
+    "bathrooms", "building_age_years", "floor", "total_floors", "floor_ratio",
+    "parking_area_ping", "transaction_year", "transaction_month",
+]
+CATEGORICAL_FEATURES = ["station_code", "building_type", "parking_type"]
+
+
+def make_preprocessor() -> ColumnTransformer:
+    return ColumnTransformer([
+        ("numeric", Pipeline([
+            ("impute", SimpleImputer(strategy="median", add_indicator=True)),
+            ("scale", StandardScaler()),
+        ]), NUMERIC_FEATURES),
+        ("categorical", Pipeline([
+            ("impute", SimpleImputer(strategy="most_frequent")),
+            ("onehot", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
+        ]), CATEGORICAL_FEATURES),
+    ])
+
+
+def candidate_estimators(seed: int = 42) -> dict[str, Pipeline]:
+    return {
+        "ridge": Pipeline([("features", make_preprocessor()), ("model", Ridge(alpha=10.0))]),
+        "random_forest": Pipeline([("features", make_preprocessor()), ("model", RandomForestRegressor(
+            n_estimators=400, min_samples_leaf=5, max_features=0.8,
+            random_state=seed, n_jobs=-1,
+        ))]),
+        "hist_gradient_boosting": Pipeline([("features", make_preprocessor()), ("model", HistGradientBoostingRegressor(
+            learning_rate=0.06, max_iter=350, max_leaf_nodes=31,
+            l2_regularization=1.0, random_state=seed,
+        ))]),
+    }
+
+
+def select_release_candidate(results: list[CandidateEvaluation]) -> CandidateEvaluation:
+    baseline = next(result for result in results if result.name == "baseline")
+    eligible = [result for result in results if result.name != "baseline"
+        and result.overall_mae <= baseline.overall_mae * 0.98
+        and all(result.station_mape[s] <= baseline.station_mape[s] * 1.10
+                for s in ("A17", "A18", "A19"))]
+    return min(eligible, key=lambda result: result.overall_mae, default=baseline)

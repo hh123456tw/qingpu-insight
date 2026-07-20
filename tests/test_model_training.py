@@ -4,11 +4,14 @@ import pytest
 
 from qingpu_insight.model_features import FEATURE_COLUMNS
 from qingpu_insight.model_training import (
+    CandidateEvaluation,
     RecentMedianBaseline,
     TimeSplit,
+    candidate_estimators,
     evaluate_candidate,
     leakage_audit,
     metric_rows,
+    select_release_candidate,
     split_by_time,
 )
 
@@ -218,3 +221,66 @@ def test_evaluate_candidate_returns_evaluation(model_frame):
     assert isinstance(result.station_mape, dict)
     assert isinstance(result.metrics, pd.DataFrame)
     assert "overall" in result.metrics.index
+
+
+def test_candidate_inventory_contains_required_models():
+    estimators = candidate_estimators(seed=42)
+    assert set(estimators) == {"ridge", "random_forest", "hist_gradient_boosting"}
+
+
+def test_release_gate_requires_overall_improvement_and_station_stability():
+    baseline = CandidateEvaluation(
+        name="baseline",
+        estimator=None,
+        overall_mae=100_000.0,
+        station_mape={"A17": 5.0, "A18": 6.0, "A19": 7.0},
+        metrics=pd.DataFrame(),
+    )
+    ridge = CandidateEvaluation(
+        name="ridge",
+        estimator=None,
+        overall_mae=90_000.0,
+        station_mape={"A17": 4.5, "A18": 5.5, "A19": 6.5},
+        metrics=pd.DataFrame(),
+    )
+    rf = CandidateEvaluation(
+        name="random_forest",
+        estimator=None,
+        overall_mae=95_000.0,
+        station_mape={"A17": 5.0, "A18": 5.8, "A19": 6.8},
+        metrics=pd.DataFrame(),
+    )
+    hgb = CandidateEvaluation(
+        name="hist_gradient_boosting",
+        estimator=None,
+        overall_mae=92_000.0,
+        station_mape={"A17": 4.8, "A18": 5.9, "A19": 6.9},
+        metrics=pd.DataFrame(),
+    )
+    results_with_ridge_win = [baseline, ridge, rf, hgb]
+
+    ridge_bad = CandidateEvaluation(
+        name="ridge",
+        estimator=None,
+        overall_mae=97_000.0,
+        station_mape={"A17": 4.5, "A18": 6.7, "A19": 6.5},
+        metrics=pd.DataFrame(),
+    )
+    rf_bad = CandidateEvaluation(
+        name="random_forest",
+        estimator=None,
+        overall_mae=85_000.0,
+        station_mape={"A17": 4.0, "A18": 6.8, "A19": 6.0},
+        metrics=pd.DataFrame(),
+    )
+    hgb_bad = CandidateEvaluation(
+        name="hist_gradient_boosting",
+        estimator=None,
+        overall_mae=99_000.0,
+        station_mape={"A17": 4.9, "A18": 6.5, "A19": 6.9},
+        metrics=pd.DataFrame(),
+    )
+    results_with_station_regression = [baseline, ridge_bad, rf_bad, hgb_bad]
+
+    assert select_release_candidate(results_with_ridge_win).name == "ridge"
+    assert select_release_candidate(results_with_station_regression).name == "baseline"
