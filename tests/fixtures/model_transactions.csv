@@ -1,0 +1,7 @@
+transaction_type,record_id,transaction_date,station_code,station_distance_m,building_area_sqm,building_area_ping,total_price_twd,unit_price_per_ping_twd,building_type,bedrooms,living_rooms,bathrooms,building_age_years,floor,total_floors,parking_type,parking_area_sqm,parking_price_twd,longitude,latitude,analysis_eligible
+resale,R1,2024-01-15,A17,500,99.17355,30,18000000,600000,住宅大樓(11層含以上有電梯),3,2,2,6.0,十層,15,坡道平面,33.05785,2000000,121.21,25.01,True
+resale,R2,2025-04-15,A18,900,132.2314,40,20000000,500000,華廈(10層含以下有電梯),3,2,2,12.0,五層,10,,0,0,121.22,25.02,True
+resale,R3,2026-03-15,A19,1200,82.644625,25,12500000,500000,住宅大樓(11層含以上有電梯),2,1,1,3.0,三層,15,坡道機械,16.528925,1000000,121.20,25.00,True
+presale,P1,2024-02-15,A17,600,115.702475,35,24500000,700000,住宅大樓(11層含以上有電梯),3,2,2,,十二層,20,坡道平面,33.05785,2200000,121.21,25.01,True
+presale,P2,2025-05-15,A18,700,99.17355,30,21000000,700000,華廈(10層含以下有電梯),2,2,1,,八層,10,,0,0,121.22,25.02,True
+presale,P3,2026-04-15,A19,800,132.2314,40,30000000,750000,住宅大樓(11層含以上有電梯),4,2,2,,二十五層,20,坡道平面,33.05785,2500000,121.20,25.00,True
