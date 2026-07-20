@@ -1,0 +1,13 @@
+transaction_type,record_id,transaction_subject,main_use,transaction_date,completion_date,building_area_sqm,unit_price_sqm_twd,total_price_twd,building_type,bedrooms,living_rooms,bathrooms,station_code,station_distance_m,coordinate_eligible,match_quality,longitude,latitude,source_file,building_area_ping,unit_price_per_ping_twd,building_age_years,transaction_key,analysis_eligible
+resale,R-A17-J01,房地(土地+建物)+車位,住家用,2026-01-15,2020-01-01,99.17355,181500,18000000,住宅大樓,3,2,2,A17,500,True,exact,121.21,25.01,resale_jan.csv,30.0,600000.0,6.04,abc001,True
+presale,P-A17-J01,房地(土地+建物),住家用,2026-01-15,,82.644625,242000,20000000,住宅大樓,2,1,2,A17,600,True,exact,121.22,25.02,presale_jan.csv,25.0,800000.0,,def002,True
+resale,R-A18-J01,房地(土地+建物),住家用,2026-01-15,2019-06-01,132.2314,151250,20000000,華廈,4,2,2,A18,300,True,exact,121.20,25.00,resale_jan.csv,40.0,500000.0,6.62,ghi003,True
+presale,P-A18-J01,房地(土地+建物)+車位,住家用,2026-01-15,,99.17355,272250,27000000,住宅大樓,3,2,2,A18,350,True,exact,121.20,24.99,presale_jan.csv,30.0,900000.0,,jkl004,True
+resale,R-A19-J01,房地(土地+建物),住家用,2026-01-15,2021-03-01,115.702475,165000,19000000,住宅大樓,3,2,1,A19,800,True,exact,121.19,24.98,resale_jan.csv,35.0,545454.5,4.87,mno005,True
+presale,P-A19-J01,房地(土地+建物)+車位,住家用,2026-01-15,,99.17355,302500,30000000,住宅大樓,3,2,2,A19,700,True,exact,121.18,24.97,presale_jan.csv,30.0,1000000.0,,pqr006,True
+resale,R-A17-F01,房地(土地+建物),住家用,2026-02-15,2018-08-15,66.1157,195250,12900000,公寓,2,1,1,A17,550,True,exact,121.23,25.03,resale_feb.csv,20.0,645454.5,7.50,stu007,True
+presale,P-A17-F01,房地(土地+建物)+車位,住家用,2026-02-15,,115.702475,226600,26200000,住宅大樓,4,2,2,A17,650,True,exact,121.22,25.02,presale_feb.csv,35.0,749000.0,,vwx008,True
+resale,R-A18-F01,房地(土地+建物)+車位,住家用,2026-02-15,2022-01-01,148.760325,137500,20450000,住宅大樓,4,3,3,A18,250,True,exact,121.20,25.00,resale_feb.csv,45.0,454545.5,4.12,yza009,True
+presale,P-A18-F01,房地(土地+建物),住家用,2026-02-15,,115.702475,256300,29650000,華廈,3,2,2,A18,280,True,exact,121.21,25.01,presale_feb.csv,35.0,847272.7,,bcd010,True
+resale,R-A19-F01,房地(土地+建物)+車位,住家用,2026-02-15,2020-07-01,82.644625,175000,14460000,住宅大樓,2,2,1,A19,900,True,exact,121.18,24.97,resale_feb.csv,25.0,578512.4,5.62,efg011,True
+presale,P-A19-F01,房地(土地+建物),住家用,2026-02-15,,132.2314,272250,36000000,住宅大樓,4,2,2,A19,750,True,exact,121.17,24.96,presale_feb.csv,40.0,900000.0,,hij012,True
