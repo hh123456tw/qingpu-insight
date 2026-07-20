@@ -1,0 +1,66 @@
+import hashlib
+
+import pandas as pd
+import pytest
+
+from qingpu_insight.market_cleaning import PRICE_PER_PING_MAX, PRICE_PER_PING_MIN, SQM_PER_PING, build_market_dataset
+
+
+def sample_rows() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "transaction_type": ["resale", "presale", "resale", "resale"],
+            "record_id": ["R1", "P1", "R2", "R3"],
+            "transaction_subject": ["房地(土地+建物)+車位"] * 4,
+            "main_use": ["住家用", "住家用", "店鋪", "住家用"],
+            "transaction_date": pd.to_datetime(
+                ["2026-01-10", "2026-02-10", "2026-03-10", "2026-04-10"]
+            ),
+            "completion_date": pd.to_datetime(["2020-01-01", None, "2020-01-01", "2020-01-01"]),
+            "building_area_sqm": [99.17355, 66.1157, 99.17355, 99.17355],
+            "unit_price_sqm_twd": [181500, 211750, 181500, 181500],
+            "total_price_twd": [18_000_000, 14_000_000, 18_000_000, 18_000_000],
+            "building_type": ["住宅大樓"] * 4,
+            "bedrooms": [3, 2, 3, 3],
+            "living_rooms": [2, 1, 2, 2],
+            "bathrooms": [2, 1, 2, 2],
+            "station_code": ["A18", "A17", "A18", None],
+            "station_distance_m": [500.0, 800.0, 500.0, None],
+            "coordinate_eligible": [True, True, True, False],
+            "match_quality": ["exact", "nearest_number", "exact", "unmatched"],
+            "longitude": [121.21, 121.22, 121.21, None],
+            "latitude": [25.01, 25.02, 25.01, None],
+            "source_file": ["a.csv", "b.csv", "a.csv", "a.csv"],
+        }
+    )
+
+
+def test_build_market_dataset_keeps_only_eligible_residential_rows() -> None:
+    clean, quality = build_market_dataset(sample_rows())
+    assert clean["record_id"].tolist() == ["R1", "P1"]
+    assert clean["analysis_eligible"].all()
+    assert quality.input_records == 4
+    assert quality.output_records == 2
+    assert quality.exclusion_reasons == {"non_residential": 1, "outside_life_circle": 1}
+
+
+def test_build_market_dataset_derives_ping_price_age_and_stable_key() -> None:
+    clean, _ = build_market_dataset(sample_rows())
+    resale = clean.loc[clean["record_id"] == "R1"].iloc[0]
+    assert resale["building_area_ping"] == pytest.approx(30.0, rel=1e-4)
+    assert resale["unit_price_per_ping_twd"] == pytest.approx(600_000, rel=1e-4)
+    assert resale["building_age_years"] == pytest.approx(6.0, abs=0.1)
+    assert len(resale["transaction_key"]) == 64
+
+
+def test_build_market_dataset_requires_columns() -> None:
+    df = pd.DataFrame({"record_id": ["R1"]})
+    with pytest.raises(ValueError, match="Missing required columns"):
+        build_market_dataset(df)
+
+
+def test_build_market_dataset_validates_transaction_type() -> None:
+    df = sample_rows()
+    df.loc[0, "transaction_type"] = "unknown"
+    with pytest.raises(ValueError, match="Invalid transaction_type"):
+        build_market_dataset(df)

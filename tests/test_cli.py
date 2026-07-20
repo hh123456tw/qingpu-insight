@@ -1,11 +1,13 @@
 import json
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from qingpu_insight import cli
 from qingpu_insight.cli import main
 from qingpu_insight.downloads import DownloadRecord, record_file
+from tests.test_market_cleaning import sample_rows
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -67,3 +69,21 @@ def test_acquire_continues_after_one_season_fails_and_checkpoints_manifest(
     assert "https://plvr.land.moi.gov.tw/110S4" in urls
     assert "https://plvr.land.moi.gov.tw/h_lvr_land_a.csv" in urls
     assert "https://plvr.land.moi.gov.tw/h_lvr_land_b.csv" in urls
+
+
+def test_market_build_command_creates_clean_dataset_and_quality_report(
+    tmp_path: Path, monkeypatch
+) -> None:
+    processed = tmp_path / "data" / "processed"
+    processed.mkdir(parents=True)
+    sample_rows().to_parquet(processed / "transactions.parquet", index=False)
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(["market-build"])
+
+    assert exit_code == 0
+    assert (tmp_path / "data" / "processed" / "market_transactions.parquet").exists()
+    payload = json.loads(
+        (tmp_path / "outputs" / "reports" / "m1-market-quality.json").read_text("utf-8")
+    )
+    assert payload["output_records"] == 2

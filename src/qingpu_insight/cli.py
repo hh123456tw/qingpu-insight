@@ -1,4 +1,5 @@
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from qingpu_insight.downloads import (
 )
 from qingpu_insight.feasibility import evaluate_feasibility
 from qingpu_insight.geo import assign_life_circle, station_points
+from qingpu_insight.market_cleaning import build_market_dataset
 from qingpu_insight.moi import read_moi_csv
 from qingpu_insight.reporting import write_report
 
@@ -111,6 +113,21 @@ def analyse(root: Path, allow_no_go: bool) -> int:
     return 0 if result.decision == "GO" or allow_no_go else 2
 
 
+def market_build(root: Path, input_path: str, output_path: str, quality_output_path: str) -> int:
+    frame = pd.read_parquet(root / input_path)
+    clean, quality = build_market_dataset(frame)
+    output_resolved = root / output_path
+    quality_resolved = root / quality_output_path
+    output_resolved.parent.mkdir(parents=True, exist_ok=True)
+    quality_resolved.parent.mkdir(parents=True, exist_ok=True)
+    clean.to_parquet(output_resolved, index=False)
+    quality_resolved.write_text(
+        json.dumps(quality.to_dict(), indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="qingpu-data")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -120,6 +137,10 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--end-season", default="115S2")
     analyse_parser = subparsers.add_parser("analyse")
     analyse_parser.add_argument("--allow-no-go", action="store_true")
+    market_parser = subparsers.add_parser("market-build")
+    market_parser.add_argument("--input", default="data/processed/transactions.parquet")
+    market_parser.add_argument("--output", default="data/processed/market_transactions.parquet")
+    market_parser.add_argument("--quality-output", default="outputs/reports/m1-market-quality.json")
     return parser
 
 
@@ -130,6 +151,8 @@ def main(argv: list[str] | None = None) -> int:
         acquire(root, args.start_season, args.end_season)
     if args.command in ("analyse", "run"):
         return analyse(root, getattr(args, "allow_no_go", False))
+    if args.command == "market-build":
+        return market_build(root, args.input, args.output, args.quality_output)
     return 0
 
 
