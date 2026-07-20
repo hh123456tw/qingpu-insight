@@ -109,6 +109,7 @@ class ValuationInput:
     total_floors: int = 1
     parking_type: str = ""
     parking_area_ping: float = 0
+    asking_total_price_twd: int | None = None
 
     def __post_init__(self):
         if not (5 <= self.building_area_ping <= 200):
@@ -129,6 +130,8 @@ class ValuationInput:
             raise ValueError("building_age_years must be omitted for presale")
         if self.building_age_years is not None and not (0 <= self.building_age_years <= 100):
             raise ValueError("building_age_years must be between 0 and 100")
+        if self.asking_total_price_twd is not None and self.asking_total_price_twd <= 0:
+            raise ValueError("asking_total_price_twd must be > 0")
 
 
 def input_frame(value: ValuationInput, data_date: pd.Timestamp) -> pd.DataFrame:
