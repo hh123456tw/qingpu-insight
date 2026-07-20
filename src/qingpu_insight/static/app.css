@@ -1,0 +1,229 @@
+:root {
+  --ink: #18302b;
+  --muted: #64736f;
+  --paper: #f4f1e9;
+  --card: #fffdf7;
+  --accent: #147d6f;
+  --accent-warm: #dd7a45;
+  --line: #d8d5cc;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+  line-height: 1.6;
+}
+
+main {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1.5rem 1rem;
+}
+
+.hero {
+  margin-bottom: 1.5rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.25rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+}
+
+.hero h1 {
+  margin: 0 0 0.25rem;
+  font-size: 1.6rem;
+  font-weight: 700;
+}
+
+.hero h1 span {
+  font-weight: 300;
+  color: var(--muted);
+}
+
+.hero p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 1.5rem;
+  align-items: flex-start;
+  margin-bottom: 0.75rem;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+}
+
+.controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+select, input[type="checkbox"] {
+  min-height: 44px;
+}
+
+select {
+  font-size: 0.9rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--card);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+select:focus, input[type="checkbox"]:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+fieldset {
+  border: none;
+  margin: 0;
+  padding: 0;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+
+legend {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--ink);
+  margin-right: 0.25rem;
+}
+
+#status {
+  font-size: 0.85rem;
+  padding: 0.4rem 0;
+  min-height: 1.5em;
+}
+
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+}
+
+.kpis article {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  text-align: center;
+}
+
+.kpis article span {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-bottom: 0.2rem;
+}
+
+.kpis article strong {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
+  gap: 1.25rem;
+  margin-bottom: 1.25rem;
+}
+
+.dashboard-grid article {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.75rem;
+}
+
+.dashboard-grid h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+#market-map {
+  min-height: 440px;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+section > h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+#recent-transactions {
+  overflow-x: auto;
+}
+
+#recent-transactions table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+#recent-transactions th,
+#recent-transactions td {
+  text-align: left;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+#recent-transactions th {
+  font-weight: 600;
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+#recent-transactions tbody tr:hover {
+  background: rgba(20, 125, 111, 0.04);
+}
+
+.method-note {
+  margin-top: 1.5rem;
+  font-size: 0.75rem;
+  font-style: italic;
+  color: var(--muted);
+  text-align: center;
+}
+
+@media (max-width: 960px) {
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .kpis {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>青埔智價 Qingpu Insight</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIINfQ3yn3h/ttZB+QOFqVaGPH92n5r1B4=" crossorigin="anonymous">
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+<main>
+  <header class="hero">
+    <p class="eyebrow">桃園機場捷運 A17–A19</p>
+    <h1>青埔智價 <span>Qingpu Insight</span></h1>
+    <p>用官方成交資料，看懂青埔三個生活圈的價格、交易量與近期個案。</p>
+  </header>
+  <section class="controls" aria-label="市場篩選">
+    <label>市場
+      <select id="transaction-type">
+        <option value="resale">中古屋</option>
+        <option value="presale">預售屋</option>
+      </select>
+    </label>
+    <fieldset id="station-filter">
+      <legend>生活圈</legend>
+      <label><input type="checkbox" value="A17" checked>A17</label>
+      <label><input type="checkbox" value="A18" checked>A18</label>
+      <label><input type="checkbox" value="A19" checked>A19</label>
+    </fieldset>
+  </section>
+  <section id="status" role="status" aria-live="polite"></section>
+  <section class="kpis" aria-label="市場摘要">
+    <article><span>中位單價</span><strong id="median-price">—</strong></article>
+    <article><span>成交筆數</span><strong id="record-count">—</strong></article>
+    <article><span>中位總價</span><strong id="median-total">—</strong></article>
+    <article><span>資料更新至</span><strong id="latest-date">—</strong></article>
+  </section>
+  <section class="dashboard-grid">
+    <article><h2>成交地圖</h2><div id="market-map" aria-label="成交地圖"></div></article>
+    <article><h2>價格與交易量趨勢</h2><canvas id="price-trend"></canvas></article>
+  </section>
+  <section><h2>近期成交</h2><div id="recent-transactions"></div></section>
+  <aside class="method-note">成交來自官方實價登錄；座標為門牌比對結果。僅供市場研究，不構成估價、投資或購屋建議。</aside>
+</main>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

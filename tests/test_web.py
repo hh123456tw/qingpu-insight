@@ -40,6 +40,19 @@ def failing_source() -> FlaskClient:
         yield client
 
 
+def test_homepage_contains_market_dashboard_contract(client) -> None:
+    response = client.get("/")
+    html = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert 'id="transaction-type"' in html
+    assert 'id="station-filter"' in html
+    assert 'id="market-map"' in html
+    assert 'id="price-trend"' in html
+    assert 'id="recent-transactions"' in html
+    assert "資料更新至" in html
+    assert "僅供市場研究" in html
+
+
 class TestMarketApi:
     def test_summary_requires_transaction_type(self, client: FlaskClient) -> None:
         response = client.get("/api/market/summary")

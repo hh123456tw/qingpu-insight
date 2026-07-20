@@ -6,7 +6,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, render_template, request
 from werkzeug.datastructures import MultiDict
 
 from qingpu_insight.market_metrics import (
@@ -106,8 +106,8 @@ def create_app(
         ), 503
 
     @app.get("/")
-    def health():
-        return jsonify({"status": "ok"})
+    def index():
+        return render_template("index.html")
 
     @app.get("/api/market/summary")
     def summary_api():
