@@ -47,10 +47,15 @@ def parse_filters(args: MultiDict[str, str]) -> MarketFilters:
 
 
 def _json_default(obj: Any) -> Any:
-    if isinstance(obj, pd.Timestamp | pd.Timedelta | pd._libs.tslibs.nattype.NaTType):
+    if isinstance(obj, pd.Timestamp | pd.Timedelta):
         return None if pd.isna(obj) else obj.isoformat()
     if isinstance(obj, float) and (np.isnan(obj) or np.isinf(obj)):
         return None
+    try:
+        if pd.isna(obj):
+            return None
+    except (TypeError, ValueError):
+        pass
     raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
 

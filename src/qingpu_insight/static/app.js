@@ -59,12 +59,11 @@ document.addEventListener("DOMContentLoaded", function () {
     items.forEach(function (item) {
       if (item.latitude && item.longitude) {
         hasCoords = true;
-        var popup =
-          (item.record_id || "") +
-          "<br>" +
-          money.format(item.total_price_twd) +
-          " | " +
+        var popup = L.popup();
+        var text = (item.record_id || "") + "\n" +
+          money.format(item.total_price_twd) + " | " +
           (item.building_area_ping ? item.building_area_ping.toFixed(1) + " 坪" : "");
+        popup.setContent(text);
         L.marker([item.latitude, item.longitude])
           .bindPopup(popup)
           .addTo(markerLayer);

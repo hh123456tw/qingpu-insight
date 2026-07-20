@@ -86,9 +86,19 @@ class TestMarketApi:
         assert all(row["transaction_type"] == "presale" for row in payload["items"])
 
     def test_unhandled_exception_uses_safe_error_shape(
-        self, client: FlaskClient, failing_source: FlaskClient
+        self, failing_source: FlaskClient
     ) -> None:
         response = failing_source.get("/api/market/summary?transaction_type=resale")
         assert response.status_code == 503
         assert response.get_json()["error"]["code"] == "market_data_unavailable"
         assert "Traceback" not in response.get_data(as_text=True)
+
+    def test_transactions_handles_nullable_numeric_fields(
+        self, client: FlaskClient
+    ) -> None:
+        response = client.get("/api/transactions?transaction_type=presale&limit=1")
+        assert response.status_code == 200
+        payload = response.get_json()
+        assert payload is not None
+        assert payload["limit"] == 1
+        assert isinstance(payload["items"], list)
