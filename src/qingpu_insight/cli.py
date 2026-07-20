@@ -5,6 +5,7 @@ import sys
 import urllib.parse
 from pathlib import Path
 
+import joblib
 import pandas as pd
 import pymysql
 
@@ -20,9 +21,22 @@ from qingpu_insight.downloads import (
 from qingpu_insight.feasibility import evaluate_feasibility
 from qingpu_insight.geo import assign_life_circle, station_points
 from qingpu_insight.market_cleaning import build_market_dataset
+from qingpu_insight.model_features import build_model_frame
+from qingpu_insight.model_training import (
+    CandidateEvaluation,
+    RecentMedianBaseline,
+    candidate_estimators,
+    evaluate_candidate,
+    leakage_audit,
+    metric_rows,
+    select_release_candidate,
+    split_by_time,
+)
 from qingpu_insight.moi import read_moi_csv
 from qingpu_insight.mysql_loader import load_market_rows
 from qingpu_insight.reporting import write_report
+from qingpu_insight.valuation import ValuationBundle, train_artifact
+from qingpu_insight.valuation_reporting import write_evaluation, write_model_card
 
 SOURCES = (
     "https://data.gov.tw/dataset/77051",
@@ -154,6 +168,65 @@ def mysql_load(root: Path, input_path: str) -> int:
     return 0
 
 
+def model_train(root: Path, input_path: str, artifact_dir: str, report_dir: str) -> int:
+    frame = pd.read_parquet(root / input_path)
+    artifact_path = root / artifact_dir
+    report_path = root / report_dir
+
+    for transaction_type in ("resale", "presale"):
+        print(f"Training {transaction_type} model...")
+        mf = build_model_frame(frame, transaction_type)
+        split = split_by_time(mf)
+
+        baseline = RecentMedianBaseline().fit(split.train)
+        baseline_pred = baseline.predict(split.test)
+        baseline_actual = split.test["target_unit_price_twd"].values
+        baseline_metrics = metric_rows(baseline_actual, baseline_pred, split.test)
+        baseline_mae = float(baseline_metrics.loc["overall", "mae"])
+        baseline_station_mape = {
+            idx.split(":", 1)[1]: float(row["mape"])
+            for idx, row in baseline_metrics.iterrows()
+            if idx.startswith("station:")
+        }
+        baseline_eval = CandidateEvaluation(
+            name="baseline", estimator=baseline,
+            overall_mae=baseline_mae,
+            station_mape=baseline_station_mape,
+            metrics=baseline_metrics,
+        )
+
+        candidates = [baseline_eval]
+        for name, estimator in candidate_estimators().items():
+            candidates.append(evaluate_candidate(name, estimator, split))
+
+        selected = select_release_candidate(candidates)
+        leakage = leakage_audit(split)
+
+        temp_bundle = ValuationBundle(
+            transaction_type=transaction_type,
+            model_name="", model_version="",
+            pipeline=None,
+            interval_abs_residual_twd_per_ping=0,
+            feature_ranges={}, feature_hard_ranges={}, feature_medians={},
+            global_importance=[], reference_rows=pd.DataFrame(),
+            data_min_date="",
+            data_max_date=str(split.train["transaction_date"].max().date()),
+            metrics={},
+        )
+
+        train_artifact(transaction_type, selected, split, temp_bundle, artifact_path)
+        bundle: ValuationBundle = joblib.load(artifact_path / f"{transaction_type}.joblib")
+
+        eval_path = write_evaluation(bundle, candidates, split, report_path)
+        card_path = write_model_card(bundle, candidates, leakage, report_path)
+
+        print(f"  {transaction_type}: {selected.name} -> {artifact_path / f'{transaction_type}.joblib'}")
+        print(f"    evaluation: {eval_path}")
+        print(f"    model card: {card_path}")
+
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="qingpu-data")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -169,6 +242,10 @@ def build_parser() -> argparse.ArgumentParser:
     market_parser.add_argument("--quality-output", default="outputs/reports/m1-market-quality.json")
     mysql_parser = subparsers.add_parser("mysql-load")
     mysql_parser.add_argument("--input", default="data/processed/market_transactions.parquet")
+    model_parser = subparsers.add_parser("model-train")
+    model_parser.add_argument("--input", default="data/processed/market_transactions.parquet")
+    model_parser.add_argument("--artifact-dir", default="artifacts")
+    model_parser.add_argument("--report-dir", default="outputs/reports")
     return parser
 
 
@@ -183,6 +260,8 @@ def main(argv: list[str] | None = None) -> int:
         return market_build(root, args.input, args.output, args.quality_output)
     if args.command == "mysql-load":
         return mysql_load(root, args.input)
+    if args.command == "model-train":
+        return model_train(root, args.input, args.artifact_dir, args.report_dir)
     return 0
 
 

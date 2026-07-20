@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import pytest
 
 from qingpu_insight import cli
@@ -9,6 +11,80 @@ from qingpu_insight.downloads import DownloadRecord, record_file
 from tests.test_market_cleaning import sample_rows
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+_CHINESE_DIGITS = "零一二三四五六七八九十"
+
+
+def _int_to_floor(n: int) -> str:
+    if n <= 10:
+        return _CHINESE_DIGITS[n] + "層"
+    if n < 20:
+        return "十" + (_CHINESE_DIGITS[n - 10] if n > 10 else "") + "層"
+    tens = n // 10
+    ones = n % 10
+    return _CHINESE_DIGITS[tens] + "十" + (_CHINESE_DIGITS[ones] if ones > 0 else "") + "層"
+
+
+def copy_fixture_to_processed(tmp_path: Path) -> Path:
+    processed = tmp_path / "data" / "processed"
+    processed.mkdir(parents=True)
+
+    np.random.seed(42)
+    base = pd.Timestamp("2023-01-01")
+    total_days = 1095
+
+    stations = ["A17", "A18", "A19"]
+    types = ["住宅大樓", "華廈", "公寓"]
+    ptypes = ["坡道平面", "坡道機械", ""]
+
+    rows = []
+    for ttype in ("resale", "presale"):
+        n_rows = 1500
+        for i in range(n_rows):
+            s = stations[i % 3]
+            bt = types[i % 3]
+            pt = ptypes[i % 3]
+
+            base_price = {"A17": 600000, "A18": 500000, "A19": 550000}[s]
+            type_mult = {"住宅大樓": 1.0, "華廈": 0.85, "公寓": 0.70}[bt]
+            target = base_price * type_mult * (1 + np.random.uniform(-0.05, 0.05))
+
+            building_age = float(np.random.uniform(0, 30)) if ttype == "resale" else None
+            fl = int(np.random.randint(1, 15))
+            tfl = int(np.random.randint(5, 25))
+
+            rows.append({
+                "transaction_type": ttype,
+                "record_id": f"{ttype[0]}{i}",
+                "transaction_date": base + pd.DateOffset(days=int(i * total_days / n_rows)),
+                "station_code": s,
+                "station_distance_m": float(np.random.randint(100, 1500)),
+                "building_area_ping": float(np.random.uniform(15, 60)),
+                "building_area_sqm": float(np.random.uniform(49.5, 198.3)),
+                "building_type": bt,
+                "bedrooms": int(np.random.randint(1, 5)),
+                "living_rooms": int(np.random.randint(1, 3)),
+                "bathrooms": int(np.random.randint(1, 3)),
+                "building_age_years": building_age,
+                "floor": _int_to_floor(fl),
+                "total_floors": float(tfl),
+                "parking_type": pt,
+                "parking_area_sqm": float(np.random.uniform(0, 33) if pt else 0),
+                "parking_price_twd": float(np.random.uniform(1000000, 2500000) if pt else 0),
+                "total_price_twd": float(target * (15 + np.random.uniform(0, 45))),
+                "unit_price_per_ping_twd": float(target),
+                "analysis_eligible": True,
+                "transaction_key": f"T{ttype[0]}{i}",
+                "road_key": f"R{i % 10}",
+                "completion_date": (pd.Timestamp("2020-01-01") + pd.DateOffset(days=i)).date()
+                    if ttype == "resale" else None,
+            })
+
+    df = pd.DataFrame(rows)
+    path = processed / "market_transactions.parquet"
+    df.to_parquet(path, index=False)
+    return path
 
 
 def test_analyse_command_builds_outputs_without_network(tmp_path: Path, monkeypatch) -> None:
@@ -122,3 +198,12 @@ def test_mysql_load_success(tmp_path, monkeypatch) -> None:
     assert exit_code == 0
     assert len(called_with) == 1
     assert len(called_with[0]) == len(clean)
+
+
+def test_model_train_builds_both_types_without_network(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    copy_fixture_to_processed(tmp_path)
+    exit_code = main(["model-train"])
+    assert exit_code == 0
+    assert (tmp_path / "artifacts/resale.joblib").exists()
+    assert (tmp_path / "artifacts/presale.joblib").exists()

@@ -12,3 +12,6 @@ outputs/reports/
 *.parquet
 
 *.egg-info/
+
+artifacts/
+outputs/valuations/

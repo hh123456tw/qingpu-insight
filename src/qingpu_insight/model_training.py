@@ -3,6 +3,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from sklearn.base import BaseEstimator
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor
 from sklearn.impute import SimpleImputer
@@ -38,7 +39,7 @@ def split_by_time(
     return split
 
 
-class RecentMedianBaseline:
+class RecentMedianBaseline(BaseEstimator):
     def __init__(self, months: int = 24):
         self.months = months
         self._group_medians: pd.Series | None = None
@@ -65,9 +66,11 @@ class RecentMedianBaseline:
 
         return self
 
-    def predict(self, test_frame: pd.DataFrame) -> np.ndarray:
+    def predict(self, X) -> np.ndarray:
+        if isinstance(X, np.ndarray):
+            X = pd.DataFrame(X, columns=list(FEATURE_COLUMNS))
         result = []
-        for _, row in test_frame.iterrows():
+        for _, row in X.iterrows():
             key = (row["station_code"], row["building_type"])
             if (
                 key in self._group_medians.index
