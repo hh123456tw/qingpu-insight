@@ -60,9 +60,9 @@ document.addEventListener("DOMContentLoaded", function () {
       if (item.latitude && item.longitude) {
         hasCoords = true;
         var popup =
-          item.address +
+          (item.record_id || "") +
           "<br>" +
-          money.format(item.total_price) +
+          money.format(item.total_price_twd) +
           " | " +
           (item.building_area_ping ? item.building_area_ping.toFixed(1) + " 坪" : "");
         L.marker([item.latitude, item.longitude])
@@ -99,11 +99,10 @@ document.addEventListener("DOMContentLoaded", function () {
 
   function updateChart(trends) {
     var labels = trends.map(function (t) {
-      var parts = t.period.split("-");
-      return parts[0] + "年" + parts[1] + "月";
+      return t.month.replace("-", "年") + "月";
     });
     var prices = trends.map(function (t) {
-      return t.median_unit_price;
+      return t.median_unit_price_per_ping_twd;
     });
     var volumes = trends.map(function (t) {
       return t.record_count;
@@ -155,8 +154,8 @@ document.addEventListener("DOMContentLoaded", function () {
         item.building_area_ping
           ? item.building_area_ping.toFixed(1) + " 坪"
           : "",
-        item.total_price ? money.format(item.total_price) : "",
-        item.unit_price ? money.format(item.unit_price) : "",
+        item.total_price_twd ? money.format(item.total_price_twd) : "",
+        item.unit_price_per_ping_twd ? money.format(item.unit_price_per_ping_twd) : "",
       ];
       cells.forEach(function (val) {
         var td = document.createElement("td");
@@ -205,13 +204,13 @@ document.addEventListener("DOMContentLoaded", function () {
         var trends = results[1];
         var transactions = results[2];
 
-        medianPrice.textContent = summary.median_unit_price
-          ? formatWan(summary.median_unit_price * 10000)
+        medianPrice.textContent = summary.median_unit_price_per_ping_twd
+          ? formatWan(summary.median_unit_price_per_ping_twd)
           : "—";
         recordCount.textContent =
           summary.record_count != null ? summary.record_count : "—";
-        medianTotal.textContent = summary.median_total_price
-          ? money.format(summary.median_total_price)
+        medianTotal.textContent = summary.median_total_price_twd
+          ? money.format(summary.median_total_price_twd)
           : "—";
         latestDate.textContent = summary.latest_transaction_date
           ? summary.latest_transaction_date.slice(0, 10)
