@@ -109,6 +109,39 @@ mysql -u root -p < database/001_market_schema.sql
 
 中古屋與預售屋因價格形成機制、單價計算方式與市場行為不同，在本專案中**始終分開分析**，不會合併為單一價格指標。
 
+## M2 AI 估價工作流程
+
+### 模型訓練
+
+```powershell
+# 建立已驗證的 M1 特徵來源
+.\.venv\Scripts\qingpu-data market-build
+
+# 訓練並產出中古屋與預售屋各自獨立的 artifact
+.\.venv\Scripts\qingpu-data model-train
+```
+
+輸出成果：
+
+| 檔案 | 階段 | 說明 |
+|------|------|------|
+| `artifacts/resale.joblib` | model-train | 中古屋估價 artifact（不提交 Git） |
+| `artifacts/presale.joblib` | model-train | 預售屋估價 artifact（不提交 Git） |
+| `outputs/reports/m2-evaluation-*.json` | model-train | 候選模型評估報告 |
+| `outputs/reports/m2-model-card-*.md` | model-train | 模型卡（含限制與不適用情境） |
+
+### 啟用估價產品
+
+```powershell
+.\.venv\Scripts\qingpu-web
+```
+
+首頁新增「AI 條件估價」面板，支援中古屋與預售屋估價。估價結果包含合理區間、可信度、影響因素、相似成交與開價評估。
+
+### 方法論文件
+
+請參閱 [docs/m2-valuation-methodology.md](docs/m2-valuation-methodology.md)。
+
 ## 開發
 
 ```powershell
