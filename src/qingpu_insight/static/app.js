@@ -232,8 +232,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
         updateMap(transactions.items || []);
         updateChart(trends.items || []);
-        transactionsDiv.innerHTML = "";
-        transactionsDiv.appendChild(
+        transactionsDiv.replaceChildren(
           buildTable(transactions.items || [])
         );
       })
@@ -247,3 +246,208 @@ document.addEventListener("DOMContentLoaded", function () {
 
   controls.addEventListener("change", fetchData);
 });
+
+// --- Valuation UI ---
+
+(function () {
+  const form = document.getElementById("valuation-form");
+  const typeSelect = document.getElementById("valuation-type");
+  const ageInput = document.getElementById("valuation-age");
+  const ageLabel = document.getElementById("valuation-age-label");
+  const resultSection = document.getElementById("valuation-result");
+  const statusEl = document.getElementById("valuation-status");
+
+  function toggleAge() {
+    if (typeSelect.value === "presale") {
+      ageInput.disabled = true;
+      ageInput.value = "";
+      ageLabel.style.opacity = "0.4";
+    } else {
+      ageInput.disabled = false;
+      ageLabel.style.opacity = "1";
+    }
+  }
+  typeSelect.addEventListener("change", toggleAge);
+  toggleAge();
+
+  function money(val) {
+    return new Intl.NumberFormat("zh-TW", {
+      style: "currency", currency: "TWD", maximumFractionDigits: 0,
+    }).format(val);
+  }
+
+  function el(tag, attrs, children) {
+    var node = document.createElement(tag);
+    if (attrs) {
+      Object.keys(attrs).forEach(function (k) { node.setAttribute(k, attrs[k]); });
+    }
+    if (children) {
+      (Array.isArray(children) ? children : [children]).forEach(function (c) {
+        if (typeof c === "string") { node.appendChild(document.createTextNode(c)); }
+        else if (c) { node.appendChild(c); }
+      });
+    }
+    return node;
+  }
+
+  function renderValuation(result) {
+    resultSection.replaceChildren();
+
+    var cards = [];
+
+    // Price interval card
+    var priceCard = el("div", { "class": "valuation-card" }, [
+      el("h3", {}, ["估價結果"]),
+      el("p", { "class": "estimated-price" }, [money(result.estimated_total_price_twd)]),
+      el("p", { "class": "price-range" }, [
+        "合理區間：" + money(result.interval_total_price_twd[0]) +
+        " ~ " + money(result.interval_total_price_twd[1])
+      ]),
+    ]);
+    cards.push(priceCard);
+
+    // Asking price assessment
+    if (result.asking_price_assessment) {
+      var askLabel = "";
+      if (result.asking_price_assessment === "偏低") askLabel = "低於區間";
+      else if (result.asking_price_assessment === "合理區間") askLabel = "在區間內";
+      else askLabel = "高於區間";
+      cards.push(el("div", { "class": "valuation-card" }, [
+        el("h3", {}, ["開價評估"]),
+        el("p", {}, ["開價" + askLabel]),
+      ]));
+    }
+
+    // Confidence card
+    var confText = { high: "高", medium: "中", low: "低" }[result.confidence] || result.confidence;
+    var confChildren = [el("h3", {}, ["可信度：" + confText])];
+    if (result.confidence_reasons.length) {
+      var ul = el("ul", { "class": "reasons" });
+      result.confidence_reasons.forEach(function (r) {
+        ul.appendChild(el("li", {}, [r]));
+      });
+      confChildren.push(ul);
+    }
+    cards.push(el("div", { "class": "valuation-card confidence-" + result.confidence }, confChildren));
+
+    // Factors
+    if (result.factors && result.factors.length) {
+      var ul = el("ul");
+      result.factors.forEach(function (f) {
+        var cls = f.direction === "positive" ? "factor-positive" : "factor-negative";
+        var sign = f.direction === "positive" ? "+" : "";
+        ul.appendChild(el("li", { "class": cls }, [
+          f.feature + "：" + sign + f.impact_twd_per_ping + " 元/坪"
+        ]));
+      });
+      cards.push(el("div", { "class": "valuation-card" }, [
+        el("h3", {}, ["主要影響因素"]),
+        ul,
+      ]));
+    }
+
+    // Comparables
+    if (result.comparables && result.comparables.length) {
+      var table = el("table", { "class": "comparable-table" });
+      var thead = el("thead");
+      var hdr = el("tr");
+      ["日期", "生活圈", "坪數", "總價", "單價", "相似度"].forEach(function (label) {
+        hdr.appendChild(el("th", {}, [label]));
+      });
+      thead.appendChild(hdr);
+      table.appendChild(thead);
+      var tbody = el("tbody");
+      result.comparables.forEach(function (c) {
+        var tr = el("tr");
+        [(c.transaction_date || "").slice(0, 10), c.station_code,
+         c.building_area_ping.toFixed(1), money(c.total_price_twd),
+         money(c.unit_price_per_ping_twd), (c.similarity_score * 100).toFixed(0) + "%"
+        ].forEach(function (val) { tr.appendChild(el("td", {}, [val])); });
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      cards.push(el("div", { "class": "valuation-card" }, [
+        el("h3", {}, ["相似成交"]),
+        table,
+      ]));
+    }
+
+    // Model disclosure
+    var discChildren = [
+      el("h3", {}, ["模型資訊"]),
+      el("p", {}, ["模型：" + result.model.name + "（" + result.model.version + "）"]),
+      el("p", {}, ["資料日期：" + result.data_date]),
+    ];
+    if (result.degraded) {
+      discChildren.push(el("p", { "class": "degraded" }, ["⚠ 使用降級模型"]));
+    }
+    cards.push(el("div", { "class": "valuation-card disclosure" }, discChildren));
+
+    // Limitation
+    cards.push(el("div", { "class": "valuation-card limitation" }, [
+      el("p", { "class": "limitation-note" }, [
+        "本估價僅供參考，不構成投資或購屋建議。結果基於官方實價登錄資料，不含未來價格預測。"
+      ]),
+    ]));
+
+    cards.forEach(function (card) { resultSection.appendChild(card); });
+    resultSection.hidden = false;
+  }
+
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    statusEl.textContent = "估價中…";
+    resultSection.hidden = true;
+
+    var payload = {
+      transaction_type: document.getElementById("valuation-type").value,
+      station_code: document.getElementById("valuation-station").value,
+      building_area_ping: parseFloat(document.getElementById("valuation-area").value),
+      station_distance_m: parseFloat(document.getElementById("valuation-distance").value),
+      building_type: document.getElementById("valuation-building-type").value,
+      bedrooms: parseInt(document.getElementById("valuation-bedrooms").value),
+      living_rooms: parseInt(document.getElementById("valuation-living-rooms").value),
+      bathrooms: parseInt(document.getElementById("valuation-bathrooms").value),
+      floor: parseInt(document.getElementById("valuation-floor").value),
+      total_floors: parseInt(document.getElementById("valuation-total-floors").value),
+      parking_area_ping: parseFloat(document.getElementById("valuation-parking-area").value) || 0,
+    };
+
+    var ageVal = document.getElementById("valuation-age").value;
+    if (ageVal) payload.building_age_years = parseFloat(ageVal);
+
+    var parkingType = document.getElementById("valuation-parking-type").value;
+    if (parkingType) payload.parking_type = parkingType;
+
+    var askingVal = document.getElementById("asking-price").value;
+    if (askingVal) payload.asking_total_price_twd = parseInt(askingVal);
+
+    fetch("/api/valuations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+      .then(function (r) {
+        if (!r.ok) {
+          return r.json().then(function (err) {
+            throw new Error(
+              (err.error && err.error.fields
+                ? Object.keys(err.error.fields).join("、") + " 欄位錯誤"
+                : err.error && err.error.message
+                ? err.error.message
+                : "估價失敗")
+            );
+          });
+        }
+        return r.json();
+      })
+      .then(function (result) {
+        statusEl.textContent = "";
+        renderValuation(result);
+      })
+      .catch(function (err) {
+        statusEl.textContent = err.message;
+        resultSection.hidden = true;
+      });
+  });
+})();

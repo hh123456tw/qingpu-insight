@@ -219,6 +219,167 @@ section > h2 {
   text-align: center;
 }
 
+/* --- Valuation Panel --- */
+
+.valuation-panel {
+  margin-top: 2rem;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1.25rem;
+}
+
+.valuation-panel h2 {
+  margin: 0 0 1rem;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+#valuation-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+}
+
+#valuation-form > * {
+  min-width: 0;
+}
+
+#valuation-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink);
+  min-height: 44px;
+}
+
+#valuation-form select,
+#valuation-form input {
+  min-height: 44px;
+  font-size: 0.9rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--card);
+  color: var(--ink);
+}
+
+#valuation-form button {
+  grid-column: 1 / -1;
+  min-height: 44px;
+  font-size: 1rem;
+  font-weight: 600;
+  padding: 0.5rem 1.5rem;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+#valuation-form button:hover {
+  opacity: 0.9;
+}
+
+#valuation-status {
+  font-size: 0.85rem;
+  padding: 0.5rem 0;
+  min-height: 1.5em;
+  color: var(--muted);
+}
+
+#valuation-result {
+  margin-top: 1rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 0.75rem;
+}
+
+.valuation-card {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+}
+
+.valuation-card h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.valuation-card p {
+  margin: 0.25rem 0;
+  font-size: 0.85rem;
+}
+
+.estimated-price {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.price-range {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.confidence-high { border-left: 4px solid var(--accent); }
+.confidence-medium { border-left: 4px solid var(--accent-warm); }
+.confidence-low { border-left: 4px solid #c0392b; }
+
+.reasons {
+  margin: 0.25rem 0 0;
+  padding-left: 1.2rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.factor-positive { color: var(--accent); }
+.factor-negative { color: #c0392b; }
+
+.comparable-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+  overflow-x: auto;
+  display: block;
+}
+
+.comparable-table th,
+.comparable-table td {
+  text-align: left;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.comparable-table th {
+  font-weight: 600;
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+}
+
+.disclosure {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.degraded {
+  color: #c0392b;
+  font-weight: 600;
+}
+
+.limitation-note {
+  font-size: 0.75rem;
+  font-style: italic;
+  color: var(--muted);
+}
+
 @media (max-width: 960px) {
   .dashboard-grid {
     grid-template-columns: 1fr;
@@ -226,5 +387,9 @@ section > h2 {
 
   .kpis {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  #valuation-form {
+    grid-template-columns: 1fr 1fr;
   }
 }

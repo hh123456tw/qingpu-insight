@@ -283,3 +283,22 @@ def test_get_valuation_returns_saved_record(valuation_client):
 def test_get_nonexistent_valuation_returns_404(valuation_client):
     response = valuation_client.get("/api/valuations/nonexistent")
     assert response.status_code == 404
+
+
+def test_homepage_contains_complete_valuation_contract(client):
+    html = client.get("/").get_data(as_text=True)
+    for element_id in (
+        "valuation-form", "valuation-type", "valuation-station",
+        "valuation-area", "valuation-distance", "valuation-age",
+        "valuation-floor", "valuation-total-floors", "valuation-bedrooms",
+        "valuation-parking-area", "asking-price", "valuation-result",
+    ):
+        assert f'id="{element_id}"' in html
+
+
+def test_frontend_renders_evidence_before_summary(client):
+    script = client.get("/static/app.js").get_data(as_text=True)
+    assert "interval_total_price_twd" in script
+    assert "confidence_reasons" in script
+    assert "comparables" in script
+    assert "innerHTML =" not in script

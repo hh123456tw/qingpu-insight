@@ -72,6 +72,88 @@
   </section>
   <section><h2>近期成交</h2><div id="recent-transactions"></div></section>
   <aside class="method-note">成交來自官方實價登錄；座標為門牌比對結果。僅供市場研究，不構成估價、投資或購屋建議。</aside>
+
+  <section class="valuation-panel" aria-labelledby="valuation-title">
+    <h2 id="valuation-title">AI 條件估價</h2>
+    <form id="valuation-form">
+      <label>市場
+        <select id="valuation-type" required>
+          <option value="resale">中古屋</option>
+          <option value="presale">預售屋</option>
+        </select>
+      </label>
+      <label>生活圈
+        <select id="valuation-station" required>
+          <option value="A17">A17</option>
+          <option value="A18">A18</option>
+          <option value="A19">A19</option>
+        </select>
+      </label>
+      <label>坪數
+        <input id="valuation-area" type="number" min="5" max="200" step="0.1" required>
+      </label>
+      <label>距捷運（公尺）
+        <input id="valuation-distance" type="number" min="0" max="2000" required>
+      </label>
+      <label>建物類型
+        <select id="valuation-building-type" required>
+          <option value="住宅大樓(11層含以上有電梯)">住宅大樓</option>
+          <option value="華廈(10層含以下有電梯)">華廈</option>
+          <option value="公寓(5樓含以下無電梯)">公寓</option>
+          <option value="透天厝">透天厝</option>
+        </select>
+      </label>
+      <label>房數
+        <select id="valuation-bedrooms">
+          <option value="1">1 房</option>
+          <option value="2">2 房</option>
+          <option value="3" selected>3 房</option>
+          <option value="4">4 房</option>
+          <option value="5">5 房</option>
+        </select>
+      </label>
+      <label>廳數
+        <select id="valuation-living-rooms">
+          <option value="1">1 廳</option>
+          <option value="2" selected>2 廳</option>
+          <option value="3">3 廳</option>
+        </select>
+      </label>
+      <label>衛數
+        <select id="valuation-bathrooms">
+          <option value="1">1 衛</option>
+          <option value="2" selected>2 衛</option>
+          <option value="3">3 衛</option>
+        </select>
+      </label>
+      <label id="valuation-age-label">屋齡
+        <input id="valuation-age" type="number" min="0" max="100" step="0.1">
+      </label>
+      <label>所在樓層
+        <input id="valuation-floor" type="number" min="1" max="50" required>
+      </label>
+      <label>總樓層
+        <input id="valuation-total-floors" type="number" min="1" max="50" required>
+      </label>
+      <label>車位類型
+        <select id="valuation-parking-type">
+          <option value="">無車位</option>
+          <option value="坡道平面">坡道平面</option>
+          <option value="坡道機械">坡道機械</option>
+          <option value="其他">其他</option>
+        </select>
+      </label>
+      <label>車位面積（坪）
+        <input id="valuation-parking-area" type="number" min="0" max="60" step="0.1" value="0">
+      </label>
+      <label>目前開價（選填）
+        <input id="asking-price" type="number" min="0" step="10000">
+      </label>
+      <button type="submit">開始估價</button>
+    </form>
+    <div id="valuation-status" role="status" aria-live="polite"></div>
+    <section id="valuation-result" hidden></section>
+  </section>
 </main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
