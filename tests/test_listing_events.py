@@ -257,6 +257,28 @@ def test_absent_listing_preserves_ranges_metadata_and_hash():
         assert state[field] == expected
 
 
+@pytest.mark.parametrize("invalid_metadata", [None, float("nan"), "", "   "])
+def test_absent_listing_normalizes_invalid_acquisition_metadata(invalid_metadata):
+    previous = with_state(
+        [
+            listing_row(
+                acquisition_representation=invalid_metadata,
+                acquisition_schema_version=invalid_metadata,
+            )
+        ]
+    )
+
+    result = detect_listing_events(
+        previous,
+        empty_rows(),
+        complete_batch("B2"),
+    )
+
+    state = result.state.iloc[0]
+    assert state["acquisition_representation"] == "unknown"
+    assert state["acquisition_schema_version"] == "unknown"
+
+
 def test_single_absence_not_delisted(active_state):
     result = detect_listing_events(
         active_state, empty_rows(), complete_batch("B2")

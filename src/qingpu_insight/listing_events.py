@@ -220,6 +220,10 @@ def _fill_missing_cols(row: pd.Series) -> None:
     for col, default in defaults.items():
         if col not in row.index:
             row[col] = default
+    for col in ("acquisition_representation", "acquisition_schema_version"):
+        value = row[col]
+        if not isinstance(value, str) or not value.strip():
+            row[col] = "unknown"
 
 
 def _state_from_row(

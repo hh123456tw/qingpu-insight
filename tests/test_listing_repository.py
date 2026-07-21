@@ -525,6 +525,45 @@ class TestParquetRepositorySpecific:
         df = parquet_repository.load_snapshots(batch_id="nonexistent")
         assert len(df) == 0
 
+    def test_mixed_legacy_and_new_schema_normalizes_absent_metadata(
+        self, parquet_repository, complete_batch, normalized_rows,
+    ):
+        advertised_columns = [
+            "asking_unit_price_low_twd_per_ping",
+            "asking_unit_price_high_twd_per_ping",
+            "building_area_min_ping",
+            "building_area_max_ping",
+            "acquisition_representation",
+            "acquisition_schema_version",
+        ]
+        legacy_row = normalized_rows.iloc[[0]].drop(columns=advertised_columns)
+        parquet_repository.save_batch(complete_batch, legacy_row)
+        new_batch = CaptureBatch(
+            batch_id="new-schema-batch",
+            source="591",
+            listing_type="sale",
+            started_at=datetime(2026, 7, 22, 12, 0, 0),
+            reached_terminal_page=True,
+        )
+        new_row = normalized_rows.iloc[[1]].copy()
+        parquet_repository.save_batch(new_batch, new_row)
+        mixed_current = parquet_repository.load_current(listing_type="sale")
+        absence_batch = CaptureBatch(
+            batch_id="mixed-schema-absence",
+            source="591",
+            listing_type="sale",
+            started_at=datetime(2026, 7, 23, 12, 0, 0),
+            reached_terminal_page=True,
+        )
+
+        result = detect_listing_events(mixed_current, new_row, absence_batch)
+        parquet_repository.save_batch(absence_batch, result.state)
+
+        current = parquet_repository.load_current(listing_type="sale")
+        legacy_current = current[current["source_listing_id"] == "sale-001"].iloc[0]
+        assert legacy_current["acquisition_representation"] == "unknown"
+        assert legacy_current["acquisition_schema_version"] == "unknown"
+
 
 class TestMySQLFakeSpecific:
     """Additional tests for the fake MySQL backend."""
