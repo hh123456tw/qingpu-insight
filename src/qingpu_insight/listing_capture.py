@@ -2,11 +2,13 @@
 
 import json
 import random
+import re
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
@@ -47,6 +49,7 @@ class RawBatchWriter:
         created_at = datetime.now(UTC)
         timestamp = created_at.strftime("%Y%m%dT%H%M%SZ")
         self._batch_id = f"591-{listing_type}-{timestamp}"
+        self._listing_type = listing_type
         self._batch_dir = (
             base_dir / "data" / "raw" / "listings" / "591"
             / created_at.strftime("%Y-%m-%d") / self._batch_id
@@ -59,6 +62,10 @@ class RawBatchWriter:
     @property
     def batch_id(self) -> str:
         return self._batch_id
+
+    @property
+    def listing_type(self) -> ListingType:
+        return self._listing_type
 
     def write_page(self, page_number: int, html: str) -> Path:
         self._batch_dir.mkdir(parents=True, exist_ok=True)
@@ -85,9 +92,17 @@ class RawBatchWriter:
 
     @classmethod
     def from_checkpoint(cls, base_dir: Path, existing_batch_dir: Path) -> "RawBatchWriter":
+        match = re.fullmatch(
+            r"591-(sale|newhouse|rental)-\d{8}T\d{6}Z", existing_batch_dir.name
+        )
+        if not match:
+            raise ValueError(
+                f"{existing_batch_dir} is not a typed 591 batch directory"
+            )
         writer = cls.__new__(cls)
         writer._batch_dir = existing_batch_dir
         writer._batch_id = existing_batch_dir.name
+        writer._listing_type = match.group(1)
         return writer
 
     def write_manifest(self, batch: CaptureBatch) -> None:
@@ -127,11 +142,13 @@ class Selenium591Source:
         writer: RawBatchWriter | None = None,
         config: ChromeConfig | None = None,
         resume_batch_id: str | None = None,
+        base_dir: Path | None = None,
     ):
         self._config = config or ChromeConfig()
         self._browser = browser
         self._writer = writer
         self._resume_batch_id = resume_batch_id
+        self._base_dir = base_dir or Path.cwd()
 
     def capture(self, listing_type: ListingType, max_pages: int = 10) -> CaptureBatch:
         browser = self._browser or create_chrome(self._config)
@@ -151,7 +168,14 @@ class Selenium591Source:
             )
             browser.quit()
             return batch
-        writer = writer or RawBatchWriter(Path.cwd(), listing_type)
+        if writer and writer.listing_type != listing_type:
+            browser.quit()
+            raise ValueError(
+                "writer listing type "
+                f"{writer.listing_type!r} does not match capture type {listing_type!r}"
+            )
+        writer = writer or RawBatchWriter(self._base_dir, listing_type)
+        self._writer = writer
 
         start_page = 1
         if self._resume_batch_id and writer:
@@ -176,8 +200,11 @@ class Selenium591Source:
             batch.errors.append(
                 CaptureError(page_number=1, code="navigation_failed", message=str(exc))
             )
-            writer.write_manifest(batch)
-            browser.quit()
+            try:
+                _write_diagnostic(writer, 1, browser)
+                writer.write_manifest(batch)
+            finally:
+                browser.quit()
             return batch
 
         should_stop = False
@@ -198,7 +225,7 @@ class Selenium591Source:
                         )
                         html = browser.page_source
                         if ready_state == "verification":
-                            raise _VerificationRequired(html)
+                            raise _VerificationRequired
                         if ready_state == "empty":
                             if batch.pages:
                                 batch.reached_terminal_page = True
@@ -215,9 +242,9 @@ class Selenium591Source:
                             representation=extraction.representation,
                             schema_version=extraction.schema_version,
                         )
-                        batch.pages.append(page)
                         writer.write_page(page_num, html)
                         writer.write_checkpoint(page_num)
+                        batch.pages.append(page)
 
                         if page_num >= max_pages:
                             break
@@ -243,6 +270,7 @@ class Selenium591Source:
                                     message=str(exc),
                                 )
                             )
+                            _write_diagnostic(writer, page_num, browser)
                             should_stop = True
                             break
 
@@ -250,8 +278,7 @@ class Selenium591Source:
                         time.sleep(delay)
                         break
 
-                    except _VerificationRequired as exc:
-                        writer.write_diagnostic(page_num, exc.html)
+                    except _VerificationRequired:
                         batch.errors.append(
                             CaptureError(
                                 page_number=page_num,
@@ -266,7 +293,7 @@ class Selenium591Source:
                             wait = 2 ** attempt
                             time.sleep(wait)
                             continue
-                        writer.write_diagnostic(page_num, _diagnostic_html(browser))
+                        _write_diagnostic(writer, page_num, browser)
                         batch.errors.append(
                             CaptureError(page_number=page_num, code="page_failed",
                                          message=str(exc))
@@ -276,14 +303,15 @@ class Selenium591Source:
         finally:
             if batch.errors:
                 batch.reached_terminal_page = False
-            writer.write_manifest(batch)
-            browser.quit()
+            try:
+                writer.write_manifest(batch)
+            finally:
+                browser.quit()
         return batch
 
 
 class _VerificationRequired(Exception):
-    def __init__(self, html: str):
-        self.html = html
+    pass
 
 
 def _capture_readiness(
@@ -310,7 +338,12 @@ def _capture_readiness(
 
 
 def _likely_verification(html: str) -> bool:
-    lowered = html.lower()
+    soup = BeautifulSoup(html, "html.parser")
+    for element in soup(["script", "style", "noscript", "template"]):
+        element.decompose()
+    title = soup.title.get_text(" ", strip=True) if soup.title else ""
+    body = soup.body.get_text(" ", strip=True) if soup.body else ""
+    lowered = f"{title} {body}".lower()
     return any(token in lowered for token in ("驗證", "captcha", "verify"))
 
 
@@ -319,6 +352,14 @@ def _diagnostic_html(browser: webdriver.Chrome) -> str:
         return browser.page_source
     except Exception:
         return ""
+
+
+def _write_diagnostic(
+    writer: RawBatchWriter, page_number: int, browser: webdriver.Chrome
+) -> None:
+    html = _diagnostic_html(browser)
+    if html and not _likely_verification(html):
+        writer.write_diagnostic(page_number, html)
 
 
 def create_chrome(config: ChromeConfig) -> webdriver.Chrome:

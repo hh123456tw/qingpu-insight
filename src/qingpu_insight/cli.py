@@ -250,7 +250,7 @@ listing_type_choices = ("sale", "newhouse", "rental")
 def create_listing_source(
     root: Path, config: ChromeConfig | None = None
 ) -> ListingSource:
-    return Selenium591Source(config=config or ChromeConfig())
+    return Selenium591Source(base_dir=root, config=config or ChromeConfig())
 
 
 def create_listing_repository(root: Path) -> ListingRepository:

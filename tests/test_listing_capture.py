@@ -46,6 +46,75 @@ def test_writer_batch_dir_contains_type_and_matches_manifest(tmp_path):
     assert manifest["batch_id"] == batch.batch_id
 
 
+def test_writer_type_mismatch_fails_before_browser_navigation(tmp_path):
+    browser = FakeBrowser(pages=[SALE_HTML])
+    source = Selenium591Source(
+        browser=browser, writer=RawBatchWriter(tmp_path, "sale"),
+    )
+
+    message = "writer listing type 'sale' does not match capture type 'rental'"
+    with pytest.raises(ValueError, match=message):
+        source.capture("rental", 1)
+
+    assert not any(call.startswith("get:") for call in browser.calls)
+    assert "quit" in browser.calls
+
+
+def test_checkpoint_writer_rejects_unidentified_batch_directory(tmp_path):
+    batch_dir = tmp_path / "unknown-batch"
+    batch_dir.mkdir()
+
+    with pytest.raises(ValueError, match="not a typed 591 batch directory"):
+        RawBatchWriter.from_checkpoint(tmp_path, batch_dir)
+
+
+def test_transient_page_write_does_not_duplicate_manifest_page(tmp_path):
+    class TransientPageWriter(RawBatchWriter):
+        def __init__(self, base_dir):
+            super().__init__(base_dir, "sale")
+            self._failed_once = False
+
+        def write_page(self, page_number, html):
+            if not self._failed_once:
+                self._failed_once = True
+                raise OSError("temporary disk failure")
+            return super().write_page(page_number, html)
+
+    writer = TransientPageWriter(tmp_path)
+    batch = Selenium591Source(
+        browser=FakeBrowser(pages=[SALE_HTML]),
+        writer=writer,
+        config=ChromeConfig(delay_seconds=(0, 0), max_retries=1),
+    ).capture("sale", 1)
+    manifest = json.loads((writer.batch_dir / "manifest.json").read_text("utf-8"))
+
+    assert len(batch.pages) == 1
+    assert len(manifest["pages"]) == 1
+
+
+def test_navigation_failure_writes_diagnostic_when_page_source_is_available(tmp_path):
+    browser = FakeBrowser(fail_on_next=True)
+    browser.page_source = "<html><body>navigation failed</body></html>"
+    writer = RawBatchWriter(tmp_path, "sale")
+
+    batch = Selenium591Source(browser=browser, writer=writer).capture("sale", 1)
+
+    assert batch.errors[0].code == "navigation_failed"
+    assert (writer.batch_dir / "diagnostic-page-0001.html").exists()
+
+
+def test_pagination_failure_writes_diagnostic(tmp_path):
+    writer = RawBatchWriter(tmp_path, "sale")
+    batch = Selenium591Source(
+        browser=FakeBrowser(pages=[SALE_HTML], fail_next_click=True),
+        writer=writer,
+        config=ChromeConfig(page_timeout_seconds=1, max_retries=0),
+    ).capture("sale", 2)
+
+    assert batch.errors[0].code == "navigation_failed"
+    assert (writer.batch_dir / "diagnostic-page-0001.html").exists()
+
+
 def test_schema_failure_writes_diagnostic_html(tmp_path):
     writer = RawBatchWriter(tmp_path, "sale")
     source = Selenium591Source(
@@ -111,6 +180,52 @@ def test_verification_page_is_not_saved_as_accepted_evidence(tmp_path):
     assert batch.errors[0].code == "verification_required"
     assert batch.pages == []
     assert not (writer.batch_dir / "page-0001.html").exists()
+    assert not (writer.batch_dir / "diagnostic-page-0001.html").exists()
+
+
+def test_script_verification_token_does_not_block_normal_listing_capture(tmp_path):
+    html = SALE_HTML.replace(
+        "</body>", "<script>window.verify = 'analytics';</script></body>"
+    )
+    batch = Selenium591Source(
+        browser=FakeBrowser(pages=[html]),
+        writer=RawBatchWriter(tmp_path, "sale"),
+        config=ChromeConfig(max_retries=0),
+    ).capture("sale", 1)
+
+    assert len(batch.pages) == 1
+    assert batch.errors == []
+
+
+@pytest.mark.parametrize("fail_on_next", [False, True])
+def test_browser_quits_when_manifest_write_fails(tmp_path, fail_on_next):
+    class FailingManifestWriter(RawBatchWriter):
+        def write_manifest(self, batch):
+            raise OSError("manifest write failed")
+
+    browser = FakeBrowser(pages=[SALE_HTML], fail_on_next=fail_on_next)
+    source = Selenium591Source(
+        browser=browser, writer=FailingManifestWriter(tmp_path, "sale"),
+        config=ChromeConfig(max_retries=0),
+    )
+
+    with pytest.raises(OSError, match="manifest write failed"):
+        source.capture("sale", 1)
+
+    assert "quit" in browser.calls
+
+
+def test_internal_writer_uses_configured_base_dir(tmp_path):
+    source = Selenium591Source(
+        browser=FakeBrowser(pages=[SALE_HTML]),
+        base_dir=tmp_path,
+        config=ChromeConfig(max_retries=0),
+    )
+
+    source.capture("sale", 1)
+
+    assert source._writer is not None
+    assert source._writer.batch_dir.is_relative_to(tmp_path)
 
 
 def test_incomplete_navigation_writes_manifest_but_never_complete(tmp_path):
