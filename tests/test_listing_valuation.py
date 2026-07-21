@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import numpy as np
 import pandas as pd
@@ -16,7 +16,7 @@ def _listing(**overrides) -> NormalizedListing:
         "source": "591",
         "source_listing_id": "L001",
         "listing_type": "sale",
-        "snapshot_at": datetime(2026, 7, 1, tzinfo=timezone.utc),
+        "snapshot_at": datetime(2026, 7, 1, tzinfo=UTC),
         "source_url": "https://sale.591.com.tw/L001",
         "title": "Test Listing",
         "asking_price_twd": 15_000_000,

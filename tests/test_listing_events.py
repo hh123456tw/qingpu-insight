@@ -8,7 +8,6 @@ import pandas as pd
 import pytest
 
 from qingpu_insight.listing_events import (
-    ListingEventResult,
     detect_listing_events,
     event_key,
 )
@@ -151,7 +150,8 @@ def sale_state() -> pd.DataFrame:
 @pytest.fixture
 def rental_state() -> pd.DataFrame:
     return with_state(
-        [listing_row("rent-001", "rental", asking_price=None, monthly_rent=15_000, snapshot_at=T0, raw_hash="h2")]
+        [listing_row("rent-001", "rental", asking_price=None,
+                      monthly_rent=15_000, snapshot_at=T0, raw_hash="h2")]
     )
 
 
@@ -169,7 +169,7 @@ def test_listed_new_listing():
     assert len(result.events) == 1
     assert result.events.iloc[0]["event_type"] == "listed"
     assert result.events.iloc[0]["source_listing_id"] == "new-001"
-    assert result.state.iloc[0]["active"] == True
+    assert result.state.iloc[0]["active"]
     assert result.state.iloc[0]["consecutive_absences"] == 0
 
 
@@ -217,7 +217,7 @@ def test_single_absence_not_delisted(active_state):
         active_state, empty_rows(), complete_batch("B2")
     )
     assert result.events.empty
-    assert result.state.loc[0, "active"] == True
+    assert result.state.loc[0, "active"]
 
 
 # ------------------------------------------------------------------
@@ -237,7 +237,7 @@ def test_relisted_after_delisting():
     )
     assert len(result.events) == 1
     assert result.events.iloc[0]["event_type"] == "relisted"
-    assert result.state.loc[0, "active"] == True
+    assert result.state.loc[0, "active"]
     assert result.state.loc[0, "consecutive_absences"] == 0
 
 
@@ -375,7 +375,8 @@ def test_event_key_differs_for_different_types():
 def test_cross_type_isolation():
     state = with_state([
         listing_row("sale-001", "sale", snapshot_at=T0, raw_hash="h1"),
-        listing_row("rent-001", "rental", asking_price=None, monthly_rent=15_000, snapshot_at=T0, raw_hash="h2"),
+        listing_row("rent-001", "rental", asking_price=None,
+                      monthly_rent=15_000, snapshot_at=T0, raw_hash="h2"),
     ])
     # Only sale batch -- rental listing is absent
     result = detect_listing_events(

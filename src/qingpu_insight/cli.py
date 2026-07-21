@@ -28,6 +28,7 @@ from qingpu_insight.listing_location import assign_listing_life_circle
 from qingpu_insight.listing_normalization import NormalizedListing, normalize_listing
 from qingpu_insight.listing_repository import ListingRepository, ParquetListingRepository
 from qingpu_insight.listing_sources import CaptureBatch, ListingSource
+from qingpu_insight.listing_valuation import compare_listing_to_model
 from qingpu_insight.market_cleaning import build_market_dataset
 from qingpu_insight.model_features import build_model_frame
 from qingpu_insight.model_training import (
@@ -43,7 +44,7 @@ from qingpu_insight.model_training import (
 from qingpu_insight.moi import read_moi_csv
 from qingpu_insight.mysql_loader import load_market_rows
 from qingpu_insight.reporting import write_report
-from qingpu_insight.valuation import ValuationBundle, train_artifact
+from qingpu_insight.valuation import ModelRegistry, ValuationBundle, train_artifact
 from qingpu_insight.valuation_reporting import write_evaluation, write_model_card
 
 SOURCES = (
@@ -418,6 +419,13 @@ def listing_sync(root: Path, args) -> int:
     stations = station_points(settings.stations, doorplates)
     repo = create_listing_repository(root)
 
+    market_path = settings.processed_dir / "market_transactions.parquet"
+    try:
+        market_frame = pd.read_parquet(market_path)
+    except (FileNotFoundError, ValueError):
+        market_frame = pd.DataFrame()
+    model_registry = ModelRegistry(root / "artifacts")
+
     exit_code = 0
     for listing_type in args.types:
         config = ChromeConfig(
@@ -458,12 +466,72 @@ def listing_sync(root: Path, args) -> int:
         df = pd.DataFrame(rows)
         located = assign_listing_life_circle(df, stations, settings.radius_m)
 
-        repo.save_batch(batch, located)
+        # Add default state columns before event detection
+        located["active"] = True
+        located["consecutive_absences"] = 0
+        located["last_seen_batch_id"] = batch.batch_id
+        located["model_evidence"] = None
 
         previous = repo.load_current(listing_type)
         event_result = detect_listing_events(previous, located, batch)
+
+        # Merge state from event detection into located
+        if not event_result.state.empty:
+            merge_cols = ["source", "listing_type", "source_listing_id"]
+            state_subset = event_result.state[
+                merge_cols + ["active", "consecutive_absences", "last_seen_batch_id"]
+            ].drop_duplicates(subset=merge_cols)
+            for col in ("active", "consecutive_absences", "last_seen_batch_id"):
+                if col in located.columns:
+                    located = located.drop(columns=[col])
+            located = located.merge(state_subset, on=merge_cols, how="left")
+            located["active"] = located["active"].fillna(True)
+            located["consecutive_absences"] = located["consecutive_absences"].fillna(0).astype(int)
+            located["last_seen_batch_id"] = located["last_seen_batch_id"].fillna(batch.batch_id)
+
+            # Also write absent-listing state rows into current
+            absent = event_result.state[
+                ~event_result.state["source_listing_id"].isin(
+                    located["source_listing_id"]
+                )
+            ].copy()
+            if not absent.empty:
+                for col in ("station_code", "station_distance_m", "location_eligible"):
+                    absent[col] = None
+                absent["model_evidence"] = None
+                located = pd.concat([located, absent], ignore_index=True)
+
         if not event_result.events.empty:
             repo.append_events(event_result.events)
+
+        # ---- Valuation integration (IMPORTANT-7) ----
+        if listing_type in ("sale", "newhouse") and not market_frame.empty:
+            listing_map = {n.source_listing_id: n for n in normalized}
+            for idx, row in located.iterrows():
+                sid = row.get("source_listing_id")
+                nl = listing_map.get(sid)
+                if nl is None:
+                    continue
+                station_code = row.get("station_code")
+                station_dist = row.get("station_distance_m")
+                location_eligible = bool(row.get("location_eligible", False))
+                if pd.isna(station_code) or station_code is None:
+                    continue
+                try:
+                    result = compare_listing_to_model(
+                        nl, model_registry, market_frame,
+                        station_code=str(station_code),
+                        station_distance_m=float(station_dist) if pd.notna(station_dist) else None,
+                        location_eligible=location_eligible,
+                    )
+                    located.at[idx, "model_evidence"] = json.dumps(result, ensure_ascii=False)
+                except Exception as exc:
+                    print(
+                        f"  valuation failed for {sid}: {exc}",
+                        file=sys.stderr,
+                    )
+
+        repo.save_batch(batch, located)
 
     all_snapshots = repo.load_snapshots()
     snapshots_path = root / "data" / "processed" / "listing_snapshots.parquet"

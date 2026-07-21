@@ -64,7 +64,12 @@ CREATE TABLE IF NOT EXISTS listing_current (
   latitude        DECIMAL(10,7) NULL,
   longitude       DECIMAL(10,7) NULL,
   station_code    VARCHAR(16) NULL,
+  station_distance_m   DECIMAL(10,2) NULL,
+  location_eligible    BOOLEAN NOT NULL DEFAULT FALSE,
   raw_hash        CHAR(64) NOT NULL,
+  active          BOOLEAN NOT NULL DEFAULT TRUE,
+  consecutive_absences  TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  last_seen_batch_id   VARCHAR(64) NOT NULL DEFAULT '',
   updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (source, listing_type, source_listing_id)
 ) ENGINE=InnoDB;

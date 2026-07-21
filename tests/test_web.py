@@ -138,11 +138,18 @@ class TestMarketApi:
 
 
 class InMemoryListingRepo:
-    def __init__(self, df: pd.DataFrame) -> None:
+    def __init__(self, df: pd.DataFrame, events_df: pd.DataFrame | None = None) -> None:
         self._df = df
+        self._events_df = events_df if events_df is not None else pd.DataFrame()
 
     def load_current(self, listing_type: str | None = None) -> pd.DataFrame:
         df = self._df
+        if listing_type is not None:
+            df = df[df["listing_type"] == listing_type]
+        return df
+
+    def load_events(self, listing_type: str | None = None) -> pd.DataFrame:
+        df = self._events_df
         if listing_type is not None:
             df = df[df["listing_type"] == listing_type]
         return df
@@ -154,6 +161,9 @@ class InMemoryListingRepo:
         pass
 
     def append_events(self, events) -> None:
+        pass
+
+    def merge_state(self, state) -> None:
         pass
 
 
@@ -179,14 +189,25 @@ def listing_client(market_frame: pd.DataFrame) -> FlaskClient:
             "latitude": 25.0156, "longitude": 121.2078,
         },
     ])
+    events_df = pd.DataFrame([
+        {
+            "event_key": "a" * 64, "source": "591",
+            "listing_type": "sale", "source_listing_id": "L001",
+            "event_type": "price_decrease",
+            "event_data": '{"previous_price":20000000,"new_price":18000000,"absolute_change":-2000000,"percentage_change":-10.0}',
+            "occurred_at": pd.Timestamp("2026-07-19 10:00", tz="UTC"),
+        },
+    ])
     ds = InMemoryMarketDataSource(market_frame)
-    app = create_app(data_source=ds, listing_repo=InMemoryListingRepo(listing_df))
+    app = create_app(data_source=ds, listing_repo=InMemoryListingRepo(listing_df, events_df))
     with app.test_client() as client:
         yield client
 
 
 class TestListingApi:
-    def test_listing_api_never_exposes_private_or_raw_fields(self, listing_client: FlaskClient) -> None:
+    def test_listing_api_never_exposes_private_or_raw_fields(  # noqa: E501
+        self, listing_client: FlaskClient
+    ) -> None:
         raw = listing_client.get("/api/listings?listing_type=sale").get_data(as_text=True)
         for field in ("raw_html", "payload", "phone", "contact_name", "full_address"):
             assert field not in raw
@@ -213,7 +234,11 @@ class TestListingApi:
         data = response.get_json()
         assert len(data["items"]) == 1
         row = data["items"][0]
-        expected = {"listing_id", "type", "title", "source_url", "station", "area", "price", "event", "status", "latitude", "longitude", "model_evidence", "snapshot_time"}
+        expected = {
+            "listing_id", "type", "title", "source_url", "station",
+            "area", "price", "event", "status", "latitude", "longitude",
+            "model_evidence", "snapshot_time",
+        }
         assert set(row.keys()) == expected
 
     def test_listing_events_returns_filtered(self, listing_client: FlaskClient) -> None:
@@ -221,6 +246,13 @@ class TestListingApi:
         assert response.status_code == 200
         data = response.get_json()
         assert "items" in data
+        assert len(data["items"]) == 1
+        ev = data["items"][0]
+        assert ev["event_type"] == "price_decrease"
+        assert ev["type"] == "sale"
+        assert ev["source_listing_id"] == "L001"
+        assert ev["event_data"]["previous_price"] == 20_000_000
+        assert ev["event_data"]["new_price"] == 18_000_000
 
     def test_no_listing_repo_returns_503(self, client: FlaskClient) -> None:
         response = client.get("/api/listings?listing_type=sale")

@@ -54,7 +54,7 @@ STATE_COLS = [
 
 
 def event_key(batch_id: str, listing_key: str, event_type: str) -> str:
-    raw = f"{batch_id}|{listing_key}|{event_type}".encode("utf-8")
+    raw = f"{batch_id}|{listing_key}|{event_type}".encode()
     return hashlib.sha256(raw).hexdigest()
 
 
@@ -85,6 +85,9 @@ def detect_listing_events(
     batch: CaptureBatch,
 ) -> ListingEventResult:
     if not previous.empty:
+        if "listing_key" not in previous.columns:
+            previous = previous.copy()
+            previous["listing_key"] = previous.apply(_listing_key, axis=1)
         prev_lookup = previous.set_index("listing_key")
     else:
         prev_lookup = pd.DataFrame(index=pd.Index([], name="listing_key"))

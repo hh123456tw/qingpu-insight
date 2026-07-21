@@ -6,10 +6,10 @@ import pytest
 
 from qingpu_insight.listing_capture import (
     ChromeConfig,
-    FakeBrowser,
     RawBatchWriter,
     Selenium591Source,
 )
+from tests.fake_browser import FakeBrowser
 from qingpu_insight.listing_sources import ListingType
 
 SALE_HTML = """<html><body>

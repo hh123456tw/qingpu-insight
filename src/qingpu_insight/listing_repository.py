@@ -34,6 +34,14 @@ class ListingRepository(Protocol):
     ) -> pd.DataFrame:
         """Return snapshot history, optionally filtered by *batch_id*."""
 
+    def load_events(
+        self, listing_type: str | None = None
+    ) -> pd.DataFrame:
+        """Return stored listing events, optionally filtered by *listing_type*."""
+
+    def merge_state(self, state: pd.DataFrame) -> None:
+        """Merge state columns (active, consecutive_absences, last_seen_batch_id) into the current snapshot."""
+
     def append_events(self, events: pd.DataFrame) -> None:
         """Append new event records (duplicate keys are ignored)."""
 
@@ -110,6 +118,54 @@ class ParquetListingRepository:
         return pd.concat(
             [pd.read_parquet(f) for f in files], ignore_index=True
         )
+
+    # ------------------------------------------------------------------
+    # load_events
+    # ------------------------------------------------------------------
+
+    def load_events(
+        self, listing_type: str | None = None
+    ) -> pd.DataFrame:
+        path = self.base_path / _EVENT_FILE
+        try:
+            df = pd.read_parquet(path)
+        except (FileNotFoundError, ValueError):
+            return pd.DataFrame()
+        if listing_type is not None:
+            df = df[df["listing_type"] == listing_type]
+        return df
+
+    # ------------------------------------------------------------------
+    # merge_state
+    # ------------------------------------------------------------------
+
+    def merge_state(self, state: pd.DataFrame) -> None:
+        if state.empty:
+            return
+        path = self.base_path / _CURRENT_FILE
+        try:
+            existing = pd.read_parquet(path)
+        except (FileNotFoundError, ValueError):
+            return
+
+        merge_cols = ["source", "listing_type", "source_listing_id"]
+        state_cols = merge_cols + [
+            "active", "consecutive_absences", "last_seen_batch_id",
+        ]
+        state_subset = state[state_cols].drop_duplicates(subset=merge_cols)
+
+        for col in ("active", "consecutive_absences", "last_seen_batch_id"):
+            if col in existing.columns:
+                existing = existing.drop(columns=[col])
+
+        existing = existing.merge(state_subset, on=merge_cols, how="left")
+        existing["active"] = existing["active"].fillna(True)
+        existing["consecutive_absences"] = (
+            existing["consecutive_absences"].fillna(0).astype(int)
+        )
+        existing["last_seen_batch_id"] = existing["last_seen_batch_id"].fillna("")
+
+        self._atomic_write(path, existing)
 
     # ------------------------------------------------------------------
     # append_events
@@ -217,7 +273,13 @@ CREATE TABLE IF NOT EXISTS listing_current (
   parking_type VARCHAR(80) NULL,
   latitude DECIMAL(10,7) NULL,
   longitude DECIMAL(10,7) NULL,
+  station_code VARCHAR(16) NULL,
+  station_distance_m DECIMAL(10,2) NULL,
+  location_eligible BOOLEAN NOT NULL DEFAULT FALSE,
   raw_hash CHAR(64) NOT NULL,
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  consecutive_absences TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  last_seen_batch_id VARCHAR(64) NOT NULL DEFAULT '',
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (source, listing_type, source_listing_id)
 ) ENGINE=InnoDB
@@ -461,6 +523,35 @@ class MySQLListingRepository:
         except Exception:
             self._conn.rollback()
             raise
+
+    # ------------------------------------------------------------------
+    # load_events
+    # ------------------------------------------------------------------
+
+    def load_events(
+        self, listing_type: str | None = None
+    ) -> pd.DataFrame:
+        where = "WHERE listing_type = %(lt)s" if listing_type else ""
+        sql = f"SELECT * FROM listing_events {where}"
+
+        with self._conn.cursor() as cur:
+            if listing_type:
+                cur.execute(sql, {"lt": listing_type})
+            else:
+                cur.execute(sql)
+            rows = cur.fetchall()
+            cols = [desc[0] for desc in cur.description]
+
+        if not rows:
+            return pd.DataFrame()
+        return pd.DataFrame(rows, columns=cols)
+
+    # ------------------------------------------------------------------
+    # merge_state
+    # ------------------------------------------------------------------
+
+    def merge_state(self, state: pd.DataFrame) -> None:
+        pass  # MySQL adapter merges state via the on-duplicate-key upsert in save_batch
 
 
 # ---------------------------------------------------------------------------

@@ -112,27 +112,27 @@ def _extract_coordinates(card) -> tuple[float, float]:
         return 0.0, 0.0
 
 
-def _parse_price_wan(text: str) -> int:
+def _parse_price_wan(text: str) -> int | None:
     if not text:
-        return 0
+        return None
     if "萬" not in text:
-        return 0
+        return None
     clean = text.replace(",", "").replace(" ", "")
     match = re.search(r"([\d.]+)", clean)
     if not match:
-        return 0
+        return None
     return int(float(match.group(1)) * 10000)
 
 
-def _parse_price_monthly(text: str) -> int:
+def _parse_price_monthly(text: str) -> int | None:
     if not text:
-        return 0
+        return None
     if "元/月" not in text:
-        return 0
+        return None
     clean = text.replace(",", "").replace(" ", "")
     match = re.search(r"([\d.]+)", clean)
     if not match:
-        return 0
+        return None
     return int(float(match.group(1)))
 
 

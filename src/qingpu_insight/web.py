@@ -17,7 +17,7 @@ from qingpu_insight.listing_metrics import (
     public_events,
     public_listings,
 )
-from qingpu_insight.listing_repository import ListingRepository, ParquetListingRepository
+from qingpu_insight.listing_repository import ListingRepository
 from qingpu_insight.market_metrics import (
     MarketFilters,
     market_summary,
@@ -26,7 +26,7 @@ from qingpu_insight.market_metrics import (
 )
 from qingpu_insight.market_repository import MarketDataSource, repository_from_env
 from qingpu_insight.model_features import ValuationInput, build_model_frame
-from qingpu_insight.valuation import ModelRegistry, ValuationBundle, valuate
+from qingpu_insight.valuation import ModelRegistry, valuate
 from qingpu_insight.valuation_store import FileValuationStore
 
 
@@ -213,7 +213,8 @@ def create_app(
     def listing_summary_api():
         filters = _listing_filters_from_args()
         if lr is None:
-            return jsonify({"error": {"code": "listing_data_unavailable", "message": "刊登資料未啟用。"}}), 503
+            err = {"code": "listing_data_unavailable", "message": "刊登資料未啟用。"}
+            return jsonify({"error": err}), 503
         df = lr.load_current(filters.listing_type)
         return jsonify(listing_summary(df, filters))
 
@@ -221,7 +222,8 @@ def create_app(
     def listings_api():
         filters = _listing_filters_from_args()
         if lr is None:
-            return jsonify({"error": {"code": "listing_data_unavailable", "message": "刊登資料未啟用。"}}), 503
+            err = {"code": "listing_data_unavailable", "message": "刊登資料未啟用。"}
+            return jsonify({"error": err}), 503
         df = lr.load_current(filters.listing_type)
         items = public_listings(df, filters)
         return jsonify({"items": items, "limit": filters.limit})
@@ -230,8 +232,9 @@ def create_app(
     def listing_events_api():
         filters = _listing_filters_from_args()
         if lr is None:
-            return jsonify({"error": {"code": "listing_data_unavailable", "message": "刊登資料未啟用。"}}), 503
-        df = lr.load_current(filters.listing_type)
+            err = {"code": "listing_data_unavailable", "message": "刊登資料未啟用。"}
+            return jsonify({"error": err}), 503
+        df = lr.load_events(filters.listing_type)
         events = public_events(df, filters)
         return jsonify({"items": events, "limit": filters.limit})
 

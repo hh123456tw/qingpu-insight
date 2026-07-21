@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-import numpy as np
 import pandas as pd
 import pytest
 
-from qingpu_insight.listing_metrics import ListingFilters, listing_summary, public_events, public_listings
+from qingpu_insight.listing_metrics import (
+    ListingFilters,
+    listing_summary,
+    public_events,
+    public_listings,
+)
 
 
 @pytest.fixture
@@ -16,7 +20,7 @@ def listing_frame() -> pd.DataFrame:
             "source": "591",
             "source_listing_id": "L001",
             "listing_type": "sale",
-            "snapshot_at": datetime(2026, 7, 20, 10, 0, 0, tzinfo=timezone.utc),
+            "snapshot_at": datetime(2026, 7, 20, 10, 0, 0, tzinfo=UTC),
             "source_url": "https://sale.591.com.tw/L001",
             "title": "青埔精美三房",
             "asking_price_twd": 18_000_000,
@@ -38,7 +42,7 @@ def listing_frame() -> pd.DataFrame:
             "source": "591",
             "source_listing_id": "L002",
             "listing_type": "sale",
-            "snapshot_at": datetime(2026, 7, 20, 10, 0, 0, tzinfo=timezone.utc),
+            "snapshot_at": datetime(2026, 7, 20, 10, 0, 0, tzinfo=UTC),
             "source_url": "https://sale.591.com.tw/L002",
             "title": "A17站前大樓",
             "asking_price_twd": 22_000_000,
@@ -60,7 +64,7 @@ def listing_frame() -> pd.DataFrame:
             "source": "591",
             "source_listing_id": "L003",
             "listing_type": "sale",
-            "snapshot_at": datetime(2026, 7, 20, 10, 0, 0, tzinfo=timezone.utc),
+            "snapshot_at": datetime(2026, 7, 20, 10, 0, 0, tzinfo=UTC),
             "source_url": "https://sale.591.com.tw/L003",
             "title": "A18捷運宅",
             "asking_price_twd": 15_000_000,
@@ -82,7 +86,7 @@ def listing_frame() -> pd.DataFrame:
             "source": "591",
             "source_listing_id": "L004",
             "listing_type": "rental",
-            "snapshot_at": datetime(2026, 7, 20, 10, 0, 0, tzinfo=timezone.utc),
+            "snapshot_at": datetime(2026, 7, 20, 10, 0, 0, tzinfo=UTC),
             "source_url": "https://rent.591.com.tw/L004",
             "title": "A19套房出租",
             "asking_price_twd": None,
@@ -112,8 +116,11 @@ def events_frame() -> pd.DataFrame:
             "listing_type": "sale",
             "source_listing_id": "L001",
             "event_type": "price_decrease",
-            "event_data": '{"previous_price":20000000,"new_price":18000000,"absolute_change":-2000000,"percentage_change":-10.0}',
-            "occurred_at": datetime(2026, 7, 19, 8, 0, 0, tzinfo=timezone.utc),
+            "event_data": (
+                '{"previous_price":20000000,"new_price":18000000,'
+                '"absolute_change":-2000000,"percentage_change":-10.0}'
+            ),
+            "occurred_at": datetime(2026, 7, 19, 8, 0, 0, tzinfo=UTC),
         },
         {
             "event_key": "evt002",
@@ -122,7 +129,7 @@ def events_frame() -> pd.DataFrame:
             "source_listing_id": "L002",
             "event_type": "listed",
             "event_data": None,
-            "occurred_at": datetime(2026, 7, 18, 8, 0, 0, tzinfo=timezone.utc),
+            "occurred_at": datetime(2026, 7, 18, 8, 0, 0, tzinfo=UTC),
         },
         {
             "event_key": "evt003",
@@ -130,8 +137,11 @@ def events_frame() -> pd.DataFrame:
             "listing_type": "rental",
             "source_listing_id": "L004",
             "event_type": "price_decrease",
-            "event_data": '{"previous_price":20000,"new_price":18000,"absolute_change":-2000,"percentage_change":-10.0}',
-            "occurred_at": datetime(2026, 7, 17, 8, 0, 0, tzinfo=timezone.utc),
+            "event_data": (
+                '{"previous_price":20000,"new_price":18000,'
+                '"absolute_change":-2000,"percentage_change":-10.0}'
+            ),
+            "occurred_at": datetime(2026, 7, 17, 8, 0, 0, tzinfo=UTC),
         },
     ])
 
@@ -161,8 +171,10 @@ class TestListingSummary:
 
     def test_nullable_prices_are_handled(self) -> None:
         df = pd.DataFrame([
-            {"listing_type": "sale", "asking_price_twd": None, "snapshot_at": pd.NaT, "station_code": "A18"},
-            {"listing_type": "sale", "asking_price_twd": 10_000_000, "snapshot_at": pd.NaT, "station_code": "A18"},
+            {"listing_type": "sale", "asking_price_twd": None,
+             "snapshot_at": pd.NaT, "station_code": "A18"},
+            {"listing_type": "sale", "asking_price_twd": 10_000_000,
+             "snapshot_at": pd.NaT, "station_code": "A18"},
         ])
         result = listing_summary(df, ListingFilters("sale", ("A18",)))
         assert result["active_count"] == 2
@@ -189,7 +201,11 @@ class TestPublicListings:
 
     def test_returns_expected_columns(self, listing_frame: pd.DataFrame) -> None:
         result = public_listings(listing_frame, ListingFilters("sale", ("A18",)))
-        expected = {"listing_id", "type", "title", "source_url", "station", "area", "price", "event", "status", "latitude", "longitude", "model_evidence", "snapshot_time"}
+        expected = {
+            "listing_id", "type", "title", "source_url", "station",
+            "area", "price", "event", "status", "latitude", "longitude",
+            "model_evidence", "snapshot_time",
+        }
         assert len(result) == 2
         for row in result:
             assert set(row.keys()) == expected

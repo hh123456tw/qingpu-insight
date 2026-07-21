@@ -33,7 +33,8 @@ def listing_summary(df: pd.DataFrame, filters: ListingFilters) -> dict[str, Any]
     if "station_code" in df.columns and filters.station_codes:
         df = df[df["station_code"].isin(filters.station_codes)]
 
-    price_col = "asking_price_twd" if filters.listing_type in ("sale", "newhouse") else "monthly_rent_twd"
+    is_sale = filters.listing_type in ("sale", "newhouse")
+    price_col = "asking_price_twd" if is_sale else "monthly_rent_twd"
     prices = df[price_col].dropna() if price_col in df.columns else pd.Series([], dtype=float)
 
     snapshot_time = None
@@ -82,7 +83,8 @@ def public_listings(df: pd.DataFrame, filters: ListingFilters) -> list[dict[str,
 
     results: list[dict[str, Any]] = []
     for _, row in df.iterrows():
-        price_col = "asking_price_twd" if filters.listing_type in ("sale", "newhouse") else "monthly_rent_twd"
+        is_sale = filters.listing_type in ("sale", "newhouse")
+        price_col = "asking_price_twd" if is_sale else "monthly_rent_twd"
         raw_price = row.get(price_col)
         price = int(raw_price) if raw_price is not None and not pd.isna(raw_price) else None
 
