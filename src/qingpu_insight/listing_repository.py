@@ -54,6 +54,18 @@ _SNAPSHOT_DIR = "snapshots"
 _CURRENT_FILE = "current.parquet"
 _EVENT_FILE = "events.parquet"
 
+_RANGE_COLUMN_DEFINITIONS = {
+    "asking_unit_price_low_twd_per_ping": "BIGINT UNSIGNED NULL",
+    "asking_unit_price_high_twd_per_ping": "BIGINT UNSIGNED NULL",
+    "building_area_min_ping": "DECIMAL(10,2) NULL",
+    "building_area_max_ping": "DECIMAL(10,2) NULL",
+}
+_METADATA_COLUMN_DEFINITIONS = {
+    "acquisition_representation": "VARCHAR(24)",
+    "acquisition_schema_version": "VARCHAR(64)",
+}
+_LISTING_STATE_TABLES = ("listing_snapshots", "listing_current")
+
 
 class ParquetListingRepository:
     """File-system repository backed by Apache Parquet.
@@ -245,8 +257,8 @@ CREATE TABLE IF NOT EXISTS listing_snapshots (
   asking_unit_price_high_twd_per_ping BIGINT UNSIGNED NULL,
   building_area_min_ping DECIMAL(10,2) NULL,
   building_area_max_ping DECIMAL(10,2) NULL,
-  acquisition_representation VARCHAR(24) NOT NULL,
-  acquisition_schema_version VARCHAR(64) NOT NULL,
+  acquisition_representation VARCHAR(24) NOT NULL DEFAULT 'unknown',
+  acquisition_schema_version VARCHAR(64) NOT NULL DEFAULT 'unknown',
   building_type VARCHAR(80) NULL,
   bedrooms TINYINT UNSIGNED NULL,
   living_rooms TINYINT UNSIGNED NULL,
@@ -282,8 +294,8 @@ CREATE TABLE IF NOT EXISTS listing_current (
   asking_unit_price_high_twd_per_ping BIGINT UNSIGNED NULL,
   building_area_min_ping DECIMAL(10,2) NULL,
   building_area_max_ping DECIMAL(10,2) NULL,
-  acquisition_representation VARCHAR(24) NOT NULL,
-  acquisition_schema_version VARCHAR(64) NOT NULL,
+  acquisition_representation VARCHAR(24) NOT NULL DEFAULT 'unknown',
+  acquisition_schema_version VARCHAR(64) NOT NULL DEFAULT 'unknown',
   building_type VARCHAR(80) NULL,
   bedrooms TINYINT UNSIGNED NULL,
   living_rooms TINYINT UNSIGNED NULL,
@@ -433,6 +445,51 @@ VALUES
 """
 
 
+def _table_columns(cursor, table: str) -> dict[str, dict[str, object]]:
+    cursor.execute(f"SHOW COLUMNS FROM `{table}`")
+    columns: dict[str, dict[str, object]] = {}
+    for row in cursor.fetchall():
+        if isinstance(row, dict):
+            name = str(row["Field"])
+            nullable = str(row.get("Null", "YES")).upper() == "YES"
+            default = row.get("Default")
+        else:
+            name = str(row[0])
+            nullable = str(row[2]).upper() == "YES"
+            default = row[4]
+        columns[name] = {"nullable": nullable, "default": default}
+    return columns
+
+
+def _upgrade_range_schema(cursor) -> None:
+    for table in _LISTING_STATE_TABLES:
+        columns = _table_columns(cursor, table)
+        for column, definition in _RANGE_COLUMN_DEFINITIONS.items():
+            if column not in columns:
+                cursor.execute(
+                    f"ALTER TABLE `{table}` ADD COLUMN `{column}` {definition}"
+                )
+
+        for column, definition in _METADATA_COLUMN_DEFINITIONS.items():
+            if column not in columns:
+                cursor.execute(
+                    f"ALTER TABLE `{table}` ADD COLUMN `{column}` "
+                    f"{definition} NULL DEFAULT NULL"
+                )
+                columns[column] = {"nullable": True, "default": None}
+
+            cursor.execute(
+                f"UPDATE `{table}` SET `{column}` = 'unknown' "
+                f"WHERE `{column}` IS NULL OR `{column}` = ''"
+            )
+            metadata = columns[column]
+            if metadata["nullable"] or metadata["default"] != "unknown":
+                cursor.execute(
+                    f"ALTER TABLE `{table}` MODIFY COLUMN `{column}` "
+                    f"{definition} NOT NULL DEFAULT 'unknown'"
+                )
+
+
 class MySQLListingRepository:
     """MySQL-backed repository using PyMySQL.
 
@@ -453,6 +510,7 @@ class MySQLListingRepository:
                 _CREATE_EVENTS_SQL,
             ):
                 cur.execute(ddl)
+            _upgrade_range_schema(cur)
         self._conn.commit()
 
     # ------------------------------------------------------------------

@@ -1,11 +1,13 @@
 """Tests for listing repository adapters."""
 
+import re
 from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
+from qingpu_insight.listing_events import detect_listing_events
 from qingpu_insight.listing_repository import (
     _CREATE_CURRENT_SQL,
     _CREATE_SNAPSHOTS_SQL,
@@ -334,6 +336,58 @@ class TestRepositoryContract:
         "parquet_repository",
         "mysql_fake_repository",
     ])
+    @pytest.mark.parametrize("reached_terminal_page", [True, False])
+    def test_absent_listing_roundtrip_preserves_advertised_contract(
+        self,
+        repo_fixture,
+        reached_terminal_page,
+        complete_batch,
+        normalized_rows,
+        request,
+    ):
+        repo = request.getfixturevalue(repo_fixture)
+        initial_rows = normalized_rows.copy()
+        initial_rows["active"] = True
+        initial_rows["consecutive_absences"] = 0
+        initial_rows["last_seen_batch_id"] = complete_batch.batch_id
+        repo.save_batch(complete_batch, initial_rows)
+        previous = repo.load_current(listing_type="sale")
+        next_batch = CaptureBatch(
+            batch_id=f"absence-{int(reached_terminal_page)}",
+            source="591",
+            listing_type="sale",
+            started_at=datetime(2026, 7, 22, 12, 0, 0),
+            reached_terminal_page=reached_terminal_page,
+        )
+        result = detect_listing_events(
+            previous,
+            normalized_rows.iloc[[1]],
+            next_batch,
+        )
+
+        repo.save_batch(next_batch, result.state)
+
+        expected = normalized_rows.iloc[0]
+        current = repo.load_current(listing_type="sale")
+        stored = current[current["source_listing_id"] == "sale-001"].iloc[0]
+        for column in (
+            "asking_unit_price_low_twd_per_ping",
+            "asking_unit_price_high_twd_per_ping",
+            "building_area_min_ping",
+            "building_area_max_ping",
+            "acquisition_representation",
+            "acquisition_schema_version",
+            "raw_hash",
+        ):
+            assert stored[column] == expected[column]
+        assert stored["consecutive_absences"] == int(reached_terminal_page)
+        expected_batch = next_batch.batch_id if reached_terminal_page else complete_batch.batch_id
+        assert stored["last_seen_batch_id"] == expected_batch
+
+    @pytest.mark.parametrize("repo_fixture", [
+        "parquet_repository",
+        "mysql_fake_repository",
+    ])
     def test_load_current_filter_by_type(
         self, repo_fixture, complete_batch, normalized_rows, rental_rows, request,
     ):
@@ -518,7 +572,132 @@ class RecordingConnection:
         self.rollbacks += 1
 
 
+class LegacySchemaCursor(RecordingCursor):
+    def __init__(self, connection):
+        super().__init__(connection)
+        self._rows = []
+
+    def execute(self, sql, params=None):
+        super().execute(sql, params)
+        show = re.search(r"SHOW COLUMNS FROM `?(listing_snapshots|listing_current)`?", sql, re.I)
+        if show:
+            table = show.group(1)
+            self._rows = [
+                (
+                    name,
+                    definition["type"],
+                    "YES" if definition["nullable"] else "NO",
+                    "",
+                    definition["default"],
+                    "",
+                )
+                for name, definition in self.connection.schemas[table].items()
+            ]
+            return
+
+        alter = re.search(
+            r"ALTER TABLE `?(listing_snapshots|listing_current)`?\s+"
+            r"(ADD|MODIFY) COLUMN `?([a-z0-9_]+)`?\s+(.+)",
+            " ".join(sql.split()),
+            re.I,
+        )
+        if alter:
+            table, action, column, definition = alter.groups()
+            if action.upper() == "ADD" and column in self.connection.schemas[table]:
+                raise AssertionError(f"duplicate column migration: {table}.{column}")
+            self.connection.schemas[table][column] = {
+                "type": definition.split()[0].lower(),
+                "nullable": "NOT NULL" not in definition.upper(),
+                "default": "unknown" if "DEFAULT 'unknown'" in definition else None,
+            }
+            for row in self.connection.rows[table]:
+                row.setdefault(column, self.connection.schemas[table][column]["default"])
+            return
+
+        update = re.search(
+            r"UPDATE `?(listing_snapshots|listing_current)`?\s+"
+            r"SET `?([a-z0-9_]+)`?\s*=\s*'unknown'",
+            " ".join(sql.split()),
+            re.I,
+        )
+        if update:
+            table, column = update.groups()
+            for row in self.connection.rows[table]:
+                if row.get(column) in (None, ""):
+                    row[column] = "unknown"
+
+    def fetchall(self):
+        return self._rows
+
+
+class LegacySchemaConnection(RecordingConnection):
+    def __init__(self):
+        super().__init__()
+        legacy_columns = {
+            "source": {"type": "varchar(32)", "nullable": False, "default": None},
+            "raw_hash": {"type": "char(64)", "nullable": False, "default": None},
+        }
+        self.schemas = {
+            "listing_snapshots": {name: dict(value) for name, value in legacy_columns.items()},
+            "listing_current": {name: dict(value) for name, value in legacy_columns.items()},
+        }
+        self.rows = {
+            "listing_snapshots": [{"source": "591", "raw_hash": "a" * 64}],
+            "listing_current": [{"source": "591", "raw_hash": "a" * 64}],
+        }
+
+    def cursor(self):
+        return LegacySchemaCursor(self)
+
+
 class TestMySQLRepositoryActualAdapter:
+    def test_legacy_schema_is_upgraded_idempotently_and_backfilled(self):
+        connection = LegacySchemaConnection()
+
+        MySQLListingRepository(connection)
+        first_add_count = sum(
+            " ADD COLUMN " in " ".join(sql.split()).upper()
+            for sql, _ in connection.executions
+        )
+        MySQLListingRepository(connection)
+        second_add_count = sum(
+            " ADD COLUMN " in " ".join(sql.split()).upper()
+            for sql, _ in connection.executions
+        )
+
+        expected_columns = {
+            "asking_unit_price_low_twd_per_ping",
+            "asking_unit_price_high_twd_per_ping",
+            "building_area_min_ping",
+            "building_area_max_ping",
+            "acquisition_representation",
+            "acquisition_schema_version",
+        }
+        for table in ("listing_snapshots", "listing_current"):
+            assert expected_columns <= connection.schemas[table].keys()
+            for metadata_column in (
+                "acquisition_representation",
+                "acquisition_schema_version",
+            ):
+                definition = connection.schemas[table][metadata_column]
+                assert definition["nullable"] is False
+                assert definition["default"] == "unknown"
+                assert connection.rows[table][0][metadata_column] == "unknown"
+        assert first_add_count == 12
+        assert second_add_count == first_add_count
+
+    def test_additive_range_migration_exists_and_backfills_metadata(self):
+        migration_path = (
+            Path(__file__).parents[1] / "database" / "004_listing_range_fields.sql"
+        )
+
+        assert migration_path.exists()
+        sql = migration_path.read_text(encoding="utf-8")
+        assert "information_schema.COLUMNS" in sql
+        assert sql.count("SET acquisition_representation = 'unknown'") == 2
+        assert sql.count("SET acquisition_schema_version = 'unknown'") == 2
+        assert sql.count("NOT NULL DEFAULT 'unknown'") >= 4
+
     def test_save_batch_persists_location_and_state(self, complete_batch, normalized_rows):
         connection = RecordingConnection()
         repository = MySQLListingRepository(connection)

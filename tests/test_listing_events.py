@@ -33,6 +33,12 @@ BASE_COLS = [
     "asking_price_twd",
     "monthly_rent_twd",
     "building_area_ping",
+    "asking_unit_price_low_twd_per_ping",
+    "asking_unit_price_high_twd_per_ping",
+    "building_area_min_ping",
+    "building_area_max_ping",
+    "acquisition_representation",
+    "acquisition_schema_version",
     "building_type",
     "bedrooms",
     "living_rooms",
@@ -92,6 +98,12 @@ def listing_row(
         "asking_price_twd": asking_price,
         "monthly_rent_twd": monthly_rent,
         "building_area_ping": 35.5,
+        "asking_unit_price_low_twd_per_ping": None,
+        "asking_unit_price_high_twd_per_ping": None,
+        "building_area_min_ping": None,
+        "building_area_max_ping": None,
+        "acquisition_representation": "dom",
+        "acquisition_schema_version": f"591-{listing_type}-dom-v1",
         "building_type": "住宅大樓",
         "bedrooms": 3,
         "living_rooms": 2,
@@ -210,6 +222,39 @@ def test_incomplete_batch_does_not_increment_absence(active_state):
     )
     assert result.state.loc[0, "consecutive_absences"] == 0
     assert result.events.empty
+
+
+def test_absent_listing_preserves_ranges_metadata_and_hash():
+    advertised = {
+        "asking_unit_price_low_twd_per_ping": 500_000,
+        "asking_unit_price_high_twd_per_ping": 560_000,
+        "building_area_min_ping": 19.0,
+        "building_area_max_ping": 30.0,
+        "acquisition_representation": "jsonld",
+        "acquisition_schema_version": "591-newhouse-jsonld-v1",
+        "raw_hash": "range-hash",
+    }
+    previous = with_state(
+        [
+            listing_row(
+                "newhouse-001",
+                "newhouse",
+                asking_price=None,
+                snapshot_at=T0,
+                **advertised,
+            )
+        ]
+    )
+
+    result = detect_listing_events(
+        previous,
+        empty_rows(),
+        complete_batch("B2", listing_type="newhouse"),
+    )
+
+    state = result.state.iloc[0]
+    for field, expected in advertised.items():
+        assert state[field] == expected
 
 
 def test_single_absence_not_delisted(active_state):

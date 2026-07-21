@@ -36,6 +36,12 @@ STATE_COLS = [
     "asking_price_twd",
     "monthly_rent_twd",
     "building_area_ping",
+    "asking_unit_price_low_twd_per_ping",
+    "asking_unit_price_high_twd_per_ping",
+    "building_area_min_ping",
+    "building_area_max_ping",
+    "acquisition_representation",
+    "acquisition_schema_version",
     "building_type",
     "bedrooms",
     "living_rooms",
@@ -200,10 +206,20 @@ def detect_listing_events(
 
 
 def _fill_missing_cols(row: pd.Series) -> None:
-    """Fill optional price columns that may be absent in state lookups."""
-    for col in ("asking_price_twd", "monthly_rent_twd"):
+    """Fill contract columns that may be absent in legacy state lookups."""
+    defaults = {
+        "asking_price_twd": None,
+        "monthly_rent_twd": None,
+        "asking_unit_price_low_twd_per_ping": None,
+        "asking_unit_price_high_twd_per_ping": None,
+        "building_area_min_ping": None,
+        "building_area_max_ping": None,
+        "acquisition_representation": "unknown",
+        "acquisition_schema_version": "unknown",
+    }
+    for col, default in defaults.items():
         if col not in row.index:
-            row[col] = None
+            row[col] = default
 
 
 def _state_from_row(
