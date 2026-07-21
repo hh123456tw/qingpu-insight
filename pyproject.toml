@@ -16,6 +16,8 @@ dependencies = [
   "flask>=3.1,<4",
   "pymysql>=1.1,<2",
   "scikit-learn>=1.6,<2",
+  "beautifulsoup4>=4.12,<5",
+  "selenium>=4.28,<5",
 ]
 
 [project.optional-dependencies]
