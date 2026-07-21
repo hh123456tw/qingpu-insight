@@ -1,0 +1,187 @@
+# M3 刊登資訊方法論
+
+## 1. 概述
+
+M3 刊登資訊（Listing Intelligence）模組為青埔智價新增即時房源監控功能，涵蓋三大類型：
+
+- **sale**（中古屋/成屋出售）
+- **newhouse**（預售屋/新成屋出售）
+- **rental**（租賃）
+
+資料來源為 **591 房屋交易網**。M3 不涉及實價登錄或模型估價，僅專注於 591 公開刊登資訊的擷取、正規化、定位與變動偵測。
+
+## 2. 環境需求
+
+### 必要軟體
+
+- **Chrome 瀏覽器**（最新穩定版）
+- ChromeDriver（由 `chromedriver-autoinstaller` 或 `webdriver-manager` 自動管理）
+- Python >= 3.11
+
+### 授權假設
+
+591 需要登入才能瀏覽部分頁面（尤其是租賃）。系統假設使用者已**自行完成登入**並將 Chrome 使用者資料目錄（profile）路徑傳入設定檔或環境變數。系統不會儲存或管理任何 591 帳號密碼。
+
+### 環境變數
+
+| 變數 | 用途 | 預設值 |
+|------|------|--------|
+| `QINGPU_DATABASE_URL` | MySQL 連線字串（mysql+pymysql://user:pass@host:port/db） | —（無，未設定時使用 Parquet） |
+
+## 3. CLI 工作流程
+
+M3 提供三條 CLI 指令，可組合使用或一鍵完成。
+
+### 3.1 listing-scrape（僅擷取原始頁面）
+
+將 591 搜尋結果頁面原始 HTML 存入 `data/raw/listings/591/` 暫存區，**不進行正規化或定位**。
+
+```powershell
+# 擷取中古屋出售前 10 頁
+.\.venv\Scripts\qingpu-data.exe listing-scrape --types sale --max-pages 10
+
+# 同時擷取三種類型（各 5 頁）
+.\.venv\Scripts\qingpu-data.exe listing-scrape --types sale newhouse rental --max-pages 5
+
+# 使用已有 Chrome profile（非 headless，可先手動登入 591）
+.\.venv\Scripts\qingpu-data.exe listing-scrape --types rental --max-pages 3 --no-headless
+```
+
+### 3.2 listing-build（離線正規化與定位）
+
+從 `data/raw/listings/591/` 中最新的原始批次讀取 HTML，解析、正規化、定位後存入 `data/processed/`。
+
+```powershell
+# 處理最新批次
+.\.venv\Scripts\qingpu-data.exe listing-build
+
+# 指定目錄批次
+.\.venv\Scripts\qingpu-data.exe listing-build --batch-dir data/raw/listings/591/2025-01-15/591-20250115T120000Z
+```
+
+### 3.3 listing-sync（一鍵同步：擷取 + 正規化 + 定位 + 事件偵測）
+
+```powershell
+# 一鍵完成全部流程
+.\.venv\Scripts\qingpu-data.exe listing-sync --types sale newhouse rental --max-pages 10
+```
+
+`listing-sync` 自動執行：
+1. 以 Selenium 擷取原始 HTML
+2. 正規化為結構化欄位
+3. 門牌定位（assign life circle）
+4. 寫入 snapshot 與 current 資料表
+5. 與前次快照比對，偵測事件
+6. 追加事件記錄
+7. 產出完整的 `listing_snapshots.parquet`
+
+## 4. 資料路徑
+
+### 原始路徑（不提交 Git）
+
+```
+data/raw/listings/591/{date}/{batch_id}/
+├── manifest.json          # 批次中繼資料
+├── checkpoint.json        # 復原用檢查點
+├── page-0001.html         # 原始 HTML
+├── page-0002.html
+└── ...
+```
+
+### 處理後路徑（提交 Git）
+
+```
+data/processed/
+├── current.parquet        # 最新快照（upsert 語意）
+├── events.parquet         # 事件記錄（event_key 唯一）
+└── snapshots/
+    ├── {batch_id}.parquet # 各批次歷史快照
+    └── ...
+```
+
+## 5. MySQL 遷移路徑
+
+若設定 `QINGPU_DATABASE_URL`，可將 M3 資料存入 MySQL：
+
+```sql
+-- 所需表格由 MySQLListingRepository 自動建立
+-- listing_batches, listing_snapshots, listing_current, listing_events
+```
+
+遷移順序：
+
+1. 確保 M1 市場資料已完成 `mysql-load`
+2. 設定 `QINGPU_DATABASE_URL`
+3. 執行 `listing-sync`，系統自動建立 M3 表格並寫入
+
+## 6. API 路由
+
+M3 在 `qingpu-web` 中新增以下 API：
+
+| 路由 | 方法 | 說明 |
+|------|------|------|
+| `/api/listings/summary` | GET | 指定類型的刊登摘要（數量、價格區間） |
+| `/api/listings` | GET | 指定類型的刊登列表（公開欄位） |
+| `/api/listing-events` | GET | 指定類型的事件記錄 |
+
+查詢參數：
+
+- `listing_type`（必填）— `sale` / `newhouse` / `rental`
+- `station`（可選，可重複）— `A17` / `A18` / `A19`
+- `limit`（可選，預設 100，上限 100）
+
+## 7. 事件定義
+
+| 事件類型 | 觸發條件 |
+|----------|----------|
+| `listed` | 新的 listing 首次出現 |
+| `relisted` | 曾離線的 listing 重新出現 |
+| `delisted` | 連續兩次完整批次未出現（需批次為 `is_complete`） |
+| `price_increase` | 同一 listing 價格上漲（含變化百分比） |
+| `price_decrease` | 同一 listing 價格下跌（含變化百分比） |
+
+事件以 `SHA-256(event_key)` 去重，確保重複執行不產生重複記錄。
+
+## 8. 與 M2 的區隔
+
+M3 與 M2（AI 估價）完全分離：
+
+| 面向 | M2 估價 | M3 刊登 |
+|------|---------|---------|
+| 資料源 | 內政部實價登錄 | 591 公開房源 |
+| 估價能力 | 合理區間、模型版本、可信度 | 僅比對開價 vs 模型（若可用） |
+| 隱私 | 門牌座標去識別化 | 591 公開資料 |
+| 輸出 | 估價 artifact、模型卡 | 快照、事件 |
+
+Listing valuation（`listing_valuation.py`）在 M2 模型可用時，可為 sale/newhouse 房源附加估價比對。Rental 類型不支援估價。
+
+## 9. 隱私規範
+
+1. **不儲存** 591 帳號、密碼、Cookie、Session Token
+2. **不儲存** 聯絡人姓名、電話、Email
+3. **不儲存** 原始 HTML 在 Git 追蹤路徑內（`data/raw/listings/` 已排除）
+4. **公開 API** 只回傳 `public_listings()` 定義的欄位，不包含內部 `raw_hash`、`batch_id` 等
+5. `listing_metrics.py` 中的 `public_listings()` 已過濾掉所有非公開欄位
+6. 座標經 `_round_coord()` 四捨五入至小數四位
+
+## 10. 批次不完整的復原
+
+### 情境
+
+Selenium 在擷取過程中斷（網路不穩、Chrome 崩潰、手動中斷），導致只有部分頁面的 HTML 被儲存。
+
+### 復原機制
+
+1. `RawBatchWriter.write_checkpoint()` 在每頁成功後寫入 `checkpoint.json`
+2. 重新執行相同批次時，`Selenium591Source` 讀取 `checkpoint.json`，從 `last_page + 1` 繼續
+3. `listing-build` 可指定 `--batch-dir` 手動處理任何原始批次目錄
+
+### 事件一致性
+
+- 不完整批次（`is_complete = False`）**不會**觸發 `delisted` 事件
+- 遺漏的 listing 在非完整批次中被標記為 `active = True`，保留之前的 `consecutive_absences`
+- 僅連續兩次完整批次未出現才視為下架
+
+## 11. 排程執行（M4）
+
+定期自動擷取（如每日排程）屬於 **M4** 範疇，不在本版本實作範圍內。

@@ -144,6 +144,66 @@ mysql -u root -p < database/001_market_schema.sql
 
 請參閱 [docs/m2-valuation-methodology.md](docs/m2-valuation-methodology.md)。
 
+## M3 刊登資訊工作流程
+
+### 前提
+
+- Chrome 瀏覽器（最新穩定版）
+- 若需瀏覽登入後頁面（如租賃），請自行先以 `--no-headless` 登入 591
+- 系統**不儲存**任何 591 帳號、密碼或 Cookie
+
+### 三種 CLI 模式
+
+```powershell
+# 僅擷取原始 HTML 頁面（存入 data/raw/listings/591/）
+.\.venv\Scripts\qingpu-data.exe listing-scrape --types sale --max-pages 10
+
+# 離線正規化與定位最新原始批次
+.\.venv\Scripts\qingpu-data.exe listing-build
+
+# 一鍵同步：擷取 → 正規化 → 定位 → 事件偵測
+.\.venv\Scripts\qingpu-data.exe listing-sync --types sale newhouse rental --max-pages 10
+```
+
+### 事件類型
+
+| 事件 | 說明 |
+|------|------|
+| `listed` | 新刊登出現 |
+| `relisted` | 曾下架後重新刊登 |
+| `delisted` | 連續兩次完整批次未出現 |
+| `price_increase` | 開價上漲 |
+| `price_decrease` | 開價下跌 |
+
+### 資料儲存
+
+| 檔案 | 階段 | 說明 |
+|------|------|------|
+| `data/raw/listings/591/{date}/{batch}/` | scrape | 原始 HTML 批次（不提交 Git） |
+| `data/processed/current.parquet` | sync | 最新快照 |
+| `data/processed/snapshots/{batch}.parquet` | sync | 歷史批次快照 |
+| `data/processed/events.parquet` | sync | 事件記錄（SHA-256 去重） |
+
+### API 路由
+
+| 路由 | 說明 |
+|------|------|
+| `/api/listings/summary` | 刊登摘要（數量、價格區間） |
+| `/api/listings` | 刊登列表 |
+| `/api/listing-events` | 事件記錄 |
+
+### 隱私邊界
+
+- 原始 HTML **不提交 Git**（`data/raw/listings/` 已排除）
+- 公開 API 回傳已過濾欄位，不包含 `raw_hash`、`batch_id` 等內部欄位
+- 座標經四捨五入至小數四位
+- 不儲存聯絡資訊
+- 不儲存帳號密碼
+
+### 方法論文件
+
+請參閱 [docs/m3-listing-methodology.md](docs/m3-listing-methodology.md)。
+
 ## 開發
 
 ```powershell

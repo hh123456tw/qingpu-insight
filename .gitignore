@@ -6,6 +6,7 @@ __pycache__/
 .superpowers/
 .worktrees/
 data/raw/
+data/raw/listings/
 data/processed/
 outputs/reports/
 *.py[cod]
