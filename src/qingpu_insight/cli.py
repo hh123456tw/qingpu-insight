@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import urllib.parse
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -322,6 +323,16 @@ def _parse_page_listings(
     schema_version: str = "unknown",
 ) -> list[SourceListing]:
     extraction = extract_rendered_page(html, listing_type)
+    return _source_listings_from_extraction(
+        extraction, representation, schema_version
+    )
+
+
+def _source_listings_from_extraction(
+    extraction,
+    representation: str = "unknown",
+    schema_version: str = "unknown",
+) -> list[SourceListing]:
     acquisition_representation = (
         representation if representation != "unknown" else extraction.representation
     )
@@ -343,6 +354,34 @@ def _parse_page_listings(
     ]
 
 
+def _rejection_summary(rejections: Counter[str]) -> str:
+    return ",".join(
+        f"{reason}:{count}" for reason, count in sorted(rejections.items())
+    )
+
+
+def _capture_summary(root: Path, batch: CaptureBatch) -> str:
+    representations = sorted({page.representation for page in batch.pages})
+    representation = ",".join(representations) if representations else "unknown"
+    batch_path = (
+        root
+        / "data"
+        / "raw"
+        / "listings"
+        / batch.source
+        / batch.started_at.date().isoformat()
+        / batch.batch_id
+    )
+    return (
+        f"captured_pages={len(batch.pages)} "
+        f"accepted={sum(page.accepted_count for page in batch.pages)} "
+        f"rejected={sum(page.rejected_count for page in batch.pages)} "
+        f"representation={representation} "
+        f"complete={str(batch.is_complete).lower()} "
+        f"batch_path={batch_path}"
+    )
+
+
 def listing_scrape(root: Path, args) -> int:
     for lt in args.types:
         if lt not in listing_type_choices:
@@ -358,12 +397,16 @@ def listing_scrape(root: Path, args) -> int:
     exit_code = 0
     for listing_type in args.types:
         config = ChromeConfig(
-            headless=not args.no_headless,
+            headless=args.headless,
+            profile_dir=args.profile_dir,
             page_timeout_seconds=args.page_timeout,
             delay_seconds=(args.delay_min, args.delay_max),
         )
         source = create_listing_source(root, config)
         batch = source.capture(listing_type, max_pages=args.max_pages)
+        print(f"[{listing_type}] {_capture_summary(root, batch)}")
+        if sum(page.accepted_count for page in batch.pages) == 0:
+            exit_code = 1
         if batch.errors:
             exit_code = 1
             for err in batch.errors:
@@ -421,15 +464,22 @@ def listing_build(root: Path, args) -> int:
     stations = station_points(settings.stations, doorplates)
 
     listings_map: dict[str, SourceListing] = {}
+    rejection_reasons: Counter[str] = Counter()
     for page_info in sorted(manifest["pages"], key=lambda p: p["page_number"]):
         html_path = batch_root / f"page-{page_info['page_number']:04d}.html"
         if not html_path.exists():
             print(f"批次缺少頁面檔案: {html_path}", file=sys.stderr)
             return 1
         try:
-            parsed = _parse_page_listings(
+            extraction = extract_rendered_page(
                 html_path.read_text(encoding="utf-8"),
                 listing_type,
+            )
+            rejection_reasons.update(
+                rejected.reason_code for rejected in extraction.rejected
+            )
+            parsed = _source_listings_from_extraction(
+                extraction,
                 str(page_info.get("representation", "unknown")),
                 str(page_info.get("schema_version", "unknown")),
             )
@@ -442,6 +492,9 @@ def listing_build(root: Path, args) -> int:
         for sl in parsed:
             if sl.source_listing_id not in listings_map:
                 listings_map[sl.source_listing_id] = sl
+
+    if rejection_reasons:
+        print(f"rejection_reasons={_rejection_summary(rejection_reasons)}")
 
     if not listings_map:
         print("批次中無有效 listing 資料。", file=sys.stderr)
@@ -504,13 +557,17 @@ def listing_sync(root: Path, args) -> int:
     exit_code = 0
     for listing_type in args.types:
         config = ChromeConfig(
-            headless=not args.no_headless,
+            headless=args.headless,
+            profile_dir=args.profile_dir,
             page_timeout_seconds=args.page_timeout,
             delay_seconds=(args.delay_min, args.delay_max),
         )
         source = create_listing_source(root, config)
         batch = source.capture(listing_type, max_pages=args.max_pages)
+        print(f"[{listing_type}] {_capture_summary(root, batch)}")
 
+        if sum(page.accepted_count for page in batch.pages) == 0:
+            exit_code = 1
         if batch.errors:
             exit_code = 1
             for err in batch.errors:
@@ -520,21 +577,35 @@ def listing_sync(root: Path, args) -> int:
                 )
 
         all_listings: list[SourceListing] = []
+        rejection_reasons: Counter[str] = Counter()
+        schema_failed = False
         for page in batch.pages:
             try:
+                extraction = extract_rendered_page(page.html, listing_type)
+                rejection_reasons.update(
+                    rejected.reason_code for rejected in extraction.rejected
+                )
                 all_listings.extend(
-                    _parse_page_listings(
-                        page.html,
-                        listing_type,
-                        page.representation,
-                        page.schema_version,
+                    _source_listings_from_extraction(
+                        extraction, page.representation, page.schema_version
                     )
                 )
             except ListingSchemaError as e:
+                exit_code = 1
+                schema_failed = True
                 print(
                     f"[{listing_type}] 頁面 {page.page_number}: 解析失敗: {e}",
                     file=sys.stderr,
                 )
+
+        if rejection_reasons:
+            print(
+                f"[{listing_type}] rejection_reasons="
+                f"{_rejection_summary(rejection_reasons)}"
+            )
+
+        if schema_failed:
+            continue
 
         if not all_listings:
             continue
@@ -614,6 +685,8 @@ def listing_sync(root: Path, args) -> int:
         repo.save_batch(batch, located)
 
     all_snapshots = repo.load_snapshots()
+    if all_snapshots.empty:
+        return exit_code
     snapshots_path = root / "data" / "processed" / "listing_snapshots.parquet"
     snapshots_path.parent.mkdir(parents=True, exist_ok=True)
     all_snapshots.to_parquet(snapshots_path, index=False)
@@ -649,7 +722,8 @@ def build_parser() -> argparse.ArgumentParser:
     scrape_parser.add_argument("--delay-min", type=float, default=2.0)
     scrape_parser.add_argument("--delay-max", type=float, default=5.0)
     scrape_parser.add_argument("--page-timeout", type=int, default=30)
-    scrape_parser.add_argument("--no-headless", action="store_true")
+    scrape_parser.add_argument("--headless", action="store_true")
+    scrape_parser.add_argument("--profile-dir", default=None)
 
     build_parser = subparsers.add_parser(
         "listing-build",
@@ -666,7 +740,8 @@ def build_parser() -> argparse.ArgumentParser:
     sync_parser.add_argument("--delay-min", type=float, default=2.0)
     sync_parser.add_argument("--delay-max", type=float, default=5.0)
     sync_parser.add_argument("--page-timeout", type=int, default=30)
-    sync_parser.add_argument("--no-headless", action="store_true")
+    sync_parser.add_argument("--headless", action="store_true")
+    sync_parser.add_argument("--profile-dir", default=None)
 
     return parser
 

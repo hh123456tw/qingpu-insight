@@ -18,6 +18,34 @@ from tests.test_market_cleaning import sample_rows
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
+def test_listing_commands_accept_headless_and_profile_dir() -> None:
+    scrape_args = cli.build_parser().parse_args(
+        [
+            "listing-scrape",
+            "--types",
+            "sale",
+            "--headless",
+            "--profile-dir",
+            "C:/ChromeProfile",
+        ]
+    )
+    sync_args = cli.build_parser().parse_args(
+        [
+            "listing-sync",
+            "--types",
+            "sale",
+            "--headless",
+            "--profile-dir",
+            "C:/ChromeProfile",
+        ]
+    )
+
+    assert scrape_args.headless is True
+    assert scrape_args.profile_dir == "C:/ChromeProfile"
+    assert sync_args.headless is True
+    assert sync_args.profile_dir == "C:/ChromeProfile"
+
+
 def test_normalized_rows_preserve_ranges_and_acquisition_metadata() -> None:
     source = SourceListing(
         source_listing_id="newhouse-001",
@@ -263,6 +291,10 @@ def fake_source():
                         html=(
                             FIXTURES / "listings" / f"591_{listing_type}_page.html"
                         ).read_text(encoding="utf-8"),
+                        accepted_count=2,
+                        rejected_count=0,
+                        representation="dom",
+                        schema_version=f"591-{listing_type}-dom-v1",
                     )
                 ],
                 reached_terminal_page=True,
@@ -272,6 +304,91 @@ def fake_source():
 
 
 class TestListingScrape:
+    def test_prints_capture_summary_with_evidence_metadata(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        captured_configs = []
+
+        class Source:
+            def capture(self, listing_type, max_pages):
+                return CaptureBatch(
+                    batch_id="summary-batch",
+                    source="591",
+                    listing_type=listing_type,
+                    started_at=datetime(2026, 7, 22, tzinfo=UTC),
+                    pages=[
+                        CapturedPage(
+                            page_number=1,
+                            url="https://sale.591.com.tw/",
+                            html="<html></html>",
+                            accepted_count=1,
+                            rejected_count=0,
+                            representation="dom",
+                            schema_version="591-sale-dom-v1",
+                        )
+                    ],
+                )
+
+        def create_source(root, config):
+            captured_configs.append(config)
+            return Source()
+
+        monkeypatch.setattr(cli, "create_listing_source", create_source)
+        args = cli.build_parser().parse_args(
+            [
+                "listing-scrape",
+                "--types",
+                "sale",
+                "--headless",
+                "--profile-dir",
+                "C:/ChromeProfile",
+            ]
+        )
+
+        assert cli.listing_scrape(tmp_path, args) == 0
+        assert captured_configs == [
+            cli.ChromeConfig(
+                headless=True,
+                profile_dir="C:/ChromeProfile",
+                page_timeout_seconds=30,
+                delay_seconds=(2.0, 5.0),
+            )
+        ]
+        output = capsys.readouterr().out
+        assert "captured_pages=1" in output
+        assert "accepted=1" in output
+        assert "rejected=0" in output
+        assert "representation=dom" in output
+        assert "complete=false" in output
+        assert "batch_path=" in output
+
+    def test_returns_nonzero_when_capture_has_no_accepted_records(
+        self, tmp_path, monkeypatch
+    ):
+        class Source:
+            def capture(self, listing_type, max_pages):
+                return CaptureBatch(
+                    batch_id="empty-batch",
+                    source="591",
+                    listing_type=listing_type,
+                    started_at=datetime(2026, 7, 22, tzinfo=UTC),
+                    pages=[
+                        CapturedPage(
+                            page_number=1,
+                            url="https://sale.591.com.tw/",
+                            html="<html></html>",
+                            rejected_count=1,
+                            representation="dom",
+                        )
+                    ],
+                    reached_terminal_page=True,
+                )
+
+        monkeypatch.setattr(cli, "create_listing_source", lambda *_: Source())
+        args = cli.build_parser().parse_args(["listing-scrape", "--types", "sale"])
+
+        assert cli.listing_scrape(tmp_path, args) == 1
+
     def test_invalid_type_exits_nonzero(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         assert main(["listing-scrape", "--types", "INVALID"]) != 0
@@ -396,6 +513,53 @@ class TestListingBuild:
 
         assert main(["listing-build", "--batch-dir", str(batch_dir)]) == 1
 
+    def test_reports_aggregated_card_rejection_reasons(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.chdir(tmp_path)
+        raw = tmp_path / "data" / "raw"
+        raw.mkdir(parents=True)
+        shutil.copy2(FIXTURES / "doorplates.csv", raw / "doorplates.csv")
+        batch_dir = raw / "listings" / "591" / "2026-07-22" / "batch-004"
+        batch_dir.mkdir(parents=True)
+        html = (FIXTURES / "listings" / "591_sale_live_page.html").read_text(
+            encoding="utf-8"
+        ).replace(
+            "</body>",
+            """
+            <div class="ware-item" data-id="bad-001">
+              <div class="ware-item__header"><a href="https://sale.591.com.tw/bad-001">缺少價格</a></div>
+              <div class="ware-item__attrs">2房1廳1衛 20坪 2F/10F</div>
+            </div>
+            </body>
+            """,
+        )
+        (batch_dir / "page-0001.html").write_text(html, encoding="utf-8")
+        (batch_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "batch_id": "batch-004",
+                    "source": "591",
+                    "listing_type": "sale",
+                    "started_at": "2026-07-22T12:00:00+00:00",
+                    "reached_terminal_page": True,
+                    "is_complete": True,
+                    "errors": [],
+                    "pages": [{"page_number": 1}],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        class Repository:
+            def save_batch(self, batch, rows):
+                pass
+
+        monkeypatch.setattr(cli, "create_listing_repository", lambda *_: Repository())
+
+        assert main(["listing-build", "--batch-dir", str(batch_dir)]) == 0
+        assert "rejection_reasons=missing_price:1" in capsys.readouterr().out
+
 
 def test_listing_repository_factory_uses_mysql_url(tmp_path, monkeypatch):
     sentinel = object()
@@ -430,7 +594,9 @@ def test_listing_repository_factory_uses_mysql_url(tmp_path, monkeypatch):
 
 
 class TestListingSync:
-    def test_runs_types_independently(self, tmp_path, monkeypatch, fake_source):
+    def test_runs_types_independently(
+        self, tmp_path, monkeypatch, fake_source, capsys
+    ):
         monkeypatch.chdir(tmp_path)
         monkeypatch.delenv("QINGPU_DATABASE_URL", raising=False)
         raw = tmp_path / "data" / "raw"
@@ -456,6 +622,12 @@ class TestListingSync:
             )
             == 0
         )
+        output = capsys.readouterr().out
+        for listing_type in ("sale", "newhouse", "rental"):
+            assert f"[{listing_type}] captured_pages=1 accepted=2 rejected=0" in output
+        assert "representation=dom" in output
+        assert "complete=true" in output
+        assert "batch_path=" in output
         assert (tmp_path / "data/processed" / "listing_snapshots.parquet").exists()
         assert set(fake_source.calls) == {"sale", "newhouse", "rental"}
         snapshots = pd.read_parquet(
@@ -498,6 +670,56 @@ class TestListingSync:
             tmp_path / "data/processed" / "events.parquet"
         )
         assert len(repeated_events) == len(first_events)
+
+    def test_schema_failure_is_fail_closed_without_saving_batch(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        raw = tmp_path / "data" / "raw"
+        raw.mkdir(parents=True)
+        shutil.copy2(FIXTURES / "doorplates.csv", raw / "doorplates.csv")
+        saved = []
+
+        class Source:
+            def capture(self, listing_type, max_pages):
+                return CaptureBatch(
+                    batch_id="schema-failure",
+                    source="591",
+                    listing_type=listing_type,
+                    started_at=datetime(2026, 7, 22, tzinfo=UTC),
+                    pages=[
+                        CapturedPage(
+                            page_number=1,
+                            url="https://sale.591.com.tw/",
+                            html=(FIXTURES / "listings" / "591_sale_page.html").read_text(
+                                encoding="utf-8"
+                            ),
+                            accepted_count=2,
+                            representation="dom",
+                        ),
+                        CapturedPage(
+                            page_number=2,
+                            url="https://sale.591.com.tw/?page=2",
+                            html="<html><body>changed schema</body></html>",
+                            representation="dom",
+                        ),
+                    ],
+                    reached_terminal_page=True,
+                )
+
+        class Repository:
+            def save_batch(self, batch, rows):
+                saved.append((batch, rows))
+
+            def load_snapshots(self):
+                return pd.DataFrame({"source": pd.Series(dtype="str")})
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(cli, "create_listing_source", lambda *_: Source())
+        monkeypatch.setattr(cli, "create_listing_repository", lambda *_: Repository())
+
+        assert main(["listing-sync", "--types", "sale"]) == 1
+        assert saved == []
+        assert "解析失敗" in capsys.readouterr().err
 
     def test_invalid_type_exits_nonzero(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
