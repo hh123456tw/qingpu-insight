@@ -424,6 +424,44 @@ def _latest_listing_batch(listing_root: Path) -> Path | None:
     return max(manifests, key=_listing_manifest_recency_key).parent
 
 
+def _valid_listing_build_manifest(manifest: object) -> bool:
+    if not isinstance(manifest, dict):
+        return False
+    if (
+        not isinstance(manifest.get("batch_id"), str)
+        or not manifest["batch_id"]
+        or manifest.get("listing_type") not in listing_type_choices
+        or not isinstance(manifest.get("started_at"), str)
+        or not manifest["started_at"]
+        or not isinstance(manifest.get("is_complete"), bool)
+    ):
+        return False
+    if "source" in manifest and not isinstance(manifest["source"], str):
+        return False
+    if "reached_terminal_page" in manifest and not isinstance(
+        manifest["reached_terminal_page"], bool
+    ):
+        return False
+
+    pages = manifest.get("pages")
+    if not isinstance(pages, list) or (manifest["is_complete"] and not pages):
+        return False
+    page_numbers: set[int] = set()
+    for page in pages:
+        if not isinstance(page, dict):
+            return False
+        page_number = page.get("page_number")
+        if (
+            not isinstance(page_number, int)
+            or isinstance(page_number, bool)
+            or page_number <= 0
+            or page_number in page_numbers
+        ):
+            return False
+        page_numbers.add(page_number)
+    return True
+
+
 def listing_build(root: Path, args) -> int:
     doorplates_path = root / "data" / "raw" / "doorplates.csv"
     if not doorplates_path.exists():
@@ -455,7 +493,10 @@ def listing_build(root: Path, args) -> int:
     except (OSError, json.JSONDecodeError):
         print(f"無法讀取 manifest: {manifest_path}", file=sys.stderr)
         return 1
-    if not manifest.get("is_complete", False):
+    if not _valid_listing_build_manifest(manifest):
+        print(f"無效的 manifest: {manifest_path}", file=sys.stderr)
+        return 1
+    if not manifest["is_complete"]:
         print("拒絕處理不完整的 listing 批次。", file=sys.stderr)
         return 1
     try:

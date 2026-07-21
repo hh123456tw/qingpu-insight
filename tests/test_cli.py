@@ -669,6 +669,81 @@ class TestListingBuild:
         assert main(["listing-build"]) == 1
         assert "591-sale-invalid" in capsys.readouterr().err
 
+    @pytest.mark.parametrize(
+        "manifest",
+        [
+            pytest.param([], id="list"),
+            pytest.param(7, id="scalar"),
+            pytest.param("manifest", id="string"),
+        ],
+    )
+    def test_build_rejects_non_object_manifest_without_traceback(
+        self, tmp_path, monkeypatch, capsys, manifest
+    ):
+        monkeypatch.chdir(tmp_path)
+        raw = tmp_path / "data" / "raw"
+        raw.mkdir(parents=True)
+        shutil.copy2(FIXTURES / "doorplates.csv", raw / "doorplates.csv")
+        batch_dir = raw / "listings" / "591" / "2026-07-22" / "invalid-object"
+        batch_dir.mkdir(parents=True)
+        manifest_path = batch_dir / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        assert main(["listing-build", "--batch-dir", str(batch_dir)]) == 1
+        stderr = capsys.readouterr().err
+        assert f"無效的 manifest: {manifest_path}" in stderr
+        assert "Traceback" not in stderr
+
+    @pytest.mark.parametrize(
+        ("pages", "include_pages"),
+        [
+            pytest.param(None, False, id="missing-pages"),
+            pytest.param(None, True, id="null-pages"),
+            pytest.param({}, True, id="mapping-pages"),
+            pytest.param("pages", True, id="string-pages"),
+            pytest.param([], True, id="empty-pages"),
+            pytest.param([1], True, id="non-object-page"),
+            pytest.param([{}], True, id="missing-page-number"),
+            pytest.param([{"page_number": "1"}], True, id="string-page-number"),
+            pytest.param([{"page_number": True}], True, id="boolean-page-number"),
+            pytest.param([{"page_number": 1.5}], True, id="float-page-number"),
+            pytest.param([{"page_number": 0}], True, id="zero-page-number"),
+            pytest.param([{"page_number": -1}], True, id="negative-page-number"),
+            pytest.param(
+                [{"page_number": 1}, {"page_number": 1}],
+                True,
+                id="duplicate-page-number",
+            ),
+        ],
+    )
+    def test_build_rejects_malformed_complete_manifest_pages(
+        self, tmp_path, monkeypatch, capsys, pages, include_pages
+    ):
+        monkeypatch.chdir(tmp_path)
+        raw = tmp_path / "data" / "raw"
+        raw.mkdir(parents=True)
+        shutil.copy2(FIXTURES / "doorplates.csv", raw / "doorplates.csv")
+        batch_dir = raw / "listings" / "591" / "2026-07-22" / "invalid-pages"
+        batch_dir.mkdir(parents=True)
+        manifest = {
+            "batch_id": "invalid-pages",
+            "source": "591",
+            "listing_type": "sale",
+            "started_at": "2026-07-22T12:00:00+00:00",
+            "reached_terminal_page": True,
+            "is_complete": True,
+            "errors": [],
+        }
+        if include_pages:
+            manifest["pages"] = pages
+        manifest_path = batch_dir / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        assert main(["listing-build", "--batch-dir", str(batch_dir)]) == 1
+        stderr = capsys.readouterr().err
+        assert f"無效的 manifest: {manifest_path}" in stderr
+        assert "Traceback" not in stderr
+
     def test_schema_error_reports_prior_page_rejections_and_rejects_batch(
         self, tmp_path, monkeypatch, capsys
     ):
