@@ -61,10 +61,17 @@ An accepted record requires:
 - canonical HTTPS URL on a `591.com.tw` host;
 - listing type;
 - non-empty title;
-- positive asking price for sale/new-house or positive monthly rent for rental;
-- positive building area;
+- positive total asking price for sale, positive monthly rent for rental, and either a
+  positive total asking price or a positive advertised unit-price range for new house;
+- positive exact building area or a positive advertised area range;
 - capture timestamp and acquisition representation;
 - raw evidence hash.
+
+New-house advertisements may publish only price-per-ping and area ranges. The normalized
+contract therefore preserves unit-price low/high and area low/high as first-class fields.
+It must not manufacture a total asking price from range midpoints. When total price is
+absent, M2 comparison reports that total-price comparison is unavailable; unit-price
+comparison may be shown separately and must retain its advertised range semantics.
 
 Layout, floor, coordinates, building age, parking, and building type remain nullable. Missing optional fields must not be represented as numeric zero.
 
@@ -137,7 +144,8 @@ Run one visible-browser page for each type. Acceptance requires:
 - exit code zero;
 - at least one accepted record per requested type;
 - non-empty stable IDs and canonical URLs;
-- positive price/rent and area;
+- positive sale price, rental rent, or new-house total/unit price, plus positive exact or
+  ranged area;
 - requested Taoyuan provenance;
 - no credentials or contact fields in logs or tracked files;
 - successful normalization and location assignment;
