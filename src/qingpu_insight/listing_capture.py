@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from bs4 import BeautifulSoup
 from selenium import webdriver
+from selenium.common.exceptions import NoSuchElementException
 from selenium.webdriver.support.ui import WebDriverWait
 
 from qingpu_insight.listing_591 import (
@@ -148,6 +149,12 @@ class RawBatchWriter:
 
 
 class Selenium591Source:
+    """Capture 591 pages with a fresh internal writer per invocation.
+
+    An explicitly injected writer is a one-shot dependency intended for tests
+    and controlled single-batch callers.
+    """
+
     def __init__(
         self,
         browser: webdriver.Chrome | None = None,
@@ -158,11 +165,18 @@ class Selenium591Source:
         self._config = config or ChromeConfig()
         self._browser = browser
         self._writer = writer
+        self._writer_was_injected = writer is not None
+        self._injected_writer_consumed = False
         self._base_dir = base_dir or Path.cwd()
 
     def capture(self, listing_type: ListingType, max_pages: int = 10) -> CaptureBatch:
+        if self._writer_was_injected and self._injected_writer_consumed:
+            if self._browser is not None:
+                self._browser.quit()
+            raise RuntimeError("injected RawBatchWriter is one-shot")
+
         browser = self._browser or create_chrome(self._config)
-        writer = self._writer
+        writer = self._writer if self._writer_was_injected else None
 
         url = ROUTES.get(listing_type)
         if not url:
@@ -185,6 +199,8 @@ class Selenium591Source:
                 f"{writer.listing_type!r} does not match capture type {listing_type!r}"
             )
         writer = writer or RawBatchWriter(self._base_dir, listing_type)
+        if self._writer_was_injected:
+            self._injected_writer_consumed = True
         self._writer = writer
 
         batch = CaptureBatch(
@@ -280,6 +296,10 @@ class Selenium591Source:
                                     previous_ids=old_ids,
                                 )
                             )
+                        except NoSuchElementException:
+                            batch.reached_terminal_page = True
+                            should_stop = True
+                            break
                         except Exception as exc:
                             batch.errors.append(
                                 CaptureError(

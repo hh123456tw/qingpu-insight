@@ -139,6 +139,24 @@ def test_pagination_failure_writes_diagnostic(tmp_path):
     assert (writer.batch_dir / "diagnostic-page-0001.html").exists()
 
 
+def test_missing_next_control_after_valid_page_marks_complete_terminal_batch(tmp_path):
+    writer = RawBatchWriter(tmp_path, "sale")
+    batch = Selenium591Source(
+        browser=FakeBrowser(
+            pages=[SALE_HTML], found_selectors={"div.ware-item[data-id]"}
+        ),
+        writer=writer,
+        config=ChromeConfig(page_timeout_seconds=0, max_retries=0),
+    ).capture("sale", 2)
+
+    manifest = json.loads((writer.batch_dir / "manifest.json").read_text("utf-8"))
+    assert [page.page_number for page in batch.pages] == [1]
+    assert batch.errors == []
+    assert batch.reached_terminal_page is True
+    assert batch.is_complete is True
+    assert manifest["is_complete"] is True
+
+
 def test_url_only_change_with_stale_cards_fails_navigation_without_duplicate_page(
     tmp_path,
 ):
@@ -365,6 +383,42 @@ def test_internal_writer_uses_configured_base_dir(tmp_path):
 
     assert source._writer is not None
     assert source._writer.batch_dir.is_relative_to(tmp_path)
+
+
+def test_reused_source_creates_fresh_internal_writer_for_each_capture(tmp_path):
+    source = Selenium591Source(
+        browser=FakeBrowser(pages=[SALE_HTML, SALE_HTML]),
+        base_dir=tmp_path,
+        config=ChromeConfig(max_retries=0),
+    )
+
+    first = source.capture("sale", 1)
+    second = source.capture("sale", 1)
+
+    assert first.batch_id != second.batch_id
+    assert first.batch_dir != second.batch_dir
+    assert first.batch_dir is not None
+    assert second.batch_dir is not None
+    first_manifest = json.loads((first.batch_dir / "manifest.json").read_text("utf-8"))
+    second_manifest = json.loads((second.batch_dir / "manifest.json").read_text("utf-8"))
+    assert first_manifest["batch_id"] == first.batch_id
+    assert second_manifest["batch_id"] == second.batch_id
+
+
+def test_explicit_writer_is_a_one_shot_dependency(tmp_path):
+    writer = RawBatchWriter(tmp_path, "sale")
+    source = Selenium591Source(
+        browser=FakeBrowser(pages=[SALE_HTML, SALE_HTML]),
+        writer=writer,
+        config=ChromeConfig(max_retries=0),
+    )
+
+    first = source.capture("sale", 1)
+
+    with pytest.raises(RuntimeError, match="injected RawBatchWriter is one-shot"):
+        source.capture("sale", 1)
+    manifest = json.loads((writer.batch_dir / "manifest.json").read_text("utf-8"))
+    assert manifest["batch_id"] == first.batch_id
 
 
 def test_incomplete_navigation_writes_manifest_but_never_complete(tmp_path):

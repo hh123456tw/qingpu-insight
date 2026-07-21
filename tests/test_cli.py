@@ -533,6 +533,142 @@ class TestListingBuild:
         assert len(snapshots) == 2
         assert set(snapshots["batch_id"]) == {"batch-002"}
 
+    def test_default_build_selects_cross_type_batch_by_manifest_started_at(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("QINGPU_DATABASE_URL", raising=False)
+        raw = tmp_path / "data" / "raw"
+        raw.mkdir(parents=True)
+        shutil.copy2(FIXTURES / "doorplates.csv", raw / "doorplates.csv")
+        date_dir = raw / "listings" / "591" / "2026-07-22"
+
+        def write_batch(
+            batch_id: str, listing_type: str, started_at: str, fixture_name: str
+        ) -> None:
+            batch_dir = date_dir / batch_id
+            batch_dir.mkdir(parents=True)
+            shutil.copy2(
+                FIXTURES / "listings" / fixture_name,
+                batch_dir / "page-0001.html",
+            )
+            (batch_dir / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "batch_id": batch_id,
+                        "source": "591",
+                        "listing_type": listing_type,
+                        "started_at": started_at,
+                        "reached_terminal_page": True,
+                        "is_complete": True,
+                        "errors": [],
+                        "pages": [{"page_number": 1}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+        write_batch(
+            "591-sale-older",
+            "sale",
+            "2026-07-22T10:00:00+00:00",
+            "591_sale_page.html",
+        )
+        write_batch(
+            "591-rental-newer",
+            "rental",
+            "2026-07-22T11:00:00+00:00",
+            "591_rental_page.html",
+        )
+        saved = []
+
+        class Repository:
+            def save_batch(self, batch, rows):
+                saved.append(batch)
+
+            def load_snapshots(self):
+                return pd.DataFrame()
+
+        monkeypatch.setattr(cli, "create_listing_repository", lambda *_: Repository())
+
+        assert main(["listing-build"]) == 0
+        assert [batch.batch_id for batch in saved] == ["591-rental-newer"]
+
+    def test_default_build_ignores_unparseable_recency_when_valid_manifest_exists(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("QINGPU_DATABASE_URL", raising=False)
+        raw = tmp_path / "data" / "raw"
+        raw.mkdir(parents=True)
+        shutil.copy2(FIXTURES / "doorplates.csv", raw / "doorplates.csv")
+        date_dir = raw / "listings" / "591" / "2026-07-22"
+
+        valid_dir = date_dir / "591-rental-valid"
+        valid_dir.mkdir(parents=True)
+        shutil.copy2(
+            FIXTURES / "listings" / "591_rental_page.html",
+            valid_dir / "page-0001.html",
+        )
+        (valid_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "batch_id": "591-rental-valid",
+                    "source": "591",
+                    "listing_type": "rental",
+                    "started_at": "2026-07-22T11:00:00+00:00",
+                    "reached_terminal_page": True,
+                    "is_complete": True,
+                    "errors": [],
+                    "pages": [{"page_number": 1}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        invalid_dir = date_dir / "591-sale-invalid"
+        invalid_dir.mkdir(parents=True)
+        (invalid_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "batch_id": "591-sale-invalid",
+                    "listing_type": "sale",
+                    "started_at": "not-a-timestamp",
+                    "is_complete": True,
+                    "pages": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        saved = []
+
+        class Repository:
+            def save_batch(self, batch, rows):
+                saved.append(batch)
+
+            def load_snapshots(self):
+                return pd.DataFrame()
+
+        monkeypatch.setattr(cli, "create_listing_repository", lambda *_: Repository())
+
+        assert main(["listing-build"]) == 0
+        assert [batch.batch_id for batch in saved] == ["591-rental-valid"]
+
+    def test_default_build_fallback_reports_invalid_manifest_without_crashing(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.chdir(tmp_path)
+        raw = tmp_path / "data" / "raw"
+        raw.mkdir(parents=True)
+        shutil.copy2(FIXTURES / "doorplates.csv", raw / "doorplates.csv")
+        date_dir = raw / "listings" / "591" / "2026-07-22"
+        for batch_id in ("591-rental-invalid", "591-sale-invalid"):
+            batch_dir = date_dir / batch_id
+            batch_dir.mkdir(parents=True)
+            (batch_dir / "manifest.json").write_text("not json", encoding="utf-8")
+
+        assert main(["listing-build"]) == 1
+        assert "591-sale-invalid" in capsys.readouterr().err
+
     def test_schema_error_reports_prior_page_rejections_and_rejects_batch(
         self, tmp_path, monkeypatch, capsys
     ):

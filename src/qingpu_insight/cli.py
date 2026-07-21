@@ -4,7 +4,7 @@ import os
 import sys
 import urllib.parse
 from collections import Counter
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import joblib
@@ -397,6 +397,33 @@ def listing_scrape(root: Path, args) -> int:
     return exit_code
 
 
+def _listing_manifest_recency_key(manifest_path: Path) -> tuple[int, float, str]:
+    deterministic_fallback = manifest_path.parent.as_posix()
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        started_at = datetime.fromisoformat(manifest["started_at"])
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=UTC)
+        timestamp = started_at.astimezone(UTC).timestamp()
+    except (
+        OSError,
+        OverflowError,
+        TypeError,
+        ValueError,
+        KeyError,
+        json.JSONDecodeError,
+    ):
+        return (0, 0.0, deterministic_fallback)
+    return (1, timestamp, deterministic_fallback)
+
+
+def _latest_listing_batch(listing_root: Path) -> Path | None:
+    manifests = sorted(listing_root.rglob("manifest.json"))
+    if not manifests:
+        return None
+    return max(manifests, key=_listing_manifest_recency_key).parent
+
+
 def listing_build(root: Path, args) -> int:
     doorplates_path = root / "data" / "raw" / "doorplates.csv"
     if not doorplates_path.exists():
@@ -413,15 +440,7 @@ def listing_build(root: Path, args) -> int:
         if not listing_root.exists():
             print("尚未有原始 listing 資料，請先執行 listing-scrape。", file=sys.stderr)
             return 1
-        date_dirs = sorted(listing_root.iterdir())
-        if not date_dirs:
-            print("尚未有原始 listing 資料，請先執行 listing-scrape。", file=sys.stderr)
-            return 1
-        batch_root = max(
-            (d for d in date_dirs[-1].iterdir() if d.is_dir()),
-            key=lambda p: p.name,
-            default=None,
-        )
+        batch_root = _latest_listing_batch(listing_root)
         if batch_root is None:
             print("尚未有原始 listing 資料，請先執行 listing-scrape。", file=sys.stderr)
             return 1
@@ -431,13 +450,21 @@ def listing_build(root: Path, args) -> int:
         print(f"找不到 manifest: {manifest_path}", file=sys.stderr)
         return 1
 
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        print(f"無法讀取 manifest: {manifest_path}", file=sys.stderr)
+        return 1
     if not manifest.get("is_complete", False):
         print("拒絕處理不完整的 listing 批次。", file=sys.stderr)
         return 1
-    listing_type = manifest["listing_type"]
-    batch_id = manifest["batch_id"]
-    started_at = datetime.fromisoformat(manifest["started_at"])
+    try:
+        listing_type = manifest["listing_type"]
+        batch_id = manifest["batch_id"]
+        started_at = datetime.fromisoformat(manifest["started_at"])
+    except (KeyError, TypeError, ValueError):
+        print(f"無效的 manifest: {manifest_path}", file=sys.stderr)
+        return 1
 
     settings = get_settings(root)
     doorplates = build_doorplate_frame(doorplates_path)

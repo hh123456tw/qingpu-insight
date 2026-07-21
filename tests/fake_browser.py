@@ -1,6 +1,7 @@
 """Fake Selenium browser for testing listing capture flows."""
 
 from bs4 import BeautifulSoup
+from selenium.common.exceptions import NoSuchElementException
 
 
 class FakeWaitClock:
@@ -57,7 +58,7 @@ class FakeBrowser:
             raise Exception("find_failed")
         sel = value or selector or ""
         if self._found_selectors is not None and sel not in self._found_selectors:
-            raise Exception("element_not_found")
+            raise NoSuchElementException("element_not_found")
         return _FakeElement(
             browser=self,
             fail_click=(sel == "a.next, .page-next, [rel=next]" and self._fail_next_click),
