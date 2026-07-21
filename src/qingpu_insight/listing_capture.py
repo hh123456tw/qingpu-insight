@@ -84,6 +84,7 @@ class RawBatchWriter:
             "pages": [{"page_number": p.page_number, "url": p.url} for p in batch.pages],
             "errors": [{"page_number": e.page_number, "code": e.code,
                          "message": e.message} for e in batch.errors],
+            "reached_terminal_page": batch.reached_terminal_page,
             "is_complete": batch.is_complete,
         }
         tmp = self._batch_dir / "manifest.json.tmp"
@@ -142,6 +143,7 @@ class Selenium591Source:
                 CaptureError(page_number=1, code="navigation_failed", message=str(exc))
             )
             writer.write_manifest(batch)
+            browser.quit()
             return batch
 
         should_stop = False
@@ -211,8 +213,14 @@ class Selenium591Source:
                             WebDriverWait(browser, self._config.page_timeout_seconds).until(
                                 EC.url_changes(old_url)
                             )
-                        except Exception:
-                            batch.reached_terminal_page = True
+                        except Exception as exc:
+                            batch.errors.append(
+                                CaptureError(
+                                    page_number=page_num,
+                                    code="navigation_failed",
+                                    message=str(exc),
+                                )
+                            )
                             should_stop = True
                             break
 

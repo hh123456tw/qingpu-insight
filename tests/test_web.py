@@ -194,7 +194,10 @@ def listing_client(market_frame: pd.DataFrame) -> FlaskClient:
             "event_key": "a" * 64, "source": "591",
             "listing_type": "sale", "source_listing_id": "L001",
             "event_type": "price_decrease",
-            "event_data": '{"previous_price":20000000,"new_price":18000000,"absolute_change":-2000000,"percentage_change":-10.0}',
+            "event_data": (
+                '{"previous_price":20000000,"new_price":18000000,'
+                '"absolute_change":-2000000,"percentage_change":-10.0}'
+            ),
             "occurred_at": pd.Timestamp("2026-07-19 10:00", tz="UTC"),
         },
     ])

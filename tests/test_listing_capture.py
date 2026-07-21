@@ -9,8 +9,8 @@ from qingpu_insight.listing_capture import (
     RawBatchWriter,
     Selenium591Source,
 )
-from tests.fake_browser import FakeBrowser
 from qingpu_insight.listing_sources import ListingType
+from tests.fake_browser import FakeBrowser
 
 SALE_HTML = """<html><body>
 <article data-houseid="S-1001" data-lat="25.0100" data-lng="121.2150">
@@ -35,6 +35,25 @@ def test_incomplete_navigation_writes_manifest_but_never_complete(tmp_path):
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["is_complete"] is False
     assert manifest["errors"][0]["code"] == "navigation_failed"
+    assert "quit" in browser.calls
+
+
+def test_next_page_navigation_failure_never_marks_batch_complete(tmp_path):
+    browser = FakeBrowser(pages=[SALE_HTML], fail_next_click=True)
+    writer = RawBatchWriter(tmp_path)
+    source = Selenium591Source(
+        browser=browser,
+        writer=writer,
+        config=ChromeConfig(page_timeout_seconds=1, max_retries=0),
+    )
+
+    batch = source.capture("sale", max_pages=2)
+
+    assert batch.is_complete is False
+    assert batch.reached_terminal_page is False
+    assert [(error.page_number, error.code) for error in batch.errors] == [
+        (1, "navigation_failed")
+    ]
 
 
 def test_terminal_empty_state_preserves_batch(tmp_path):
@@ -62,6 +81,7 @@ def test_atomic_manifest(tmp_path):
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["batch_id"] == batch.batch_id
     assert manifest["source"] == "591"
+    assert manifest["reached_terminal_page"] == batch.reached_terminal_page
 
 
 def test_checkpoint_written_after_page(tmp_path):

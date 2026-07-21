@@ -156,6 +156,24 @@ def test_url_host_rejects_non_591(source_sale):
         normalize_listing(bad, SNAPSHOT_AT)
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://591.com.tw.evil.example/listing/1",
+        "https://evil.example/listing/1?source=591.com.tw",
+    ],
+)
+def test_url_host_rejects_591_text_outside_the_hostname(source_sale, url):
+    bad = SourceListing(
+        source_listing_id="bad",
+        listing_type="sale",
+        source_url=url,
+        payload=source_sale.payload,
+    )
+    with pytest.raises(ValueError, match="Invalid listing URL"):
+        normalize_listing(bad, SNAPSHOT_AT)
+
+
 def test_raw_hash_is_stable_across_snapshots(source_sale):
     row1 = normalize_listing(source_sale, SNAPSHOT_AT)
     row2 = normalize_listing(source_sale, ALT_SNAPSHOT)

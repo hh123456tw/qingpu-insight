@@ -50,6 +50,8 @@ def _parse_card(card, listing_type: ListingType) -> SourceListing:
     price_field = "asking_price_twd" if listing_type in ("sale", "newhouse") else "monthly_rent_twd"
 
     listing_id = _extract_id(card, listing_type)
+    if not listing_id:
+        raise ListingSchemaError("Listing card has no stable listing ID")
     url = _extract_url(card)
     title = _extract_title(card)
     price = price_func(_extract_text(card, "price"))
@@ -90,7 +92,7 @@ def _extract_text(card, class_name: str) -> str:
 
 def _extract_id(card, listing_type: ListingType) -> str:
     attr = "data-houseid" if listing_type in ("sale", "rental") else "data-housingid"
-    return card.get(attr, "")
+    return card.get(attr) or card.get("data-id") or ""
 
 
 def _extract_url(card) -> str:

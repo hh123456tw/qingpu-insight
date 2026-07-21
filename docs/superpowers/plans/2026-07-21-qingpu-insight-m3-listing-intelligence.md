@@ -764,12 +764,12 @@ Run `listing-sync` with a fake/fixture source and assert:
 - [ ] **Step 4: Run authorized one-page smoke tests manually**
 
 ```powershell
-.\.venv\Scripts\qingpu-data.exe listing-scrape --type sale --max-pages 1
-.\.venv\Scripts\qingpu-data.exe listing-scrape --type newhouse --max-pages 1
-.\.venv\Scripts\qingpu-data.exe listing-scrape --type rental --max-pages 1
+.\.venv\Scripts\qingpu-data.exe listing-scrape --types sale --max-pages 1
+.\.venv\Scripts\qingpu-data.exe listing-scrape --types newhouse --max-pages 1
+.\.venv\Scripts\qingpu-data.exe listing-scrape --types rental --max-pages 1
 ```
 
-For each command, verify exit code 0, one rendered HTML page, a complete manifest, a non-zero parsed count, no contact fields, and no credentials in logs. If a selector changed, update the anonymized fixture and parser test before changing production selectors.
+For each command, verify exit code 0, one rendered HTML page, an intentionally incomplete manifest because `--max-pages 1` is a cap rather than proof of the terminal page, a non-zero parsed count, no contact fields, and no credentials in logs. If a selector changed, update the anonymized fixture and parser test before changing production selectors.
 
 - [ ] **Step 5: Audit the repository for prohibited data**
 
@@ -794,4 +794,3 @@ git commit -m "docs: publish M3 listing methodology"
 - [ ] M2 model frames still load only official M1 transactions.
 - [ ] Full tests, Ruff, diff check, fixture E2E, and authorized one-page smoke tests pass.
 - [ ] Git status contains no raw HTML, credentials, browser profiles, or contact data.
-

@@ -26,7 +26,11 @@ from qingpu_insight.listing_capture import ChromeConfig, RawBatchWriter, Seleniu
 from qingpu_insight.listing_events import detect_listing_events
 from qingpu_insight.listing_location import assign_listing_life_circle
 from qingpu_insight.listing_normalization import NormalizedListing, normalize_listing
-from qingpu_insight.listing_repository import ListingRepository, ParquetListingRepository
+from qingpu_insight.listing_repository import (
+    ListingRepository,
+    MySQLListingRepository,
+    ParquetListingRepository,
+)
 from qingpu_insight.listing_sources import CaptureBatch, ListingSource
 from qingpu_insight.listing_valuation import compare_listing_to_model
 from qingpu_insight.market_cleaning import build_market_dataset
@@ -251,6 +255,26 @@ def create_listing_source(
 
 
 def create_listing_repository(root: Path) -> ListingRepository:
+    database_url = os.environ.get("QINGPU_DATABASE_URL")
+    if database_url:
+        parsed = urllib.parse.urlparse(database_url)
+        if parsed.scheme not in ("mysql", "mysql+pymysql"):
+            raise ValueError(
+                f"Unsupported scheme: {parsed.scheme!r}; "
+                "expected 'mysql' or 'mysql+pymysql'"
+            )
+        database = parsed.path.lstrip("/")
+        if not database:
+            raise ValueError("QINGPU_DATABASE_URL must include a database name")
+        connection = pymysql.connect(
+            host=parsed.hostname or "localhost",
+            port=parsed.port or 3306,
+            user=urllib.parse.unquote(parsed.username or ""),
+            password=urllib.parse.unquote(parsed.password or ""),
+            database=database,
+            charset="utf8mb4",
+        )
+        return MySQLListingRepository(connection)
     return ParquetListingRepository(root / "data" / "processed")
 
 
@@ -348,6 +372,9 @@ def listing_build(root: Path, args) -> int:
         return 1
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not manifest.get("is_complete", False):
+        print("拒絕處理不完整的 listing 批次。", file=sys.stderr)
+        return 1
     listing_type = manifest["listing_type"]
     batch_id = manifest["batch_id"]
     started_at = datetime.fromisoformat(manifest["started_at"])
@@ -360,13 +387,18 @@ def listing_build(root: Path, args) -> int:
     for page_info in sorted(manifest["pages"], key=lambda p: p["page_number"]):
         html_path = batch_root / f"page-{page_info['page_number']:04d}.html"
         if not html_path.exists():
-            continue
+            print(f"批次缺少頁面檔案: {html_path}", file=sys.stderr)
+            return 1
         try:
             parsed = parse_rendered_page(
                 html_path.read_text(encoding="utf-8"), listing_type
             )
-        except ListingSchemaError:
-            continue
+        except ListingSchemaError as exc:
+            print(
+                f"批次頁面 {page_info['page_number']} 解析失敗: {exc}",
+                file=sys.stderr,
+            )
+            return 1
         for sl in parsed:
             if sl.source_listing_id not in listings_map:
                 listings_map[sl.source_listing_id] = sl
@@ -384,9 +416,12 @@ def listing_build(root: Path, args) -> int:
 
     batch = CaptureBatch(
         batch_id=batch_id,
-        source="591",
+        source=manifest.get("source", "591"),
         listing_type=listing_type,
         started_at=started_at,
+        reached_terminal_page=bool(
+            manifest.get("reached_terminal_page", manifest["is_complete"])
+        ),
     )
     repo = create_listing_repository(root)
     repo.save_batch(batch, located)

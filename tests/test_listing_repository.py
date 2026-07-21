@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from qingpu_insight.listing_repository import ParquetListingRepository
+from qingpu_insight.listing_repository import MySQLListingRepository, ParquetListingRepository
 from qingpu_insight.listing_sources import CaptureBatch, CapturedPage
 
 # ---------------------------------------------------------------------------
@@ -434,3 +434,114 @@ class TestMySQLFakeSpecific:
             mysql_fake_repository.save_batch(complete_batch, bad_rows)
         snapshots = mysql_fake_repository.load_snapshots(batch_id=complete_batch.batch_id)
         assert len(snapshots) == 0
+
+
+class RecordingCursor:
+    def __init__(self, connection):
+        self.connection = connection
+        self.description = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def execute(self, sql, params=None):
+        self.connection.executions.append((sql, params))
+
+    def fetchall(self):
+        return []
+
+
+class RecordingConnection:
+    def __init__(self):
+        self.executions = []
+        self.commits = 0
+        self.rollbacks = 0
+
+    def cursor(self):
+        return RecordingCursor(self)
+
+    def commit(self):
+        self.commits += 1
+
+    def rollback(self):
+        self.rollbacks += 1
+
+
+class TestMySQLRepositoryActualAdapter:
+    def test_save_batch_persists_location_and_state(self, complete_batch, normalized_rows):
+        connection = RecordingConnection()
+        repository = MySQLListingRepository(connection)
+        rows = normalized_rows.copy()
+        rows["station_code"] = ["A18", "A19"]
+        rows["station_distance_m"] = [350.5, 800.0]
+        rows["location_eligible"] = [True, True]
+        rows["active"] = [True, False]
+        rows["consecutive_absences"] = [0, 2]
+        rows["last_seen_batch_id"] = [complete_batch.batch_id, "batch-previous"]
+        rows["model_evidence"] = [None, '{"model_version":"v1"}']
+
+        repository.save_batch(complete_batch, rows)
+
+        current_inserts = [
+            (sql, params)
+            for sql, params in connection.executions
+            if sql.lstrip().startswith("INSERT INTO listing_current")
+        ]
+        assert len(current_inserts) == 2
+        sql, params = current_inserts[1]
+        for column in (
+            "station_code",
+            "station_distance_m",
+            "location_eligible",
+            "active",
+            "consecutive_absences",
+            "last_seen_batch_id",
+        ):
+            assert column in sql
+            assert column in params
+        assert params["active"] == 0
+        assert params["consecutive_absences"] == 2
+        snapshot_inserts = [
+            (sql, params)
+            for sql, params in connection.executions
+            if sql.lstrip().startswith("INSERT IGNORE INTO listing_snapshots")
+        ]
+        snapshot_sql, snapshot_params = snapshot_inserts[1]
+        for column in (
+            "station_code",
+            "station_distance_m",
+            "location_eligible",
+            "model_evidence",
+        ):
+            assert column in snapshot_sql
+            assert column in snapshot_params
+
+    def test_merge_state_updates_current_rows(self):
+        connection = RecordingConnection()
+        repository = MySQLListingRepository(connection)
+        state = pd.DataFrame(
+            [
+                {
+                    "source": "591",
+                    "listing_type": "sale",
+                    "source_listing_id": "sale-001",
+                    "active": False,
+                    "consecutive_absences": 2,
+                    "last_seen_batch_id": "batch-002",
+                }
+            ]
+        )
+
+        repository.merge_state(state)
+
+        updates = [
+            (sql, params)
+            for sql, params in connection.executions
+            if sql.lstrip().startswith("UPDATE listing_current")
+        ]
+        assert len(updates) == 1
+        assert updates[0][1]["active"] == 0
+        assert updates[0][1]["consecutive_absences"] == 2

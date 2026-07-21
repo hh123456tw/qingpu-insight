@@ -83,3 +83,39 @@ def test_parse_has_no_personal_data(listing_type):
 def test_raise_on_empty_html():
     with pytest.raises(ListingSchemaError, match="No recognized cards"):
         parse_rendered_page("<html><body></body></html>", "sale")
+
+
+def test_fallback_data_id_is_used_as_stable_listing_id():
+    html = """
+    <div data-id="fallback-001" class="house-card">
+      <a class="listing-link" href="https://sale.591.com.tw/home/house/detail/fallback-001">
+        <h2 class="listing-title">備援卡片</h2>
+      </a>
+      <span class="price">1,000 萬</span>
+      <span class="area">20坪</span>
+      <span class="layout">2房1廳1衛</span>
+      <span class="floor">2F/10F</span>
+    </div>
+    """
+
+    row = parse_rendered_page(html, "sale")[0]
+
+    assert row.source_listing_id == "fallback-001"
+    assert row.payload["id"] == "fallback-001"
+
+
+def test_card_without_any_stable_id_is_rejected():
+    html = """
+    <article data-houseid="" class="house-card">
+      <a class="listing-link" href="https://sale.591.com.tw/home/house/detail/missing-id">
+        <h2 class="listing-title">缺少 ID</h2>
+      </a>
+      <span class="price">1,000 萬</span>
+      <span class="area">20坪</span>
+      <span class="layout">2房1廳1衛</span>
+      <span class="floor">2F/10F</span>
+    </article>
+    """
+
+    with pytest.raises(ListingSchemaError, match="stable listing ID"):
+        parse_rendered_page(html, "sale")

@@ -210,10 +210,15 @@ class ParquetListingRepository:
                 columns=["_merge"]
             )
 
-        updated = pd.concat([existing, rows], ignore_index=True)
+        updated = (
+            rows.copy()
+            if existing.empty
+            else pd.concat([existing, rows], ignore_index=True)
+        )
         self._atomic_write(path, updated)
 
     def _atomic_write(self, path: Path, df: pd.DataFrame) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".parquet.tmp")
         df.to_parquet(tmp, index=False)
         tmp.replace(path)
@@ -246,6 +251,10 @@ CREATE TABLE IF NOT EXISTS listing_snapshots (
   parking_type VARCHAR(80) NULL,
   latitude DECIMAL(10,7) NULL,
   longitude DECIMAL(10,7) NULL,
+  station_code VARCHAR(16) NULL,
+  station_distance_m DECIMAL(10,2) NULL,
+  location_eligible BOOLEAN NOT NULL DEFAULT FALSE,
+  model_evidence JSON NULL,
   raw_hash CHAR(64) NOT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uq_snapshot (batch_id, source, listing_type, source_listing_id)
@@ -276,6 +285,7 @@ CREATE TABLE IF NOT EXISTS listing_current (
   station_code VARCHAR(16) NULL,
   station_distance_m DECIMAL(10,2) NULL,
   location_eligible BOOLEAN NOT NULL DEFAULT FALSE,
+  model_evidence JSON NULL,
   raw_hash CHAR(64) NOT NULL,
   active BOOLEAN NOT NULL DEFAULT TRUE,
   consecutive_absences TINYINT UNSIGNED NOT NULL DEFAULT 0,
@@ -317,14 +327,16 @@ INSERT IGNORE INTO listing_snapshots
      asking_price_twd, monthly_rent_twd, building_area_ping,
      building_type, bedrooms, living_rooms, bathrooms,
      building_age_years, floor, total_floors, parking_type,
-     latitude, longitude, raw_hash)
+     latitude, longitude, station_code, station_distance_m,
+     location_eligible, model_evidence, raw_hash)
 VALUES
     (%(batch_id)s, %(source)s, %(listing_type)s, %(source_listing_id)s, %(snapshot_at)s,
      %(source_url)s, %(title)s,
      %(asking_price_twd)s, %(monthly_rent_twd)s, %(building_area_ping)s,
      %(building_type)s, %(bedrooms)s, %(living_rooms)s, %(bathrooms)s,
      %(building_age_years)s, %(floor)s, %(total_floors)s, %(parking_type)s,
-     %(latitude)s, %(longitude)s, %(raw_hash)s)
+     %(latitude)s, %(longitude)s, %(station_code)s, %(station_distance_m)s,
+     %(location_eligible)s, %(model_evidence)s, %(raw_hash)s)
 """
 
 _INSERT_CURRENT_SQL = """
@@ -334,14 +346,18 @@ INSERT INTO listing_current
      asking_price_twd, monthly_rent_twd, building_area_ping,
      building_type, bedrooms, living_rooms, bathrooms,
      building_age_years, floor, total_floors, parking_type,
-     latitude, longitude, raw_hash)
+     latitude, longitude, station_code, station_distance_m,
+     location_eligible, model_evidence, raw_hash, active,
+     consecutive_absences, last_seen_batch_id)
 VALUES
     (%(source)s, %(listing_type)s, %(source_listing_id)s, %(snapshot_at)s,
      %(source_url)s, %(title)s,
      %(asking_price_twd)s, %(monthly_rent_twd)s, %(building_area_ping)s,
      %(building_type)s, %(bedrooms)s, %(living_rooms)s, %(bathrooms)s,
      %(building_age_years)s, %(floor)s, %(total_floors)s, %(parking_type)s,
-     %(latitude)s, %(longitude)s, %(raw_hash)s)
+     %(latitude)s, %(longitude)s, %(station_code)s, %(station_distance_m)s,
+     %(location_eligible)s, %(model_evidence)s, %(raw_hash)s, %(active)s,
+     %(consecutive_absences)s, %(last_seen_batch_id)s)
 ON DUPLICATE KEY UPDATE
     snapshot_at = VALUES(snapshot_at),
     source_url = VALUES(source_url),
@@ -359,6 +375,13 @@ ON DUPLICATE KEY UPDATE
     parking_type = VALUES(parking_type),
     latitude = VALUES(latitude),
     longitude = VALUES(longitude),
+    station_code = VALUES(station_code),
+    station_distance_m = VALUES(station_distance_m),
+    location_eligible = VALUES(location_eligible),
+    model_evidence = VALUES(model_evidence),
+    active = VALUES(active),
+    consecutive_absences = VALUES(consecutive_absences),
+    last_seen_batch_id = VALUES(last_seen_batch_id),
     raw_hash = VALUES(raw_hash)
 """
 
@@ -446,6 +469,17 @@ class MySQLListingRepository:
                         "parking_type": _safe_str(row, "parking_type"),
                         "latitude": _safe_float(row, "latitude"),
                         "longitude": _safe_float(row, "longitude"),
+                        "station_code": _safe_str(row, "station_code"),
+                        "station_distance_m": _safe_float(row, "station_distance_m"),
+                        "location_eligible": _safe_bool(row, "location_eligible"),
+                        "model_evidence": _safe_str(row, "model_evidence"),
+                        "active": _safe_bool(row, "active", default=True),
+                        "consecutive_absences": _safe_int(
+                            row, "consecutive_absences", default=0
+                        ),
+                        "last_seen_batch_id": _safe_str(
+                            row, "last_seen_batch_id"
+                        ) or batch.batch_id,
                         "raw_hash": str(row.get("raw_hash", "")),
                     }
                     cur.execute(_INSERT_SNAPSHOT_SQL, params)
@@ -551,7 +585,39 @@ class MySQLListingRepository:
     # ------------------------------------------------------------------
 
     def merge_state(self, state: pd.DataFrame) -> None:
-        pass  # MySQL adapter merges state via the on-duplicate-key upsert in save_batch
+        if state.empty:
+            return
+        sql = """
+UPDATE listing_current
+SET active = %(active)s,
+    consecutive_absences = %(consecutive_absences)s,
+    last_seen_batch_id = %(last_seen_batch_id)s
+WHERE source = %(source)s
+  AND listing_type = %(listing_type)s
+  AND source_listing_id = %(source_listing_id)s
+"""
+        try:
+            with self._conn.cursor() as cur:
+                for _, row in state.iterrows():
+                    cur.execute(
+                        sql,
+                        {
+                            "source": row["source"],
+                            "listing_type": row["listing_type"],
+                            "source_listing_id": row["source_listing_id"],
+                            "active": _safe_bool(row, "active", default=True),
+                            "consecutive_absences": _safe_int(
+                                row, "consecutive_absences", default=0
+                            ),
+                            "last_seen_batch_id": _safe_str(
+                                row, "last_seen_batch_id"
+                            ) or "",
+                        },
+                    )
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
 
 
 # ---------------------------------------------------------------------------
@@ -559,9 +625,11 @@ class MySQLListingRepository:
 # ---------------------------------------------------------------------------
 
 
-def _safe_int(row: pd.Series, col: str) -> int | None:
+def _safe_int(
+    row: pd.Series, col: str, default: int | None = None
+) -> int | None:
     v = row.get(col)
-    return None if pd.isna(v) else int(v)
+    return default if v is None or pd.isna(v) else int(v)
 
 
 def _safe_float(row: pd.Series, col: str) -> float | None:
@@ -571,4 +639,9 @@ def _safe_float(row: pd.Series, col: str) -> float | None:
 
 def _safe_str(row: pd.Series, col: str) -> str | None:
     v = row.get(col)
-    return None if pd.isna(v) else str(v)
+    return None if v is None or pd.isna(v) else str(v)
+
+
+def _safe_bool(row: pd.Series, col: str, default: bool = False) -> int:
+    v = row.get(col)
+    return int(default if v is None or pd.isna(v) else bool(v))

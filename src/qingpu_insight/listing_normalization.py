@@ -4,6 +4,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime
+from urllib.parse import urlsplit
 
 from qingpu_insight.listing_591 import SourceListing
 from qingpu_insight.listing_sources import ListingType
@@ -34,7 +35,11 @@ class NormalizedListing:
 
 
 def _validate_url(url: str) -> None:
-    if not url.startswith("https://") or "591.com.tw" not in url:
+    parsed = urlsplit(url)
+    hostname = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not (
+        hostname == "591.com.tw" or hostname.endswith(".591.com.tw")
+    ):
         raise ValueError(f"Invalid listing URL: {url!r}")
 
 

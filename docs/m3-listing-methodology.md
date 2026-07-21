@@ -28,6 +28,8 @@ M3 刊登資訊（Listing Intelligence）模組為青埔智價新增即時房源
 |------|------|--------|
 | `QINGPU_DATABASE_URL` | MySQL 連線字串（mysql+pymysql://user:pass@host:port/db） | —（無，未設定時使用 Parquet） |
 
+密碼若包含 `@`、`:`、`/` 等保留字元，必須先做 URL encoding；例如 `@` 寫成 `%40`。連線字串只放在本機環境變數，不要寫入 `.env`、文件或 Git。
+
 ## 3. CLI 工作流程
 
 M3 提供三條 CLI 指令，可組合使用或一鍵完成。
@@ -75,6 +77,8 @@ M3 提供三條 CLI 指令，可組合使用或一鍵完成。
 6. 追加事件記錄
 7. 產出完整的 `listing_snapshots.parquet`
 
+`--max-pages` 是安全上限，不代表已抵達搜尋結果末頁。因頁數上限而停止的批次會保留為不完整批次，且不會觸發下架判定；`listing-build` 也會拒絕處理不完整 manifest。
+
 ## 4. 資料路徑
 
 ### 原始路徑（不提交 Git）
@@ -113,6 +117,10 @@ data/processed/
 1. 確保 M1 市場資料已完成 `mysql-load`
 2. 設定 `QINGPU_DATABASE_URL`
 3. 執行 `listing-sync`，系統自動建立 M3 表格並寫入
+
+```powershell
+$env:QINGPU_DATABASE_URL = "mysql+pymysql://user:URL_ENCODED_PASSWORD@127.0.0.1:3306/qingpu_insight"
+```
 
 ## 6. API 路由
 

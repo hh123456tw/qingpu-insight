@@ -3,11 +3,13 @@
 
 class FakeBrowser:
     def __init__(self, pages: list[str] | None = None, fail_on_next: bool = False,
+                 fail_next_click: bool = False,
                  fail_on_find: bool = False, fail_page_source: int = 0,
                  found_selectors: set[str] | None = None):
         self.pages = pages or []
         self._page_index = 0
         self._fail_on_next = fail_on_next
+        self._fail_next_click = fail_next_click
         self._fail_on_find = fail_on_find
         self._fail_page_source_remaining = fail_page_source
         self._found_selectors = found_selectors
@@ -45,7 +47,10 @@ class FakeBrowser:
         sel = value or selector or ""
         if self._found_selectors is not None and sel not in self._found_selectors:
             raise Exception("element_not_found")
-        return _FakeElement(browser=self)
+        return _FakeElement(
+            browser=self,
+            fail_click=(sel == "a.next, .page-next, [rel=next]" and self._fail_next_click),
+        )
 
     def find_elements(self, by: str, value: str | None = None, selector: str | None = None):
         self.calls.append(f"find_elements:{value or selector}")
@@ -56,8 +61,9 @@ class FakeBrowser:
 
 
 class _FakeElement:
-    def __init__(self, browser: FakeBrowser | None = None):
+    def __init__(self, browser: FakeBrowser | None = None, fail_click: bool = False):
         self._browser = browser
+        self._fail_click = fail_click
 
     def is_enabled(self) -> bool:
         return True
@@ -66,6 +72,8 @@ class _FakeElement:
         return True
 
     def click(self) -> None:
+        if self._fail_click:
+            raise RuntimeError("next_click_failed")
         if self._browser:
             self._browser.current_url = self._browser.current_url + "?page=2"
 

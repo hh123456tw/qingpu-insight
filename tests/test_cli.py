@@ -10,7 +10,7 @@ import pytest
 from qingpu_insight import cli
 from qingpu_insight.cli import main
 from qingpu_insight.downloads import DownloadRecord, record_file
-from qingpu_insight.listing_sources import CaptureBatch
+from qingpu_insight.listing_sources import CaptureBatch, CapturedPage
 from tests.test_market_cleaning import sample_rows
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -226,6 +226,16 @@ def fake_source():
                 source="591",
                 listing_type=listing_type,
                 started_at=datetime.now(UTC),
+                pages=[
+                    CapturedPage(
+                        page_number=1,
+                        url=f"https://{listing_type}.591.com.tw/",
+                        html=(
+                            FIXTURES / "listings" / f"591_{listing_type}_page.html"
+                        ).read_text(encoding="utf-8"),
+                    )
+                ],
+                reached_terminal_page=True,
             )
 
     return FakeListingSource()
@@ -255,10 +265,144 @@ class TestListingBuild:
         monkeypatch.chdir(tmp_path)
         assert main(["listing-build"]) != 0
 
+    def test_incomplete_manifest_is_rejected(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        raw = tmp_path / "data" / "raw"
+        raw.mkdir(parents=True)
+        shutil.copy2(FIXTURES / "doorplates.csv", raw / "doorplates.csv")
+        batch_dir = raw / "listings" / "591" / "2026-07-21" / "batch-001"
+        batch_dir.mkdir(parents=True)
+        shutil.copy2(
+            FIXTURES / "listings" / "591_sale_page.html",
+            batch_dir / "page-0001.html",
+        )
+        (batch_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "batch_id": "batch-001",
+                    "source": "591",
+                    "listing_type": "sale",
+                    "started_at": "2026-07-21T12:00:00+00:00",
+                    "reached_terminal_page": False,
+                    "is_complete": False,
+                    "errors": [],
+                    "pages": [{"page_number": 1}],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        assert main(["listing-build", "--batch-dir", str(batch_dir)]) == 1
+
+    def test_complete_manifest_is_preserved_in_repository(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("QINGPU_DATABASE_URL", raising=False)
+        raw = tmp_path / "data" / "raw"
+        raw.mkdir(parents=True)
+        shutil.copy2(FIXTURES / "doorplates.csv", raw / "doorplates.csv")
+        batch_dir = raw / "listings" / "591" / "2026-07-21" / "batch-002"
+        batch_dir.mkdir(parents=True)
+        shutil.copy2(
+            FIXTURES / "listings" / "591_sale_page.html",
+            batch_dir / "page-0001.html",
+        )
+        (batch_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "batch_id": "batch-002",
+                    "source": "591",
+                    "listing_type": "sale",
+                    "started_at": "2026-07-21T12:00:00+00:00",
+                    "reached_terminal_page": True,
+                    "is_complete": True,
+                    "errors": [],
+                    "pages": [{"page_number": 1}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        saved = []
+
+        class Repository:
+            def save_batch(self, batch, rows):
+                saved.append((batch, rows))
+
+        monkeypatch.setattr(cli, "create_listing_repository", lambda root: Repository())
+
+        assert main(["listing-build", "--batch-dir", str(batch_dir)]) == 0
+        assert saved[0][0].is_complete is True
+
+    def test_schema_error_in_any_page_rejects_the_batch(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        raw = tmp_path / "data" / "raw"
+        raw.mkdir(parents=True)
+        shutil.copy2(FIXTURES / "doorplates.csv", raw / "doorplates.csv")
+        batch_dir = raw / "listings" / "591" / "2026-07-21" / "batch-003"
+        batch_dir.mkdir(parents=True)
+        shutil.copy2(
+            FIXTURES / "listings" / "591_sale_page.html",
+            batch_dir / "page-0001.html",
+        )
+        (batch_dir / "page-0002.html").write_text(
+            "<html><body>changed schema</body></html>", encoding="utf-8"
+        )
+        (batch_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "batch_id": "batch-003",
+                    "source": "591",
+                    "listing_type": "sale",
+                    "started_at": "2026-07-21T12:00:00+00:00",
+                    "reached_terminal_page": True,
+                    "is_complete": True,
+                    "errors": [],
+                    "pages": [{"page_number": 1}, {"page_number": 2}],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        assert main(["listing-build", "--batch-dir", str(batch_dir)]) == 1
+
+
+def test_listing_repository_factory_uses_mysql_url(tmp_path, monkeypatch):
+    sentinel = object()
+    captured = {}
+
+    class Connection:
+        pass
+
+    connection = Connection()
+    monkeypatch.setenv(
+        "QINGPU_DATABASE_URL",
+        "mysql+pymysql://root:example_password@127.0.0.1:3306/qingpu_insight",
+    )
+    monkeypatch.setattr(
+        cli.pymysql,
+        "connect",
+        lambda **kwargs: captured.update(kwargs) or connection,
+    )
+    monkeypatch.setattr(cli, "MySQLListingRepository", lambda conn: sentinel, raising=False)
+
+    repository = cli.create_listing_repository(tmp_path)
+
+    assert repository is sentinel
+    assert captured == {
+        "host": "127.0.0.1",
+        "port": 3306,
+        "user": "root",
+        "password": "example_password",
+        "database": "qingpu_insight",
+        "charset": "utf8mb4",
+    }
+
 
 class TestListingSync:
     def test_runs_types_independently(self, tmp_path, monkeypatch, fake_source):
         monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("QINGPU_DATABASE_URL", raising=False)
         raw = tmp_path / "data" / "raw"
         raw.mkdir(parents=True)
         shutil.copy2(
@@ -284,6 +428,40 @@ class TestListingSync:
         )
         assert (tmp_path / "data/processed" / "listing_snapshots.parquet").exists()
         assert set(fake_source.calls) == {"sale", "newhouse", "rental"}
+        snapshots = pd.read_parquet(
+            tmp_path / "data/processed" / "listing_snapshots.parquet"
+        )
+        assert len(snapshots) == 6
+        assert set(snapshots["listing_type"]) == {"sale", "newhouse", "rental"}
+        assert set(snapshots["station_code"].dropna()).issubset({"A17", "A18", "A19"})
+        assert snapshots.loc[
+            snapshots["listing_type"] == "rental", "model_evidence"
+        ].isna().all()
+        assert {
+            "phone", "contact_name", "email", "password"
+        }.isdisjoint(snapshots.columns)
+        first_events = pd.read_parquet(
+            tmp_path / "data/processed" / "events.parquet"
+        )
+
+        assert (
+            main(
+                [
+                    "listing-sync",
+                    "--types",
+                    "sale",
+                    "newhouse",
+                    "rental",
+                    "--max-pages",
+                    "1",
+                ]
+            )
+            == 0
+        )
+        repeated_events = pd.read_parquet(
+            tmp_path / "data/processed" / "events.parquet"
+        )
+        assert len(repeated_events) == len(first_events)
 
     def test_invalid_type_exits_nonzero(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
