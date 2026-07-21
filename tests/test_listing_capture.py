@@ -80,8 +80,9 @@ def test_all_types_have_routes(listing_type: ListingType) -> None:
 
 def test_invalid_type_returns_error(tmp_path):
     source = Selenium591Source(browser=FakeBrowser(), writer=RawBatchWriter(tmp_path))
-    batch = source.capture( "sale", max_pages=-1)
-    assert batch.source == "591"
+    batch = source.capture("invalid_type", max_pages=1)
+    assert len(batch.errors) == 1
+    assert batch.errors[0].code == "invalid_type"
 
 
 def test_browser_quit_called(tmp_path):
@@ -89,3 +90,29 @@ def test_browser_quit_called(tmp_path):
     source = Selenium591Source(browser=browser, writer=RawBatchWriter(tmp_path))
     source.capture("sale", max_pages=1,)
     assert "quit" in browser.calls
+
+
+def test_explicit_wait_timeout(tmp_path):
+    browser = FakeBrowser(pages=[SALE_HTML], fail_on_find=True)
+    source = Selenium591Source(browser=browser, writer=RawBatchWriter(tmp_path))
+    batch = source.capture("sale", max_pages=1)
+    assert batch.reached_terminal_page is True
+    assert len(batch.pages) == 0
+
+
+def test_three_retries(tmp_path):
+    browser = FakeBrowser(pages=[SALE_HTML], fail_page_source=3)
+    source = Selenium591Source(browser=browser, writer=RawBatchWriter(tmp_path))
+    batch = source.capture("sale", max_pages=1)
+    assert len(batch.pages) == 1
+    assert len(batch.errors) == 0
+
+
+def test_checkpoint_resume(tmp_path):
+    browser = FakeBrowser(pages=[SALE_HTML, SALE_HTML])
+    source = Selenium591Source(browser=browser, writer=RawBatchWriter(tmp_path))
+    source.capture("sale", max_pages=2)
+    checkpoint = source._writer.batch_dir / "checkpoint.json"
+    assert checkpoint.exists()
+    data = json.loads(checkpoint.read_text(encoding="utf-8"))
+    assert data["last_page"] == 2

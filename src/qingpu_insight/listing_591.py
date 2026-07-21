@@ -29,7 +29,7 @@ CARD_SELECTORS: dict[str, tuple[str, ...]] = {
 
 def parse_rendered_page(html: str, listing_type: ListingType) -> list[SourceListing]:
     soup = BeautifulSoup(html, "html.parser")
-    cards = _first_nonempty_selector(soup, CARD_SELECTORS[listing_type])
+    cards = first_nonempty_selector(soup, CARD_SELECTORS[listing_type])
     if not cards:
         raise ListingSchemaError(
             f"No recognized cards for listing type {listing_type!r}"
@@ -37,7 +37,7 @@ def parse_rendered_page(html: str, listing_type: ListingType) -> list[SourceList
     return [_parse_card(card, listing_type) for card in cards]
 
 
-def _first_nonempty_selector(soup: BeautifulSoup, selectors: tuple[str, ...]) -> list:
+def first_nonempty_selector(soup: BeautifulSoup, selectors: tuple[str, ...]) -> list:
     for selector in selectors:
         results = soup.select(selector)
         if results:
