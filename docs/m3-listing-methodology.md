@@ -46,6 +46,8 @@ M3 提供三條 CLI 指令，可組合使用或一鍵完成。
 
 將 591 搜尋結果頁面原始 HTML 存入 `data/raw/listings/591/` 暫存區，**不進行正規化或定位**。
 
+每頁只有在瀏覽器最終 URL 仍符合該類型的 591 host 與桃園參數（sale/newhouse 為 `regionid=6`、rental 為 `region=6`）時才會成為證據。翻頁後必須觀察到正規頁碼變更或穩定 listing ID 集合改變；只有其他 URL 字段變更而卡片未更新時，批次會以 `navigation_failed` 保留為不完整。
+
 ```powershell
 # 擷取中古屋出售前 10 頁
 .\.venv\Scripts\qingpu-data.exe listing-scrape --types sale --max-pages 10
@@ -90,6 +92,8 @@ M3 提供三條 CLI 指令，可組合使用或一鍵完成。
 
 `--max-pages` 是安全上限，不代表已抵達搜尋結果末頁。因頁數上限而停止的批次會保留為不完整批次，且不會觸發下架判定；`listing-build` 也會拒絕處理不完整 manifest。
 
+每次執行以 UTC 微秒建立並獨占新的 `{batch_id}` 目錄；若時間戳仍碰撞，使用序號後綴，不會讓兩個批次共用路徑。
+
 ## 4. 資料路徑
 
 ### 原始路徑（不提交 Git）
@@ -97,7 +101,7 @@ M3 提供三條 CLI 指令，可組合使用或一鍵完成。
 ```
 data/raw/listings/591/{date}/{batch_id}/
 ├── manifest.json          # 批次中繼資料
-├── checkpoint.json        # 復原用檢查點
+├── checkpoint.json        # 診斷用頁面進度（不提供自動續跑）
 ├── page-0001.html         # 原始 HTML
 ├── page-0002.html
 └── ...
@@ -118,7 +122,7 @@ data/processed/
 ### 表示法與 newhouse 範圍語意
 
 - sale 與 rental 目前從渲染後 DOM 卡片解析，manifest 記錄 `representation=dom` 與對應 schema version。
-- newhouse 目前從公開頁面的 `ItemList` / `Product` JSON-LD 解析，manifest 記錄 `representation=jsonld`。
+- newhouse 優先從公開頁面的 `ItemList` / `Product` JSON-LD 解析；只有至少一筆通過驗證時才記錄 `representation=jsonld`。若 ItemList 全部被拒絕，系統保留 JSON-LD 拒絕診斷並嘗試 DOM fallback。
 - JSON-LD `AggregateOffer.lowPrice` / `highPrice` 是每坪開價範圍；描述中的 `坪數規劃 low~high 坪` 是面積範圍。系統保留 low/high，不以中點冒充精確值，`asking_price_twd` 與 `building_area_ping` 維持空值。
 - 公開 newhouse JSON-LD 未提供可靠座標時，`location_eligible=False`；這些列不進入 A17–A19 兩公里指標或 M2 開價比對，也不從建案名稱或標題猜測座標。
 
@@ -191,17 +195,17 @@ Listing valuation（`listing_valuation.py`）在 M2 模型可用時，可為 sal
 5. `listing_metrics.py` 中的 `public_listings()` 已過濾掉所有非公開欄位
 6. 座標經 `_round_coord()` 四捨五入至小數四位
 
-## 10. 批次不完整的復原
+## 10. 批次不完整與診斷檢查點
 
 ### 情境
 
 Selenium 在擷取過程中斷（網路不穩、Chrome 崩潰、手動中斷），導致只有部分頁面的 HTML 被儲存。
 
-### 復原機制
+### 處理機制
 
-1. `RawBatchWriter.write_checkpoint()` 在每頁成功後寫入 `checkpoint.json`
-2. 重新執行相同批次時，`Selenium591Source` 讀取 `checkpoint.json`，從 `last_page + 1` 繼續
-3. `listing-build` 可指定 `--batch-dir` 手動處理任何原始批次目錄
+1. `RawBatchWriter.write_checkpoint()` 在每頁成功後寫入 `checkpoint.json`，作為診斷進度證據
+2. `Selenium591Source` 不讀取既有 checkpoint，也不提供自動續跑；重新執行會從第一頁開始並建立新的隔離批次
+3. 舊批次的 manifest、checkpoint 與已寫入頁面保持原樣；只有完整批次可由 `listing-build --batch-dir` 處理
 
 ### 事件一致性
 

@@ -634,9 +634,6 @@ def listing_sync(root: Path, args) -> int:
                 )
             ].copy()
             if not absent.empty:
-                for col in ("station_code", "station_distance_m", "location_eligible"):
-                    absent[col] = None
-                absent["model_evidence"] = None
                 located = pd.concat([located, absent], ignore_index=True)
 
         if not event_result.events.empty:

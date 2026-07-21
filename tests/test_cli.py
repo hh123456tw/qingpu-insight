@@ -738,6 +738,97 @@ class TestListingSync:
         )
         assert len(repeated_events) == len(first_events)
 
+    @pytest.mark.parametrize(
+        ("reached_terminal_page", "expected_absences"),
+        [(False, 0), (True, 1)],
+    )
+    def test_unseen_listing_keeps_prior_context_until_second_complete_absence(
+        self,
+        tmp_path,
+        monkeypatch,
+        reached_terminal_page,
+        expected_absences,
+    ):
+        from bs4 import BeautifulSoup
+
+        from qingpu_insight.listing_591 import extract_rendered_page
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("QINGPU_DATABASE_URL", raising=False)
+        raw = tmp_path / "data" / "raw"
+        raw.mkdir(parents=True)
+        shutil.copy2(FIXTURES / "doorplates.csv", raw / "doorplates.csv")
+
+        full_html = (FIXTURES / "listings" / "591_sale_page.html").read_text(
+            encoding="utf-8"
+        )
+        prior_source = extract_rendered_page(full_html, "sale").listings[1]
+        prior_normalized = normalize_listing(
+            prior_source, datetime(2026, 7, 21, tzinfo=UTC)
+        )
+        previous = pd.DataFrame(cli._normalized_to_rows([prior_normalized]))
+        previous["station_code"] = "A18"
+        previous["station_distance_m"] = 321.5
+        previous["location_eligible"] = True
+        previous["model_evidence"] = '{"model_version":"resale-v1"}'
+        previous["active"] = True
+        previous["consecutive_absences"] = 0
+        previous["last_seen_batch_id"] = "B1"
+
+        soup = BeautifulSoup(full_html, "html.parser")
+        soup.select("article")[1].decompose()
+        current_html = str(soup)
+
+        class Source:
+            def capture(self, listing_type, max_pages):
+                return CaptureBatch(
+                    batch_id="B2",
+                    source="591",
+                    listing_type=listing_type,
+                    started_at=datetime(2026, 7, 22, tzinfo=UTC),
+                    pages=[
+                        CapturedPage(
+                            page_number=1,
+                            url="https://sale.591.com.tw/?regionid=6",
+                            html=current_html,
+                            accepted_count=1,
+                            representation="dom",
+                            schema_version="591-sale-dom-v1",
+                        )
+                    ],
+                    reached_terminal_page=reached_terminal_page,
+                )
+
+        saved = []
+
+        class Repository:
+            def load_current(self, listing_type=None):
+                return previous.copy()
+
+            def save_batch(self, batch, rows):
+                saved.append(rows.copy())
+
+            def append_events(self, events):
+                pass
+
+            def load_snapshots(self):
+                return pd.DataFrame()
+
+        monkeypatch.setattr(cli, "create_listing_source", lambda *_: Source())
+        monkeypatch.setattr(
+            cli, "create_listing_repository", lambda *_: Repository()
+        )
+
+        assert main(["listing-sync", "--types", "sale", "--max-pages", "1"]) == 0
+
+        unseen = saved[0].loc[saved[0]["source_listing_id"] == "S-1002"].iloc[0]
+        assert bool(unseen["active"]) is True
+        assert unseen["consecutive_absences"] == expected_absences
+        assert unseen["station_code"] == "A18"
+        assert unseen["station_distance_m"] == 321.5
+        assert bool(unseen["location_eligible"]) is True
+        assert unseen["model_evidence"] == '{"model_version":"resale-v1"}'
+
     def test_schema_failure_is_fail_closed_without_saving_batch(
         self, tmp_path, monkeypatch, capsys
     ):

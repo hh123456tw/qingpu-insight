@@ -57,6 +57,12 @@ LEGACY_CARD_SELECTORS: dict[str, tuple[str, ...]] = {
     "newhouse": ("article[data-housingid]", "[data-id][class*='housing']"),
 }
 
+EXPECTED_DOM_HOSTS: dict[str, str] = {
+    "sale": "sale.591.com.tw",
+    "rental": "rent.591.com.tw",
+    "newhouse": "newhouse.591.com.tw",
+}
+
 
 def parse_rendered_page(html: str, listing_type: ListingType) -> list[SourceListing]:
     """Return accepted listings for callers using the original parser contract."""
@@ -67,8 +73,8 @@ def extract_rendered_page(html: str, listing_type: ListingType) -> ExtractionRes
     """Parse a rendered 591 page into validated listings and rejection diagnostics."""
     soup = BeautifulSoup(html, "html.parser")
     if listing_type == "newhouse" and soup.select("script[type='application/ld+json']"):
-        jsonld_result, has_usable_item_list = _extract_newhouse_jsonld(soup)
-        if has_usable_item_list:
+        jsonld_result = _extract_newhouse_jsonld(soup)
+        if jsonld_result.listings:
             result = jsonld_result
         else:
             dom_result = _extract_dom(soup, listing_type)
@@ -130,7 +136,7 @@ def _parse_dom_card(card, listing_type: ListingType) -> SourceListing:
     title, raw_url = _extract_dom_title_and_url(card, listing_type)
     if not title:
         raise _CardError("missing_title", "Listing card has no title")
-    url = _canonical_url(raw_url)
+    url = _canonical_url(raw_url, expected_host=EXPECTED_DOM_HOSTS[listing_type])
     if not url:
         raise _CardError("invalid_url", "Listing card URL is not a 591 HTTPS URL")
 
@@ -216,10 +222,9 @@ def _extract_dom_details(card, listing_type: ListingType) -> dict[str, str]:
     }
 
 
-def _extract_newhouse_jsonld(soup: BeautifulSoup) -> tuple[ExtractionResult, bool]:
+def _extract_newhouse_jsonld(soup: BeautifulSoup) -> ExtractionResult:
     listings: list[SourceListing] = []
     rejected: list[RejectedListing] = []
-    has_usable_item_list = False
     for script in soup.select("script[type='application/ld+json']"):
         try:
             document = json.loads(script.get_text())
@@ -241,21 +246,17 @@ def _extract_newhouse_jsonld(soup: BeautifulSoup) -> tuple[ExtractionResult, boo
                     )
                 )
                 continue
-            has_usable_item_list = True
             for item in items:
                 source_ref = _jsonld_source_ref(item)
                 try:
                     listings.append(_parse_newhouse_item(item))
                 except _CardError as error:
                     rejected.append(RejectedListing(source_ref, error.reason_code, error.message))
-    return (
-        ExtractionResult(
-            listings=listings,
-            rejected=rejected,
-            representation="jsonld",
-            schema_version="591-newhouse-jsonld-v1",
-        ),
-        has_usable_item_list,
+    return ExtractionResult(
+        listings=listings,
+        rejected=rejected,
+        representation="jsonld",
+        schema_version="591-newhouse-jsonld-v1",
     )
 
 
@@ -269,7 +270,9 @@ def _parse_newhouse_item(item: object) -> SourceListing:
     title = product.get("name")
     if not isinstance(title, str) or not title.strip():
         raise _CardError("missing_title", "Product has no title")
-    url = _canonical_url(product.get("url"))
+    url = _canonical_url(
+        product.get("url"), expected_host=EXPECTED_DOM_HOSTS["newhouse"]
+    )
     if not url:
         raise _CardError("invalid_url", "Product URL is not a 591 HTTPS URL")
     listing_id = _numeric_final_path_segment(url)
@@ -332,7 +335,7 @@ def _text(element) -> str:
     return element.get_text(" ", strip=True) if element else ""
 
 
-def _canonical_url(value: object) -> str | None:
+def _canonical_url(value: object, expected_host: str | None = None) -> str | None:
     if not isinstance(value, str) or not value.strip():
         return None
     try:
@@ -341,6 +344,8 @@ def _canonical_url(value: object) -> str | None:
     except ValueError:
         return None
     if parsed.username is not None or parsed.password is not None:
+        return None
+    if expected_host is not None and hostname != expected_host:
         return None
     if parsed.scheme != "https" or not (
         hostname == "591.com.tw" or hostname.endswith(".591.com.tw")

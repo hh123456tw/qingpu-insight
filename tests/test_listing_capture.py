@@ -1,6 +1,9 @@
 """Tests for listing capture infrastructure."""
 
+import inspect
 import json
+from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -22,6 +25,8 @@ SALE_HTML = """<html><body>
 </div>
 </body></html>"""
 
+FIXTURE_DIR = Path(__file__).parent / "fixtures" / "listings"
+
 
 def test_newhouse_uses_human_facing_taoyuan_route():
     from qingpu_insight.listing_capture import ROUTES
@@ -36,7 +41,8 @@ def test_visible_browser_is_default():
 def test_writer_batch_dir_contains_type_and_matches_manifest(tmp_path):
     writer = RawBatchWriter(tmp_path, "sale")
     batch = Selenium591Source(
-        browser=FakeBrowser(pages=[SALE_HTML]), writer=writer,
+        browser=FakeBrowser(pages=[SALE_HTML]),
+        writer=writer,
         config=ChromeConfig(max_retries=0),
     ).capture("sale", 1)
     manifest = json.loads((writer.batch_dir / "manifest.json").read_text("utf-8"))
@@ -50,7 +56,8 @@ def test_writer_batch_dir_contains_type_and_matches_manifest(tmp_path):
 def test_writer_type_mismatch_fails_before_browser_navigation(tmp_path):
     browser = FakeBrowser(pages=[SALE_HTML])
     source = Selenium591Source(
-        browser=browser, writer=RawBatchWriter(tmp_path, "sale"),
+        browser=browser,
+        writer=RawBatchWriter(tmp_path, "sale"),
     )
 
     message = "writer listing type 'sale' does not match capture type 'rental'"
@@ -61,12 +68,28 @@ def test_writer_type_mismatch_fails_before_browser_navigation(tmp_path):
     assert "quit" in browser.calls
 
 
-def test_checkpoint_writer_rejects_unidentified_batch_directory(tmp_path):
-    batch_dir = tmp_path / "unknown-batch"
-    batch_dir.mkdir()
+def test_capture_api_does_not_claim_automatic_checkpoint_resume():
+    assert not hasattr(RawBatchWriter, "from_checkpoint")
+    assert "resume_batch_id" not in inspect.signature(Selenium591Source).parameters
 
-    with pytest.raises(ValueError, match="not a typed 591 batch directory"):
-        RawBatchWriter.from_checkpoint(tmp_path, batch_dir)
+
+def test_same_type_writers_claim_distinct_directories_at_identical_time(tmp_path, monkeypatch):
+    from qingpu_insight import listing_capture
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 7, 22, 12, 0, 0, 123456, tzinfo=UTC)
+
+    monkeypatch.setattr(listing_capture, "datetime", FrozenDateTime)
+
+    first = RawBatchWriter(tmp_path, "sale")
+    second = RawBatchWriter(tmp_path, "sale")
+
+    assert first.batch_id != second.batch_id
+    assert first.batch_dir != second.batch_dir
+    assert first.batch_dir.is_dir()
+    assert second.batch_dir.is_dir()
 
 
 def test_transient_page_write_does_not_duplicate_manifest_page(tmp_path):
@@ -116,6 +139,107 @@ def test_pagination_failure_writes_diagnostic(tmp_path):
     assert (writer.batch_dir / "diagnostic-page-0001.html").exists()
 
 
+def test_url_only_change_with_stale_cards_fails_navigation_without_duplicate_page(
+    tmp_path,
+):
+    class TrackingOnlyBrowser(FakeBrowser):
+        def find_element(self, by, value=None, selector=None):
+            selected = value or selector or ""
+            if selected == "a.next, .page-next, [rel=next]":
+                browser = self
+
+                class TrackingLink:
+                    def is_enabled(self):
+                        return True
+
+                    def is_displayed(self):
+                        return True
+
+                    def click(self):
+                        browser.current_url += "&tracking=next"
+
+                return TrackingLink()
+            return super().find_element(by, value, selector)
+
+    writer = RawBatchWriter(tmp_path, "sale")
+    batch = Selenium591Source(
+        browser=TrackingOnlyBrowser(pages=[SALE_HTML]),
+        writer=writer,
+        config=ChromeConfig(page_timeout_seconds=0, delay_seconds=(0, 0), max_retries=0),
+    ).capture("sale", 2)
+
+    manifest = json.loads((writer.batch_dir / "manifest.json").read_text("utf-8"))
+    assert [(page.page_number, page.accepted_count) for page in batch.pages] == [(1, 1)]
+    assert [(error.page_number, error.code) for error in batch.errors] == [(1, "navigation_failed")]
+    assert manifest["is_complete"] is False
+    assert not (writer.batch_dir / "page-0002.html").exists()
+
+
+def test_changed_stable_ids_prove_freshness_even_when_url_is_unchanged(tmp_path):
+    second_page = SALE_HTML.replace("S-1001", "S-2002").replace("A18 範例住宅", "A17 第二頁住宅")
+
+    class SameUrlFreshBrowser(FakeBrowser):
+        def find_element(self, by, value=None, selector=None):
+            selected = value or selector or ""
+            if selected == "a.next, .page-next, [rel=next]":
+                browser = self
+
+                class SameUrlLink:
+                    def is_enabled(self):
+                        return True
+
+                    def is_displayed(self):
+                        return True
+
+                    def click(self):
+                        browser._page_source = browser.pages[browser._page_index]
+                        browser._page_index += 1
+
+                return SameUrlLink()
+            return super().find_element(by, value, selector)
+
+    batch = Selenium591Source(
+        browser=SameUrlFreshBrowser(pages=[SALE_HTML, second_page]),
+        writer=RawBatchWriter(tmp_path, "sale"),
+        config=ChromeConfig(page_timeout_seconds=0, delay_seconds=(0, 0), max_retries=0),
+    ).capture("sale", 2)
+
+    assert [page.page_number for page in batch.pages] == [1, 2]
+    assert batch.errors == []
+
+
+@pytest.mark.parametrize(
+    ("listing_type", "fixture_name", "redirect_url"),
+    [
+        ("sale", "591_sale_live_page.html", "https://sale.591.com.tw/?regionid=1"),
+        ("rental", "591_rental_live_page.html", "https://rent.591.com.tw/list?region=1"),
+        (
+            "newhouse",
+            "591_newhouse_live_page.html",
+            "https://sale.591.com.tw/list?regionid=6",
+        ),
+    ],
+)
+def test_capture_rejects_wrong_host_or_region_provenance(
+    tmp_path, listing_type, fixture_name, redirect_url
+):
+    class RedirectedBrowser(FakeBrowser):
+        def get(self, url):
+            super().get(url)
+            self.current_url = redirect_url
+
+    writer = RawBatchWriter(tmp_path, listing_type)
+    batch = Selenium591Source(
+        browser=RedirectedBrowser(pages=[(FIXTURE_DIR / fixture_name).read_text(encoding="utf-8")]),
+        writer=writer,
+        config=ChromeConfig(page_timeout_seconds=0, max_retries=0),
+    ).capture(listing_type, 1)
+
+    assert batch.pages == []
+    assert [(error.page_number, error.code) for error in batch.errors] == [(1, "navigation_failed")]
+    assert not (writer.batch_dir / "page-0001.html").exists()
+
+
 def test_schema_failure_writes_diagnostic_html(tmp_path):
     writer = RawBatchWriter(tmp_path, "sale")
     source = Selenium591Source(
@@ -159,7 +283,8 @@ def test_readiness_uses_one_timeout_for_all_selector_alternatives(tmp_path, monk
 def test_capture_records_extraction_summary_in_manifest(tmp_path):
     writer = RawBatchWriter(tmp_path, "sale")
     batch = Selenium591Source(
-        browser=FakeBrowser(pages=[SALE_HTML]), writer=writer,
+        browser=FakeBrowser(pages=[SALE_HTML]),
+        writer=writer,
         config=ChromeConfig(max_retries=0),
     ).capture("sale", 1)
     manifest = json.loads((writer.batch_dir / "manifest.json").read_text("utf-8"))
@@ -185,9 +310,7 @@ def test_verification_page_is_not_saved_as_accepted_evidence(tmp_path):
 
 
 def test_script_verification_token_does_not_block_normal_listing_capture(tmp_path):
-    html = SALE_HTML.replace(
-        "</body>", "<script>window.verify = 'analytics';</script></body>"
-    )
+    html = SALE_HTML.replace("</body>", "<script>window.verify = 'analytics';</script></body>")
     batch = Selenium591Source(
         browser=FakeBrowser(pages=[html]),
         writer=RawBatchWriter(tmp_path, "sale"),
@@ -220,7 +343,8 @@ def test_browser_quits_when_manifest_write_fails(tmp_path, fail_on_next):
 
     browser = FakeBrowser(pages=[SALE_HTML], fail_on_next=fail_on_next)
     source = Selenium591Source(
-        browser=browser, writer=FailingManifestWriter(tmp_path, "sale"),
+        browser=browser,
+        writer=FailingManifestWriter(tmp_path, "sale"),
         config=ChromeConfig(max_retries=0),
     )
 
@@ -269,9 +393,7 @@ def test_next_page_navigation_failure_never_marks_batch_complete(tmp_path):
 
     assert batch.is_complete is False
     assert batch.reached_terminal_page is False
-    assert [(error.page_number, error.code) for error in batch.errors] == [
-        (1, "navigation_failed")
-    ]
+    assert [(error.page_number, error.code) for error in batch.errors] == [(1, "navigation_failed")]
 
 
 def test_terminal_empty_state_preserves_batch(tmp_path):
@@ -316,6 +438,7 @@ def test_checkpoint_written_after_page(tmp_path):
 @pytest.mark.parametrize("listing_type", ["sale", "newhouse", "rental"])
 def test_all_types_have_routes(listing_type: ListingType) -> None:
     from qingpu_insight.listing_capture import ROUTES
+
     assert listing_type in ROUTES
     assert ROUTES[listing_type].startswith("https://")
 
@@ -330,7 +453,10 @@ def test_invalid_type_returns_error(tmp_path):
 def test_browser_quit_called(tmp_path):
     browser = FakeBrowser(pages=[SALE_HTML])
     source = Selenium591Source(browser=browser, writer=RawBatchWriter(tmp_path, "sale"))
-    source.capture("sale", max_pages=1,)
+    source.capture(
+        "sale",
+        max_pages=1,
+    )
     assert "quit" in browser.calls
 
 
@@ -354,7 +480,7 @@ def test_three_retries(tmp_path):
     assert len(batch.errors) == 0
 
 
-def test_checkpoint_resume(tmp_path):
+def test_checkpoint_records_diagnostic_progress(tmp_path):
     browser = FakeBrowser(pages=[SALE_HTML, SALE_HTML])
     source = Selenium591Source(browser=browser, writer=RawBatchWriter(tmp_path, "sale"))
     source.capture("sale", max_pages=2)
@@ -393,34 +519,4 @@ def test_neither_cards_nor_empty_is_error(tmp_path):
     assert len(batch.pages) == 0
     assert len(batch.errors) == 1
     assert batch.errors[0].code == "page_failed"
-
-
-def test_from_checkpoint_classmethod(tmp_path):
-    writer = RawBatchWriter(tmp_path, "sale")
-    batch_dir = writer.batch_dir
-    batch_dir.mkdir(parents=True, exist_ok=True)
-    (batch_dir / "checkpoint.json").write_text(
-        json.dumps({"last_page": 2}), encoding="utf-8"
-    )
-    resume_writer = RawBatchWriter.from_checkpoint(tmp_path, batch_dir)
-    assert resume_writer.batch_dir == batch_dir
-
-
-def test_checkpoint_resume_from_file(tmp_path):
-    browser = FakeBrowser(pages=[SALE_HTML, SALE_HTML, SALE_HTML])
-    writer = RawBatchWriter(tmp_path, "sale")
-    batch_dir = writer.batch_dir
-    batch_dir.mkdir(parents=True, exist_ok=True)
-    (batch_dir / "checkpoint.json").write_text(
-        json.dumps({"last_page": 2}), encoding="utf-8"
-    )
-    (batch_dir / "page-0002.html").write_text("<html/>", encoding="utf-8")
-    resume_writer = RawBatchWriter.from_checkpoint(tmp_path, batch_dir)
-    source = Selenium591Source(
-        browser=browser, writer=resume_writer, resume_batch_id="resume-001"
-    )
-    batch = source.capture("sale", max_pages=5)
-    assert len(batch.pages) == 3
-    assert batch.pages[0].page_number == 3
-    assert batch.pages[1].page_number == 4
-    assert batch.pages[2].page_number == 5
+    assert "quit" in browser.calls

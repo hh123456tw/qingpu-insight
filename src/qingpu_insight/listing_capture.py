@@ -2,18 +2,21 @@
 
 import json
 import random
-import re
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 from bs4 import BeautifulSoup
 from selenium import webdriver
-from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from qingpu_insight.listing_591 import CARD_SELECTORS, extract_rendered_page
+from qingpu_insight.listing_591 import (
+    CARD_SELECTORS,
+    ListingSchemaError,
+    extract_rendered_page,
+)
 from qingpu_insight.listing_sources import (
     CaptureBatch,
     CapturedPage,
@@ -33,6 +36,12 @@ EMPTY_SELECTORS: dict[str, tuple[str, ...]] = {
     "rental": ("div.no-result", ".empty-state", "p.empty"),
 }
 
+ROUTE_PROVENANCE: dict[str, tuple[str, str]] = {
+    "sale": ("sale.591.com.tw", "regionid"),
+    "newhouse": ("newhouse.591.com.tw", "regionid"),
+    "rental": ("rent.591.com.tw", "region"),
+}
+
 
 @dataclass(frozen=True)
 class ChromeConfig:
@@ -47,13 +56,31 @@ class ChromeConfig:
 class RawBatchWriter:
     def __init__(self, base_dir: Path, listing_type: ListingType):
         created_at = datetime.now(UTC)
-        timestamp = created_at.strftime("%Y%m%dT%H%M%SZ")
-        self._batch_id = f"591-{listing_type}-{timestamp}"
         self._listing_type = listing_type
-        self._batch_dir = (
-            base_dir / "data" / "raw" / "listings" / "591"
-            / created_at.strftime("%Y-%m-%d") / self._batch_id
+        timestamp = created_at.strftime("%Y%m%dT%H%M%S%fZ")
+        batch_stem = f"591-{listing_type}-{timestamp}"
+        day_dir = (
+            base_dir
+            / "data"
+            / "raw"
+            / "listings"
+            / "591"
+            / created_at.strftime("%Y-%m-%d")
         )
+        day_dir.mkdir(parents=True, exist_ok=True)
+        collision = 0
+        while True:
+            suffix = "" if collision == 0 else f"-{collision:04d}"
+            batch_id = f"{batch_stem}{suffix}"
+            batch_dir = day_dir / batch_id
+            try:
+                batch_dir.mkdir(exist_ok=False)
+            except FileExistsError:
+                collision += 1
+                continue
+            self._batch_id = batch_id
+            self._batch_dir = batch_dir
+            break
 
     @property
     def batch_dir(self) -> Path:
@@ -89,21 +116,6 @@ class RawBatchWriter:
         final = self._batch_dir / "checkpoint.json"
         tmp.write_text(json.dumps({"last_page": page_number}, ensure_ascii=False), encoding="utf-8")
         tmp.replace(final)
-
-    @classmethod
-    def from_checkpoint(cls, base_dir: Path, existing_batch_dir: Path) -> "RawBatchWriter":
-        match = re.fullmatch(
-            r"591-(sale|newhouse|rental)-\d{8}T\d{6}Z", existing_batch_dir.name
-        )
-        if not match:
-            raise ValueError(
-                f"{existing_batch_dir} is not a typed 591 batch directory"
-            )
-        writer = cls.__new__(cls)
-        writer._batch_dir = existing_batch_dir
-        writer._batch_id = existing_batch_dir.name
-        writer._listing_type = match.group(1)
-        return writer
 
     def write_manifest(self, batch: CaptureBatch) -> None:
         self._batch_dir.mkdir(parents=True, exist_ok=True)
@@ -141,13 +153,11 @@ class Selenium591Source:
         browser: webdriver.Chrome | None = None,
         writer: RawBatchWriter | None = None,
         config: ChromeConfig | None = None,
-        resume_batch_id: str | None = None,
         base_dir: Path | None = None,
     ):
         self._config = config or ChromeConfig()
         self._browser = browser
         self._writer = writer
-        self._resume_batch_id = resume_batch_id
         self._base_dir = base_dir or Path.cwd()
 
     def capture(self, listing_type: ListingType, max_pages: int = 10) -> CaptureBatch:
@@ -177,16 +187,6 @@ class Selenium591Source:
         writer = writer or RawBatchWriter(self._base_dir, listing_type)
         self._writer = writer
 
-        start_page = 1
-        if self._resume_batch_id and writer:
-            checkpoint_path = writer.batch_dir / "checkpoint.json"
-            if checkpoint_path.exists():
-                try:
-                    data = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-                    start_page = data.get("last_page", 0) + 1
-                except (json.JSONDecodeError, KeyError, TypeError):
-                    pass
-
         batch = CaptureBatch(
             batch_id=writer.batch_id,
             source="591",
@@ -210,7 +210,7 @@ class Selenium591Source:
 
         should_stop = False
         try:
-            for page_num in range(start_page, max_pages + 1):
+            for page_num in range(1, max_pages + 1):
                 if should_stop:
                     break
                 for attempt in range(self._config.max_retries + 1):
@@ -233,6 +233,13 @@ class Selenium591Source:
                             should_stop = True
                             break
 
+                        if not _route_provenance_matches(
+                            browser.current_url, listing_type
+                        ):
+                            raise _RouteProvenanceError(
+                                "Final browser URL does not prove the expected "
+                                f"Taoyuan {listing_type} route"
+                            )
                         extraction = extract_rendered_page(html, listing_type)
                         page = CapturedPage(
                             page_number=page_num,
@@ -258,10 +265,20 @@ class Selenium591Source:
                                 batch.reached_terminal_page = True
                                 should_stop = True
                                 break
-                            old_url = browser.current_url
+                            old_ids = {
+                                listing.source_listing_id
+                                for listing in extraction.listings
+                            }
                             next_btn.click()
                             WebDriverWait(browser, self._config.page_timeout_seconds).until(
-                                EC.url_changes(old_url)
+                                lambda active_browser,
+                                page_num=page_num,
+                                old_ids=old_ids: _pagination_is_fresh(
+                                    active_browser,
+                                    listing_type,
+                                    previous_page_number=page_num,
+                                    previous_ids=old_ids,
+                                )
                             )
                         except Exception as exc:
                             batch.errors.append(
@@ -279,6 +296,17 @@ class Selenium591Source:
                         time.sleep(delay)
                         break
 
+                    except _RouteProvenanceError as exc:
+                        batch.errors.append(
+                            CaptureError(
+                                page_number=page_num,
+                                code="navigation_failed",
+                                message=str(exc),
+                            )
+                        )
+                        _write_diagnostic(writer, page_num, browser)
+                        should_stop = True
+                        break
                     except _VerificationRequired:
                         batch.errors.append(
                             CaptureError(
@@ -313,6 +341,63 @@ class Selenium591Source:
 
 class _VerificationRequired(Exception):
     pass
+
+
+class _RouteProvenanceError(Exception):
+    pass
+
+
+def _route_provenance_matches(url: str, listing_type: ListingType) -> bool:
+    expected = ROUTE_PROVENANCE.get(listing_type)
+    if expected is None:
+        return False
+    expected_host, region_parameter = expected
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return False
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != expected_host
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        return False
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    return query.get(region_parameter) == ["6"]
+
+
+def _canonical_page_number(url: str) -> int | None:
+    try:
+        values = parse_qs(urlsplit(url).query, keep_blank_values=True).get("page")
+    except ValueError:
+        return None
+    if values is None or len(values) != 1 or not values[0].isdigit():
+        return None
+    page_number = int(values[0])
+    return page_number if page_number > 0 else None
+
+
+def _pagination_is_fresh(
+    browser: webdriver.Chrome,
+    listing_type: ListingType,
+    previous_page_number: int,
+    previous_ids: set[str],
+) -> bool:
+    if not _route_provenance_matches(browser.current_url, listing_type):
+        return False
+    current_page_number = _canonical_page_number(browser.current_url)
+    if (
+        current_page_number is not None
+        and current_page_number != previous_page_number
+    ):
+        return True
+    try:
+        extraction = extract_rendered_page(browser.page_source, listing_type)
+    except (ListingSchemaError, ValueError):
+        return False
+    current_ids = {listing.source_listing_id for listing in extraction.listings}
+    return bool(current_ids) and current_ids != previous_ids
 
 
 def _capture_readiness(

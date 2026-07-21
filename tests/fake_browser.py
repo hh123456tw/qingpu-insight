@@ -93,7 +93,14 @@ class _FakeElement:
         if self._fail_click:
             raise RuntimeError("next_click_failed")
         if self._browser:
-            self._browser.current_url = self._browser.current_url + "?page=2"
+            separator = "&" if "?" in self._browser.current_url else "?"
+            next_page = self._browser._page_index + 1
+            self._browser.current_url += f"{separator}page={next_page}"
+            if self._browser._page_index < len(self._browser.pages):
+                self._browser._page_source = self._browser.pages[
+                    self._browser._page_index
+                ]
+                self._browser._page_index += 1
 
     @property
     def text(self) -> str:

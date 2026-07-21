@@ -224,6 +224,33 @@ def test_incomplete_batch_does_not_increment_absence(active_state):
     assert result.events.empty
 
 
+@pytest.mark.parametrize(
+    ("batch", "expected_absences"),
+    [
+        (incomplete_batch("B2"), 0),
+        (complete_batch("B2"), 1),
+    ],
+)
+def test_unseen_active_listing_preserves_geospatial_and_model_context(
+    batch, expected_absences
+):
+    context = {
+        "station_code": "A18",
+        "station_distance_m": 321.5,
+        "location_eligible": True,
+        "model_evidence": '{"model_version":"resale-v1"}',
+    }
+    previous = with_state([listing_row(snapshot_at=T0, **context)])
+
+    result = detect_listing_events(previous, empty_rows(), batch)
+
+    state = result.state.iloc[0]
+    assert state["active"] is True or bool(state["active"])
+    assert state["consecutive_absences"] == expected_absences
+    for field, expected in context.items():
+        assert state[field] == expected
+
+
 def test_absent_listing_preserves_ranges_metadata_and_hash():
     advertised = {
         "asking_unit_price_low_twd_per_ping": 500_000,

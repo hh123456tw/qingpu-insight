@@ -209,10 +209,11 @@ def create_app(
             limit=limit,
         )
 
-    def _location_eligible_listings(df: pd.DataFrame) -> pd.DataFrame:
-        if "location_eligible" not in df.columns:
+    def _publicly_visible_listings(df: pd.DataFrame) -> pd.DataFrame:
+        required = {"location_eligible", "active"}
+        if not required.issubset(df.columns):
             return df.iloc[0:0]
-        return df[df["location_eligible"].eq(True)]
+        return df[df["location_eligible"].eq(True) & df["active"].eq(True)]
 
     @app.get("/api/listings/summary")
     def listing_summary_api():
@@ -220,7 +221,7 @@ def create_app(
         if lr is None:
             err = {"code": "listing_data_unavailable", "message": "刊登資料未啟用。"}
             return jsonify({"error": err}), 503
-        df = _location_eligible_listings(lr.load_current(filters.listing_type))
+        df = _publicly_visible_listings(lr.load_current(filters.listing_type))
         return jsonify(listing_summary(df, filters))
 
     @app.get("/api/listings")
@@ -229,7 +230,7 @@ def create_app(
         if lr is None:
             err = {"code": "listing_data_unavailable", "message": "刊登資料未啟用。"}
             return jsonify({"error": err}), 503
-        df = _location_eligible_listings(lr.load_current(filters.listing_type))
+        df = _publicly_visible_listings(lr.load_current(filters.listing_type))
         items = public_listings(df, filters)
         return jsonify({"items": items, "limit": filters.limit})
 

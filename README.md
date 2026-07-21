@@ -178,7 +178,7 @@ mysql -u root -p < database/001_market_schema.sql
 .\.venv\Scripts\qingpu-data.exe listing-sync --types sale newhouse rental --max-pages 10
 ```
 
-`--max-pages` 是擷取上限；尚未抵達末頁的批次會標記為不完整，且不參與下架判定。設定 `QINGPU_DATABASE_URL` 可改用 MySQL；密碼中的 `@` 等保留字元需先做 URL encoding。
+`--max-pages` 是擷取上限；尚未抵達末頁的批次會標記為不完整，且不參與下架判定。每次重跑都會建立新的隔離批次目錄；`checkpoint.json` 只記錄診斷用的頁面進度，不提供自動續跑，也不會重用舊批次。設定 `QINGPU_DATABASE_URL` 可改用 MySQL；密碼中的 `@` 等保留字元需先做 URL encoding。
 
 2026-07-22 的可見 Chrome 一頁驗收命令為：
 

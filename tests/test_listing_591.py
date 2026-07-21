@@ -230,6 +230,26 @@ def test_unusable_jsonld_falls_back_to_legacy_newhouse_dom(jsonld):
     assert [row.source_listing_id for row in result.listings] == ["NH-2001", "NH-2002"]
 
 
+def test_all_rejected_item_list_falls_back_to_dom_and_keeps_diagnostics():
+    rejected_item_list = newhouse_jsonld_html(
+        [newhouse_item("138380", low_price=0, high_price=0)]
+    )
+    html = fixture_path("591_newhouse_page.html").read_text(
+        encoding="utf-8"
+    ).replace("</body>", f"{rejected_item_list}</body>")
+
+    result = extract_rendered_page(html, "newhouse")
+
+    assert result.representation == "dom"
+    assert [row.source_listing_id for row in result.listings] == [
+        "NH-2001",
+        "NH-2002",
+    ]
+    assert [rejection.reason_code for rejection in result.rejected] == [
+        "missing_price"
+    ]
+
+
 @pytest.mark.parametrize(
     ("bad_item", "reason_code"),
     [
@@ -295,6 +315,30 @@ def test_parse_rendered_page_keeps_types_isolated(listing_type, expected_price_f
     assert len(rows) == 2
     assert all(row.listing_type == listing_type for row in rows)
     assert all(row.payload[expected_price_field] > 0 for row in rows)
+
+
+@pytest.mark.parametrize(
+    ("listing_type", "wrong_host"),
+    [
+        ("sale", "rent.591.com.tw"),
+        ("rental", "sale.591.com.tw"),
+        ("newhouse", "sale.591.com.tw"),
+    ],
+)
+def test_dom_adapters_reject_urls_from_another_listing_type(
+    listing_type, wrong_host
+):
+    expected_host = {
+        "sale": "sale.591.com.tw",
+        "rental": "rent.591.com.tw",
+        "newhouse": "newhouse.591.com.tw",
+    }[listing_type]
+    html = fixture_path(f"591_{listing_type}_page.html").read_text(
+        encoding="utf-8"
+    ).replace(expected_host, wrong_host)
+
+    with pytest.raises(ListingSchemaError, match=r"reasons=invalid_url"):
+        extract_rendered_page(html, listing_type)
 
 
 @pytest.mark.parametrize("listing_type", ["sale", "newhouse", "rental"])

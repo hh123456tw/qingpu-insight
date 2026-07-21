@@ -179,7 +179,7 @@ def listing_client(market_frame: pd.DataFrame) -> FlaskClient:
             "title": "青埔三房", "asking_price_twd": 18_000_000,
             "building_area_ping": 35.5, "station_code": "A18",
             "latitude": 25.0123, "longitude": 121.2018,
-            "location_eligible": True,
+            "location_eligible": True, "active": True,
         },
         {
             "source": "591", "source_listing_id": "L002", "listing_type": "sale",
@@ -188,7 +188,7 @@ def listing_client(market_frame: pd.DataFrame) -> FlaskClient:
             "title": "A17大樓", "asking_price_twd": 22_000_000,
             "building_area_ping": 48.0, "station_code": "A17",
             "latitude": 25.0156, "longitude": 121.2078,
-            "location_eligible": True,
+            "location_eligible": True, "active": True,
         },
         {
             "source": "591", "source_listing_id": "N001", "listing_type": "newhouse",
@@ -199,7 +199,7 @@ def listing_client(market_frame: pd.DataFrame) -> FlaskClient:
             "asking_unit_price_high_twd_per_ping": 560_000,
             "building_area_min_ping": 19.0, "building_area_max_ping": 30.0,
             "station_code": "A18", "latitude": 25.0123, "longitude": 121.2018,
-            "location_eligible": True,
+            "location_eligible": True, "active": True,
         },
         {
             "source": "591", "source_listing_id": "OUT001", "listing_type": "newhouse",
@@ -207,7 +207,7 @@ def listing_client(market_frame: pd.DataFrame) -> FlaskClient:
             "source_url": "https://newhouse.591.com.tw/OUT001",
             "title": "圈外預售案", "asking_price_twd": 20_000_000,
             "station_code": "A18", "latitude": 25.0123, "longitude": 121.2018,
-            "location_eligible": False,
+            "location_eligible": False, "active": True,
         },
     ])
     events_df = pd.DataFrame([
@@ -302,6 +302,113 @@ class TestListingApi:
     def test_listings_with_missing_type_returns_400(self, listing_client: FlaskClient) -> None:
         response = listing_client.get("/api/listings")
         assert response.status_code == 400
+
+    @pytest.mark.parametrize("missing_column", ["location_eligible", "active"])
+    def test_summary_and_listings_fail_closed_without_visibility_contract(
+        self, market_frame: pd.DataFrame, missing_column: str
+    ) -> None:
+        from qingpu_insight.web import create_app
+
+        frame = pd.DataFrame(
+            [
+                {
+                    "source": "591",
+                    "source_listing_id": "L001",
+                    "listing_type": "sale",
+                    "snapshot_at": pd.Timestamp("2026-07-20 10:00", tz="UTC"),
+                    "source_url": "https://sale.591.com.tw/L001",
+                    "title": "青埔三房",
+                    "asking_price_twd": 18_000_000,
+                    "building_area_ping": 35.5,
+                    "station_code": "A18",
+                    "latitude": 25.0123,
+                    "longitude": 121.2018,
+                    "location_eligible": True,
+                    "active": True,
+                }
+            ]
+        ).drop(columns=[missing_column])
+        app = create_app(
+            data_source=InMemoryMarketDataSource(market_frame),
+            listing_repo=InMemoryListingRepo(frame),
+        )
+
+        with app.test_client() as api:
+            summary = api.get("/api/listings/summary?listing_type=sale").get_json()
+            listings = api.get("/api/listings?listing_type=sale").get_json()
+
+        assert summary["active_count"] == 0
+        assert listings["items"] == []
+
+    def test_lifecycle_visibility_through_incomplete_and_two_complete_absences(
+        self, market_frame: pd.DataFrame
+    ) -> None:
+        from datetime import UTC, datetime
+
+        from qingpu_insight.listing_events import detect_listing_events
+        from qingpu_insight.listing_sources import CaptureBatch
+        from qingpu_insight.web import create_app
+
+        initial = pd.DataFrame(
+            [
+                {
+                    "source": "591",
+                    "source_listing_id": "L001",
+                    "listing_type": "sale",
+                    "snapshot_at": pd.Timestamp("2026-07-20 10:00", tz="UTC"),
+                    "source_url": "https://sale.591.com.tw/L001",
+                    "title": "青埔三房",
+                    "asking_price_twd": 18_000_000,
+                    "building_area_ping": 35.5,
+                    "station_code": "A18",
+                    "station_distance_m": 320.0,
+                    "latitude": 25.0123,
+                    "longitude": 121.2018,
+                    "location_eligible": True,
+                    "model_evidence": '{"model_version":"resale-v1"}',
+                    "active": True,
+                    "consecutive_absences": 0,
+                    "last_seen_batch_id": "B1",
+                }
+            ]
+        )
+        empty = pd.DataFrame(columns=initial.columns)
+
+        def batch(batch_id: str, complete: bool) -> CaptureBatch:
+            return CaptureBatch(
+                batch_id=batch_id,
+                source="591",
+                listing_type="sale",
+                started_at=datetime(2026, 7, 22, tzinfo=UTC),
+                reached_terminal_page=complete,
+            )
+
+        incomplete = detect_listing_events(initial, empty, batch("B2", False)).state
+        first_absence = detect_listing_events(
+            incomplete, empty, batch("B3", True)
+        ).state
+        second_absence = detect_listing_events(
+            first_absence, empty, batch("B4", True)
+        ).state
+
+        for state, expected_count in (
+            (incomplete, 1),
+            (first_absence, 1),
+            (second_absence, 0),
+        ):
+            app = create_app(
+                data_source=InMemoryMarketDataSource(market_frame),
+                listing_repo=InMemoryListingRepo(state),
+            )
+            with app.test_client() as api:
+                summary = api.get(
+                    "/api/listings/summary?listing_type=sale&station=A18"
+                ).get_json()
+                listings = api.get(
+                    "/api/listings?listing_type=sale&station=A18"
+                ).get_json()
+            assert summary["active_count"] == expected_count
+            assert len(listings["items"]) == expected_count
 
 
 def test_unknown_route_preserves_http_404(client: FlaskClient) -> None:
