@@ -670,6 +670,63 @@ class TestListingBuild:
         assert "591-sale-invalid" in capsys.readouterr().err
 
     @pytest.mark.parametrize(
+        "manifest_bytes",
+        [
+            pytest.param(b"\xff\xfeinvalid utf-8", id="invalid-utf-8"),
+            pytest.param(
+                f'{{"batch_id": {"9" * 5000}}}'.encode(),
+                id="oversized-integer",
+            ),
+        ],
+    )
+    def test_explicit_build_rejects_undecodable_manifest_without_traceback(
+        self, tmp_path, monkeypatch, capsys, manifest_bytes
+    ):
+        monkeypatch.chdir(tmp_path)
+        raw = tmp_path / "data" / "raw"
+        raw.mkdir(parents=True)
+        shutil.copy2(FIXTURES / "doorplates.csv", raw / "doorplates.csv")
+        batch_dir = raw / "listings" / "591" / "2026-07-22" / "invalid-bytes"
+        batch_dir.mkdir(parents=True)
+        manifest_path = batch_dir / "manifest.json"
+        manifest_path.write_bytes(manifest_bytes)
+
+        assert main(["listing-build", "--batch-dir", str(batch_dir)]) == 1
+        stderr = capsys.readouterr().err
+        assert f"無效的 manifest: {manifest_path}" in stderr
+        assert "Traceback" not in stderr
+
+    def test_default_build_rejects_all_unreadable_manifests_without_traceback(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.chdir(tmp_path)
+        raw = tmp_path / "data" / "raw"
+        raw.mkdir(parents=True)
+        shutil.copy2(FIXTURES / "doorplates.csv", raw / "doorplates.csv")
+        date_dir = raw / "listings" / "591" / "2026-07-22"
+        invalid_manifests = {
+            "a-invalid-utf-8": b"\xff\xfeinvalid utf-8",
+            "b-invalid-oversized-integer": (
+                f'{{"batch_id": {"9" * 5000}}}'.encode()
+            ),
+            "c-invalid-excessive-nesting": (
+                ("[" * 5000) + "0" + ("]" * 5000)
+            ).encode(),
+        }
+        for batch_id, manifest_bytes in invalid_manifests.items():
+            batch_dir = date_dir / batch_id
+            batch_dir.mkdir(parents=True)
+            (batch_dir / "manifest.json").write_bytes(manifest_bytes)
+
+        assert main(["listing-build"]) == 1
+        stderr = capsys.readouterr().err
+        selected_manifest = (
+            date_dir / "c-invalid-excessive-nesting" / "manifest.json"
+        )
+        assert f"無效的 manifest: {selected_manifest}" in stderr
+        assert "Traceback" not in stderr
+
+    @pytest.mark.parametrize(
         "manifest",
         [
             pytest.param([], id="list"),

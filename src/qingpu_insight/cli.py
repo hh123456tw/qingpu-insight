@@ -397,21 +397,26 @@ def listing_scrape(root: Path, args) -> int:
     return exit_code
 
 
+def _load_listing_manifest(manifest_path: Path) -> object | None:
+    try:
+        return json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, RecursionError):
+        return None
+
+
 def _listing_manifest_recency_key(manifest_path: Path) -> tuple[int, float, str]:
     deterministic_fallback = manifest_path.parent.as_posix()
+    manifest = _load_listing_manifest(manifest_path)
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         started_at = datetime.fromisoformat(manifest["started_at"])
         if started_at.tzinfo is None:
             started_at = started_at.replace(tzinfo=UTC)
         timestamp = started_at.astimezone(UTC).timestamp()
     except (
-        OSError,
         OverflowError,
         TypeError,
         ValueError,
         KeyError,
-        json.JSONDecodeError,
     ):
         return (0, 0.0, deterministic_fallback)
     return (1, timestamp, deterministic_fallback)
@@ -488,11 +493,7 @@ def listing_build(root: Path, args) -> int:
         print(f"找不到 manifest: {manifest_path}", file=sys.stderr)
         return 1
 
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        print(f"無法讀取 manifest: {manifest_path}", file=sys.stderr)
-        return 1
+    manifest = _load_listing_manifest(manifest_path)
     if not _valid_listing_build_manifest(manifest):
         print(f"無效的 manifest: {manifest_path}", file=sys.stderr)
         return 1
