@@ -1,6 +1,7 @@
 """Parsers for rendered 591 listing pages."""
 
 import json
+import math
 import re
 from dataclasses import dataclass
 from typing import Literal
@@ -60,7 +61,8 @@ def extract_rendered_page(html: str, listing_type: ListingType) -> ExtractionRes
     """Parse a rendered 591 page into validated listings and rejection diagnostics."""
     soup = BeautifulSoup(html, "html.parser")
     if listing_type == "newhouse" and soup.select("script[type='application/ld+json']"):
-        result = _extract_newhouse_jsonld(soup)
+        jsonld_result, has_usable_item_list = _extract_newhouse_jsonld(soup)
+        result = jsonld_result if has_usable_item_list else _extract_dom(soup, listing_type)
     else:
         result = _extract_dom(soup, listing_type)
 
@@ -86,6 +88,12 @@ def _extract_dom(soup: BeautifulSoup, listing_type: ListingType) -> ExtractionRe
             listings.append(_parse_dom_card(card, listing_type))
         except _CardError as error:
             rejected.append(RejectedListing(source_ref, error.reason_code, error.message))
+        except (ValueError, OverflowError):
+            rejected.append(
+                RejectedListing(
+                    source_ref, "missing_price", "Listing card has malformed numeric data"
+                )
+            )
     return ExtractionResult(
         listings=listings,
         rejected=rejected,
@@ -174,7 +182,7 @@ def _extract_dom_details(card, listing_type: ListingType) -> dict[str, str]:
         }
     if listing_type == "rental" and card.select_one(".item-info-price"):
         return {
-            "price": _text(card.select_one(".item-info-price")),
+            "price": _text(card.select_one(".item-info-price strong")),
             "attributes": " ".join(_text(element) for element in card.select(".item-info-txt")),
         }
     return {
@@ -185,9 +193,10 @@ def _extract_dom_details(card, listing_type: ListingType) -> dict[str, str]:
     }
 
 
-def _extract_newhouse_jsonld(soup: BeautifulSoup) -> ExtractionResult:
+def _extract_newhouse_jsonld(soup: BeautifulSoup) -> tuple[ExtractionResult, bool]:
     listings: list[SourceListing] = []
     rejected: list[RejectedListing] = []
+    has_usable_item_list = False
     for script in soup.select("script[type='application/ld+json']"):
         try:
             document = json.loads(script.get_text())
@@ -209,17 +218,21 @@ def _extract_newhouse_jsonld(soup: BeautifulSoup) -> ExtractionResult:
                     )
                 )
                 continue
+            has_usable_item_list = True
             for item in items:
                 source_ref = _jsonld_source_ref(item)
                 try:
                     listings.append(_parse_newhouse_item(item))
                 except _CardError as error:
                     rejected.append(RejectedListing(source_ref, error.reason_code, error.message))
-    return ExtractionResult(
-        listings=listings,
-        rejected=rejected,
-        representation="jsonld",
-        schema_version="591-newhouse-jsonld-v1",
+    return (
+        ExtractionResult(
+            listings=listings,
+            rejected=rejected,
+            representation="jsonld",
+            schema_version="591-newhouse-jsonld-v1",
+        ),
+        has_usable_item_list,
     )
 
 
@@ -256,6 +269,8 @@ def _parse_newhouse_item(item: object) -> SourceListing:
     high_price = _positive_int(offers.get("highPrice"))
     if low_price is None and high_price is None:
         raise _CardError("missing_price", "Product has no positive aggregate offer price")
+    if low_price is not None and high_price is not None and low_price > high_price:
+        raise _CardError("missing_price", "Product has an inverted aggregate offer price range")
 
     payload: dict[str, object] = {
         "id": listing_id,
@@ -297,8 +312,13 @@ def _text(element) -> str:
 def _canonical_url(value: object) -> str | None:
     if not isinstance(value, str) or not value.strip():
         return None
-    parsed = urlsplit(value.strip())
-    hostname = (parsed.hostname or "").lower()
+    try:
+        parsed = urlsplit(value.strip())
+        hostname = (parsed.hostname or "").lower()
+    except ValueError:
+        return None
+    if parsed.username is not None or parsed.password is not None:
+        return None
     if parsed.scheme != "https" or not (
         hostname == "591.com.tw" or hostname.endswith(".591.com.tw")
     ):
@@ -315,17 +335,35 @@ def _extract_coordinates(card) -> tuple[float, float]:
 
 def _parse_price_wan(text: str) -> int | None:
     match = re.search(r"([\d.]+)\s*萬", text.replace(",", ""))
-    return int(float(match.group(1)) * 10_000) if match else None
+    if not match:
+        return None
+    try:
+        price = float(match.group(1))
+    except (ValueError, OverflowError):
+        return None
+    return int(price * 10_000) if math.isfinite(price) else None
 
 
 def _parse_price_monthly(text: str) -> int | None:
     match = re.search(r"([\d.]+)", text.replace(",", ""))
-    return int(float(match.group(1))) if match else None
+    if not match:
+        return None
+    try:
+        price = float(match.group(1))
+    except (ValueError, OverflowError):
+        return None
+    return int(price) if math.isfinite(price) else None
 
 
 def _parse_area(text: str) -> float:
     match = re.search(r"([\d.]+)\s*坪", text)
-    return float(match.group(1)) if match else 0.0
+    if not match:
+        return 0.0
+    try:
+        area = float(match.group(1))
+    except (ValueError, OverflowError):
+        return 0.0
+    return area if math.isfinite(area) else 0.0
 
 
 def _parse_layout(text: str) -> tuple[int, int, int]:
@@ -358,13 +396,19 @@ def _parse_newhouse_area_range(description: str) -> tuple[float, float] | None:
     match = re.search(r"坪數\s*([\d.]+)\s*~\s*([\d.]+)\s*坪", description)
     if not match:
         return None
-    area_min, area_max = float(match.group(1)), float(match.group(2))
-    return (area_min, area_max) if area_min > 0 and area_max > 0 else None
+    try:
+        area_min, area_max = float(match.group(1)), float(match.group(2))
+    except (ValueError, OverflowError):
+        return None
+    if not (math.isfinite(area_min) and math.isfinite(area_max)):
+        return None
+    return (area_min, area_max) if 0 < area_min <= area_max and area_max > 0 else None
 
 
 def _positive_int(value: object) -> int | None:
     try:
-        parsed = int(float(str(value)))
-    except (TypeError, ValueError):
+        raw = float(str(value))
+        parsed = int(raw)
+    except (TypeError, ValueError, OverflowError):
         return None
-    return parsed if parsed > 0 else None
+    return parsed if math.isfinite(raw) and parsed > 0 else None

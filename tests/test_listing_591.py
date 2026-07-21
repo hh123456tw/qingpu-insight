@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,37 @@ def fixture_path(name: str) -> Path:
 
 def live_fixture(name: str) -> str:
     return fixture_path(name).read_text(encoding="utf-8")
+
+
+def newhouse_jsonld_html(items: list[dict[str, object]]) -> str:
+    return (
+        '<script type="application/ld+json">'
+        + json.dumps({"@type": "ItemList", "itemListElement": items}, ensure_ascii=False)
+        + "</script>"
+    )
+
+
+def newhouse_item(
+    listing_id: str,
+    description: str = "位於桃園市中壢區，坪數19~30坪",
+    low_price: int = 500_000,
+    high_price: int = 560_000,
+) -> dict[str, object]:
+    return {
+        "@type": "ListItem",
+        "item": {
+            "@type": "Product",
+            "name": f"測試建案 {listing_id}",
+            "url": f"https://newhouse.591.com.tw/{listing_id}",
+            "description": description,
+            "offers": {
+                "@type": "AggregateOffer",
+                "priceCurrency": "TWD",
+                "lowPrice": low_price,
+                "highPrice": high_price,
+            },
+        },
+    }
 
 
 def test_live_sale_dom_extracts_required_fields():
@@ -88,6 +120,101 @@ def test_live_dom_rejects_malformed_card_without_discarding_valid_sibling():
     assert [(rejection.source_ref, rejection.reason_code) for rejection in result.rejected] == [
         ("bad-001", "missing_price")
     ]
+
+
+def test_live_dom_rejects_bad_number_and_url_without_discarding_valid_sibling():
+    html = live_fixture("591_sale_live_page.html").replace(
+        "</body>",
+        """
+        <div class="ware-item" data-id="bad-number">
+          <div class="ware-item__header"><a href="https://sale.591.com.tw/bad-number">壞數字</a></div>
+          <div class="ware-item__attrs">2房1廳1衛 20坪 2F/10F</div>
+          <div class="ware-item__price-value">1.2.3萬</div>
+        </div>
+        <div class="ware-item" data-id="bad-url">
+          <div class="ware-item__header"><a href="https://[broken">壞網址</a></div>
+          <div class="ware-item__attrs">2房1廳1衛 20坪 2F/10F</div>
+          <div class="ware-item__price-value">100萬</div>
+        </div>
+        </body>
+        """,
+    )
+
+    result = extract_rendered_page(html, "sale")
+
+    assert [row.source_listing_id for row in result.listings] == ["20215131"]
+    assert [(rejection.source_ref, rejection.reason_code) for rejection in result.rejected] == [
+        ("bad-number", "missing_price"),
+        ("bad-url", "invalid_url"),
+    ]
+
+
+def test_live_dom_rejects_credential_bearing_url():
+    html = live_fixture("591_sale_live_page.html").replace(
+        "</body>",
+        """
+        <div class="ware-item" data-id="credential-url">
+          <div class="ware-item__header"><a href="https://user:secret@sale.591.com.tw/credential-url">帳密網址</a></div>
+          <div class="ware-item__attrs">2房1廳1衛 20坪 2F/10F</div>
+          <div class="ware-item__price-value">100萬</div>
+        </div>
+        </body>
+        """,
+    )
+
+    result = extract_rendered_page(html, "sale")
+
+    assert [row.source_listing_id for row in result.listings] == ["20215131"]
+    assert [(rejection.source_ref, rejection.reason_code) for rejection in result.rejected] == [
+        ("credential-url", "invalid_url")
+    ]
+
+
+def test_live_rental_dom_uses_strong_price_after_deposit_text():
+    html = live_fixture("591_rental_live_page.html").replace(
+        '<div class="item-info-price"><strong>14,500</strong> 元/月</div>',
+        '<div class="item-info-price">押金 29,000 元 <strong>14,500</strong> 元/月</div>',
+    )
+
+    result = extract_rendered_page(html, "rental")
+
+    assert result.listings[0].payload["monthly_rent_twd"] == 14_500
+
+
+@pytest.mark.parametrize(
+    "jsonld",
+    [
+        '<script type="application/ld+json">not json</script>',
+        '<script type="application/ld+json">{"@type":"Thing"}</script>',
+    ],
+)
+def test_unusable_jsonld_falls_back_to_legacy_newhouse_dom(jsonld):
+    html = fixture_path("591_newhouse_page.html").read_text(encoding="utf-8").replace(
+        "</body>", f"{jsonld}</body>"
+    )
+
+    result = extract_rendered_page(html, "newhouse")
+
+    assert result.representation == "dom"
+    assert [row.source_listing_id for row in result.listings] == ["NH-2001", "NH-2002"]
+
+
+@pytest.mark.parametrize(
+    ("bad_item", "reason_code"),
+    [
+        (newhouse_item("138380", low_price=560_000, high_price=500_000), "missing_price"),
+        (newhouse_item("138381", description="位於桃園市中壢區，坪數30~19坪"), "missing_area"),
+    ],
+)
+def test_newhouse_rejects_inverted_ranges_without_discarding_valid_sibling(
+    bad_item, reason_code
+):
+    result = extract_rendered_page(
+        newhouse_jsonld_html([newhouse_item("138379"), bad_item]), "newhouse"
+    )
+
+    assert [row.source_listing_id for row in result.listings] == ["138379"]
+    assert [rejection.reason_code for rejection in result.rejected] == [reason_code]
 
 
 @pytest.mark.parametrize(
