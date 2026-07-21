@@ -180,6 +180,25 @@ class TestListingSummary:
         assert result["active_count"] == 2
         assert result["median_price"] == 10_000_000
 
+    def test_newhouse_uses_unit_price_range_kpis_without_total_price(self) -> None:
+        frame = pd.DataFrame([
+            {
+                "listing_type": "newhouse",
+                "asking_price_twd": None,
+                "asking_unit_price_low_twd_per_ping": 500_000,
+                "asking_unit_price_high_twd_per_ping": 560_000,
+                "station_code": "A18",
+            },
+        ])
+
+        result = listing_summary(frame, ListingFilters("newhouse", ("A18",)))
+
+        assert result["median_price"] is None
+        assert result["min_price"] is None
+        assert result["max_price"] is None
+        assert result["median_unit_price_low"] == 500_000
+        assert result["median_unit_price_high"] == 560_000
+
 
 class TestPublicListings:
     def test_never_exposes_private_fields(self, listing_frame: pd.DataFrame) -> None:
@@ -204,11 +223,54 @@ class TestPublicListings:
         expected = {
             "listing_id", "type", "title", "source_url", "station",
             "area", "price", "event", "status", "latitude", "longitude",
-            "model_evidence", "snapshot_time",
+            "model_evidence", "snapshot_time", "unit_price_range_twd_per_ping",
+            "area_range_ping",
         }
         assert len(result) == 2
         for row in result:
             assert set(row.keys()) == expected
+
+    def test_newhouse_exposes_source_ranges_without_deriving_a_total_price(self) -> None:
+        frame = pd.DataFrame([
+            {
+                "source_listing_id": "N001",
+                "listing_type": "newhouse",
+                "title": "青埔預售案",
+                "asking_price_twd": None,
+                "asking_unit_price_low_twd_per_ping": 500_000,
+                "asking_unit_price_high_twd_per_ping": 560_000,
+                "building_area_min_ping": 19.0,
+                "building_area_max_ping": 30.0,
+                "station_code": "A18",
+            },
+        ])
+
+        item = public_listings(frame, ListingFilters(listing_type="newhouse"))[0]
+
+        assert item["price"] is None
+        assert item["unit_price_range_twd_per_ping"] == {
+            "low": 500_000,
+            "high": 560_000,
+        }
+        assert item["area_range_ping"] == {"low": 19.0, "high": 30.0}
+
+    def test_incomplete_source_range_preserves_the_known_endpoint(self) -> None:
+        frame = pd.DataFrame([
+            {
+                "source_listing_id": "N002",
+                "listing_type": "newhouse",
+                "asking_unit_price_low_twd_per_ping": 500_000,
+                "asking_unit_price_high_twd_per_ping": None,
+                "building_area_min_ping": 19.0,
+                "building_area_max_ping": None,
+                "station_code": "A18",
+            },
+        ])
+
+        item = public_listings(frame, ListingFilters(listing_type="newhouse"))[0]
+
+        assert item["unit_price_range_twd_per_ping"] == {"low": 500_000, "high": None}
+        assert item["area_range_ping"] == {"low": 19.0, "high": None}
 
     def test_empty_frame(self) -> None:
         assert public_listings(pd.DataFrame(), ListingFilters("sale")) == []

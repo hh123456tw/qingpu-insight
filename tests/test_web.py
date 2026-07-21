@@ -179,6 +179,7 @@ def listing_client(market_frame: pd.DataFrame) -> FlaskClient:
             "title": "青埔三房", "asking_price_twd": 18_000_000,
             "building_area_ping": 35.5, "station_code": "A18",
             "latitude": 25.0123, "longitude": 121.2018,
+            "location_eligible": True,
         },
         {
             "source": "591", "source_listing_id": "L002", "listing_type": "sale",
@@ -187,6 +188,26 @@ def listing_client(market_frame: pd.DataFrame) -> FlaskClient:
             "title": "A17大樓", "asking_price_twd": 22_000_000,
             "building_area_ping": 48.0, "station_code": "A17",
             "latitude": 25.0156, "longitude": 121.2078,
+            "location_eligible": True,
+        },
+        {
+            "source": "591", "source_listing_id": "N001", "listing_type": "newhouse",
+            "snapshot_at": pd.Timestamp("2026-07-20 10:00", tz="UTC"),
+            "source_url": "https://newhouse.591.com.tw/N001",
+            "title": "青埔預售案", "asking_price_twd": None,
+            "asking_unit_price_low_twd_per_ping": 500_000,
+            "asking_unit_price_high_twd_per_ping": 560_000,
+            "building_area_min_ping": 19.0, "building_area_max_ping": 30.0,
+            "station_code": "A18", "latitude": 25.0123, "longitude": 121.2018,
+            "location_eligible": True,
+        },
+        {
+            "source": "591", "source_listing_id": "OUT001", "listing_type": "newhouse",
+            "snapshot_at": pd.Timestamp("2026-07-20 10:00", tz="UTC"),
+            "source_url": "https://newhouse.591.com.tw/OUT001",
+            "title": "圈外預售案", "asking_price_twd": 20_000_000,
+            "station_code": "A18", "latitude": 25.0123, "longitude": 121.2018,
+            "location_eligible": False,
         },
     ])
     events_df = pd.DataFrame([
@@ -240,9 +261,26 @@ class TestListingApi:
         expected = {
             "listing_id", "type", "title", "source_url", "station",
             "area", "price", "event", "status", "latitude", "longitude",
-            "model_evidence", "snapshot_time",
+            "model_evidence", "snapshot_time", "unit_price_range_twd_per_ping",
+            "area_range_ping",
         }
         assert set(row.keys()) == expected
+
+    def test_listings_omits_location_ineligible_and_preserves_missing_total_price(
+        self, listing_client: FlaskClient
+    ) -> None:
+        response = listing_client.get("/api/listings?listing_type=newhouse&station=A18")
+
+        assert response.status_code == 200
+        items = response.get_json()["items"]
+        assert [item["listing_id"] for item in items] == ["N001"]
+        assert items[0]["price"] is None
+        assert items[0]["unit_price_range_twd_per_ping"] == {
+            "low": 500_000,
+            "high": 560_000,
+        }
+        assert items[0]["area_range_ping"] == {"low": 19.0, "high": 30.0}
+        assert "NaN" not in response.get_data(as_text=True)
 
     def test_listing_events_returns_filtered(self, listing_client: FlaskClient) -> None:
         response = listing_client.get("/api/listing-events?listing_type=sale")

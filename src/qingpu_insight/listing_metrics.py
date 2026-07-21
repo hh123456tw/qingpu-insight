@@ -14,6 +14,20 @@ class ListingFilters:
     limit: int = 100
 
 
+def _numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
+    if column not in df.columns:
+        return pd.Series([], dtype=float)
+    return pd.to_numeric(df[column], errors="coerce").replace(
+        [np.inf, -np.inf], np.nan
+    ).dropna()
+
+
+def _summary_value(prices: pd.Series, operation: str) -> float | None:
+    if prices.empty:
+        return None
+    return float(getattr(prices, operation)())
+
+
 def listing_summary(df: pd.DataFrame, filters: ListingFilters) -> dict[str, Any]:
     if df.empty:
         return {
@@ -23,6 +37,8 @@ def listing_summary(df: pd.DataFrame, filters: ListingFilters) -> dict[str, Any]
             "median_price": None,
             "min_price": None,
             "max_price": None,
+            "median_unit_price_low": None,
+            "median_unit_price_high": None,
             "snapshot_time": None,
         }
 
@@ -35,7 +51,9 @@ def listing_summary(df: pd.DataFrame, filters: ListingFilters) -> dict[str, Any]
 
     is_sale = filters.listing_type in ("sale", "newhouse")
     price_col = "asking_price_twd" if is_sale else "monthly_rent_twd"
-    prices = df[price_col].dropna() if price_col in df.columns else pd.Series([], dtype=float)
+    prices = _numeric_series(df, price_col)
+    unit_price_lows = _numeric_series(df, "asking_unit_price_low_twd_per_ping")
+    unit_price_highs = _numeric_series(df, "asking_unit_price_high_twd_per_ping")
 
     snapshot_time = None
     if "snapshot_at" in df.columns and not df.empty:
@@ -49,9 +67,19 @@ def listing_summary(df: pd.DataFrame, filters: ListingFilters) -> dict[str, Any]
         "listing_type": filters.listing_type,
         "station_codes": list(filters.station_codes),
         "active_count": int(len(df)),
-        "median_price": float(prices.median()) if not prices.empty else None,
-        "min_price": float(prices.min()) if not prices.empty else None,
-        "max_price": float(prices.max()) if not prices.empty else None,
+        "median_price": _summary_value(prices, "median"),
+        "min_price": _summary_value(prices, "min"),
+        "max_price": _summary_value(prices, "max"),
+        "median_unit_price_low": (
+            _summary_value(unit_price_lows, "median")
+            if filters.listing_type == "newhouse"
+            else None
+        ),
+        "median_unit_price_high": (
+            _summary_value(unit_price_highs, "median")
+            if filters.listing_type == "newhouse"
+            else None
+        ),
         "snapshot_time": str(snapshot_time) if snapshot_time is not None else None,
     }
 
@@ -66,6 +94,29 @@ def _round_coord(val: Any) -> float | None:
         return round(v, 4)
     except (ValueError, TypeError):
         return None
+
+
+def _safe_number(value: Any, converter: type[int] | type[float]) -> int | float | None:
+    if value is None or pd.isna(value):
+        return None
+    try:
+        parsed = float(value)
+        if not np.isfinite(parsed):
+            return None
+        return converter(parsed)
+    except (TypeError, ValueError):
+        return None
+
+
+def _public_range(
+    row: pd.Series,
+    low_column: str,
+    high_column: str,
+    converter: type[int] | type[float],
+) -> dict[str, int | float | None]:
+    low = _safe_number(row.get(low_column), converter)
+    high = _safe_number(row.get(high_column), converter)
+    return {"low": low, "high": high}
 
 
 def public_listings(df: pd.DataFrame, filters: ListingFilters) -> list[dict[str, Any]]:
@@ -85,8 +136,7 @@ def public_listings(df: pd.DataFrame, filters: ListingFilters) -> list[dict[str,
     for _, row in df.iterrows():
         is_sale = filters.listing_type in ("sale", "newhouse")
         price_col = "asking_price_twd" if is_sale else "monthly_rent_twd"
-        raw_price = row.get(price_col)
-        price = int(raw_price) if raw_price is not None and not pd.isna(raw_price) else None
+        price = _safe_number(row.get(price_col), int)
 
         station = row.get("station_code")
         if station is not None and not pd.isna(station):
@@ -100,11 +150,7 @@ def public_listings(df: pd.DataFrame, filters: ListingFilters) -> list[dict[str,
         else:
             snapshot = None
 
-        area = row.get("building_area_ping")
-        if area is not None and not pd.isna(area):
-            area = float(area)
-        else:
-            area = None
+        area = _safe_number(row.get("building_area_ping"), float)
 
         results.append({
             "listing_id": str(row.get("source_listing_id", "")),
@@ -120,6 +166,18 @@ def public_listings(df: pd.DataFrame, filters: ListingFilters) -> list[dict[str,
             "longitude": _round_coord(row.get("longitude")),
             "model_evidence": None,
             "snapshot_time": snapshot,
+            "unit_price_range_twd_per_ping": _public_range(
+                row,
+                "asking_unit_price_low_twd_per_ping",
+                "asking_unit_price_high_twd_per_ping",
+                int,
+            ),
+            "area_range_ping": _public_range(
+                row,
+                "building_area_min_ping",
+                "building_area_max_ping",
+                float,
+            ),
         })
     return results
 

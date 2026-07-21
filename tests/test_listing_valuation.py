@@ -218,6 +218,32 @@ def test_newhouse_maps_to_presale(registry, market, bundle):
     assert result["valuation_eligible"] is True
 
 
+def test_newhouse_without_total_price_never_calls_model():
+    listing = _listing(
+        listing_type="newhouse",
+        asking_price_twd=None,
+        asking_unit_price_low_twd_per_ping=500_000,
+        asking_unit_price_high_twd_per_ping=560_000,
+    )
+    spy = SpyRegistry()
+
+    result = compare_listing_to_model(
+        listing,
+        spy,
+        pd.DataFrame(),
+        station_code="A18",
+        station_distance_m=500,
+        location_eligible=True,
+    )
+
+    assert result == {
+        "valuation_eligible": False,
+        "reason": "no_total_asking_price",
+        "advertised_unit_price_range_twd_per_ping": (500_000, 560_000),
+    }
+    assert spy.calls == []
+
+
 # ── Location ineligibility ────────────────────────────────────────
 
 def test_outside_area_rejected():

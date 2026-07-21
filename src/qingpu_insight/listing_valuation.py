@@ -63,6 +63,16 @@ def compare_listing_to_model(
     if not location_eligible:
         return {"valuation_eligible": False, "reason": "location_ineligible"}
 
+    if listing.listing_type == "newhouse" and listing.asking_price_twd is None:
+        return {
+            "valuation_eligible": False,
+            "reason": "no_total_asking_price",
+            "advertised_unit_price_range_twd_per_ping": (
+                listing.asking_unit_price_low_twd_per_ping,
+                listing.asking_unit_price_high_twd_per_ping,
+            ),
+        }
+
     required = _REQUIRED_FOR_TRANSACTION_TYPE[transaction_type]
     missing = [f for f in required if getattr(listing, f, None) is None]
     if missing:
