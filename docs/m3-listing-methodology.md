@@ -15,12 +15,20 @@ M3 刊登資訊（Listing Intelligence）模組為青埔智價新增即時房源
 ### 必要軟體
 
 - **Chrome 瀏覽器**（最新穩定版）
-- ChromeDriver（由 `chromedriver-autoinstaller` 或 `webdriver-manager` 自動管理）
+- ChromeDriver（由 Selenium Manager 管理）
 - Python >= 3.11
 
 ### 授權假設
 
-591 需要登入才能瀏覽部分頁面（尤其是租賃）。系統假設使用者已**自行完成登入**並將 Chrome 使用者資料目錄（profile）路徑傳入設定檔或環境變數。系統不會儲存或管理任何 591 帳號密碼。
+M3 只瀏覽使用者獲准存取的 591 公開頁面，不呼叫私人端點，也不繞過驗證。可見 Chrome 是預設值；`--headless` 僅為 best-effort。若獲准頁面需要既有瀏覽器狀態，可用 `--profile-dir <path>` 將本機 Chrome user-data 目錄交給 Selenium；請使用專用且未被其他 Chrome 程序占用的目錄。帳號、密碼、Cookie 或聯絡欄位不進入 manifest、結構化快照或 API，密碼也不得出現在命令列；本機 raw HTML 可能重現公開頁面文字，必須留在忽略路徑並依資料保留政策刪除。
+
+公開桃園路由：
+
+| 類型 | 請求路由 |
+|------|----------|
+| sale | `https://sale.591.com.tw/?shType=list&regionid=6` |
+| newhouse | `https://newhouse.591.com.tw/housing-list.html?regionid=6`（目前導向 `/list?regionid=6`） |
+| rental | `https://rent.591.com.tw/list?region=6` |
 
 ### 環境變數
 
@@ -45,13 +53,16 @@ M3 提供三條 CLI 指令，可組合使用或一鍵完成。
 # 同時擷取三種類型（各 5 頁）
 .\.venv\Scripts\qingpu-data.exe listing-scrape --types sale newhouse rental --max-pages 5
 
-# 使用已有 Chrome profile（非 headless，可先手動登入 591）
-.\.venv\Scripts\qingpu-data.exe listing-scrape --types rental --max-pages 3 --no-headless
+# 使用已有的專用 Chrome user-data 目錄（仍為可見 Chrome）
+.\.venv\Scripts\qingpu-data.exe listing-scrape --types rental --max-pages 3 --profile-dir C:\path\to\dedicated-profile
+
+# headless 是 best-effort，不是預設值
+.\.venv\Scripts\qingpu-data.exe listing-scrape --types sale --max-pages 1 --headless
 ```
 
 ### 3.2 listing-build（離線正規化與定位）
 
-從 `data/raw/listings/591/` 中最新的原始批次讀取 HTML，解析、正規化、定位後存入 `data/processed/`。
+從 `data/raw/listings/591/` 中最新的原始批次讀取 HTML，解析、正規化、定位後存入 `data/processed/`，並更新 `listing_snapshots.parquet` 聚合快照。只有 `is_complete=true` 的 manifest 可進入 build；若擷取因 `--max-pages` 上限停止，必須保留原始 manifest 的 `false`，不得為了 build 改寫原始證據。
 
 ```powershell
 # 處理最新批次
@@ -92,16 +103,24 @@ data/raw/listings/591/{date}/{batch_id}/
 └── ...
 ```
 
-### 處理後路徑（提交 Git）
+### 處理後路徑（本機產物，不提交 Git）
 
 ```
 data/processed/
 ├── current.parquet        # 最新快照（upsert 語意）
+├── listing_snapshots.parquet # 聚合歷史快照
 ├── events.parquet         # 事件記錄（event_key 唯一）
 └── snapshots/
     ├── {batch_id}.parquet # 各批次歷史快照
     └── ...
 ```
+
+### 表示法與 newhouse 範圍語意
+
+- sale 與 rental 目前從渲染後 DOM 卡片解析，manifest 記錄 `representation=dom` 與對應 schema version。
+- newhouse 目前從公開頁面的 `ItemList` / `Product` JSON-LD 解析，manifest 記錄 `representation=jsonld`。
+- JSON-LD `AggregateOffer.lowPrice` / `highPrice` 是每坪開價範圍；描述中的 `坪數規劃 low~high 坪` 是面積範圍。系統保留 low/high，不以中點冒充精確值，`asking_price_twd` 與 `building_area_ping` 維持空值。
+- 公開 newhouse JSON-LD 未提供可靠座標時，`location_eligible=False`；這些列不進入 A17–A19 兩公里指標或 M2 開價比對，也不從建案名稱或標題猜測座標。
 
 ## 5. MySQL 遷移路徑
 
@@ -166,7 +185,7 @@ Listing valuation（`listing_valuation.py`）在 M2 模型可用時，可為 sal
 ## 9. 隱私規範
 
 1. **不儲存** 591 帳號、密碼、Cookie、Session Token
-2. **不儲存** 聯絡人姓名、電話、Email
+2. manifest、結構化快照與 API **不保留** 聯絡人姓名、電話、Email 欄位；本機 raw HTML 仍可能包含公開頁面文字
 3. **不儲存** 原始 HTML 在 Git 追蹤路徑內（`data/raw/listings/` 已排除）
 4. **公開 API** 只回傳 `public_listings()` 定義的欄位，不包含內部 `raw_hash`、`batch_id` 等
 5. `listing_metrics.py` 中的 `public_listings()` 已過濾掉所有非公開欄位
@@ -190,6 +209,33 @@ Selenium 在擷取過程中斷（網路不穩、Chrome 崩潰、手動中斷）�
 - 遺漏的 listing 在非完整批次中被標記為 `active = True`，保留之前的 `consecutive_absences`
 - 僅連續兩次完整批次未出現才視為下架
 
-## 11. 排程執行（M4）
+## 11. 2026-07-22 可見瀏覽器驗收證據
+
+從隔離 worktree 執行下列無密碼命令：
+
+```powershell
+$env:PYTHONPATH = "<worktree>\src"
+<python> -m qingpu_insight.cli listing-scrape --types sale newhouse rental --max-pages 1 --page-timeout 45 --delay-min 2 --delay-max 4
+```
+
+| 類型 | accepted / rejected | 表示法 | 原始 batch（`is_complete=false`） |
+|------|---------------------|--------|----------------------------------|
+| sale | 31 / 0 | DOM | `data/raw/listings/591/2026-07-21/591-sale-20260721T175130Z` |
+| newhouse | 7 / 7 | JSON-LD | `data/raw/listings/591/2026-07-21/591-newhouse-20260721T175137Z` |
+| rental | 30 / 0 | DOM | `data/raw/listings/591/2026-07-21/591-rental-20260721T175142Z` |
+
+newhouse 的七筆拒絕包含四個非 `ItemList` JSON-LD 文件及三個沒有正值開價範圍的 Product；拒絕不會被當成成功資料。三份原始 manifest 都保留 `reached_terminal_page=false`、`is_complete=false`，raw batch 位於 `.gitignore` 排除路徑。
+
+為驗證離線解析與 Parquet 持久化，將三個 batch 複製到 `data/raw/task-6-acceptance/`；頁面 SHA-256 與原始檔相同，只在**複製的** manifest 將 `reached_terminal_page`、`is_complete` 設為 `true`，再逐一執行：
+
+```powershell
+<python> -m qingpu_insight.cli listing-build --batch-dir data/raw/task-6-acceptance/591-sale-20260721T175130Z
+<python> -m qingpu_insight.cli listing-build --batch-dir data/raw/task-6-acceptance/591-newhouse-20260721T175137Z
+<python> -m qingpu_insight.cli listing-build --batch-dir data/raw/task-6-acceptance/591-rental-20260721T175142Z
+```
+
+三次 build 均為 exit 0。`data/processed/listing_snapshots.parquet` 共 68 列（31 sale、7 newhouse、30 rental），具有穩定 source ID、canonical HTTPS 591 URL、SHA-256 `raw_hash`、batch/snapshot/representation/schema 中繼資料，且無聯絡或憑證欄位。sale 保留 31 筆精確總價與面積，rental 保留 30 筆月租與面積；newhouse 保留七筆單價與面積範圍、沒有虛構精確值，七筆皆為 `location_eligible=False`。
+
+## 12. 排程執行（M4）
 
 定期自動擷取（如每日排程）屬於 **M4** 範疇，不在本版本實作範圍內。

@@ -149,14 +149,27 @@ mysql -u root -p < database/001_market_schema.sql
 ### 前提
 
 - Chrome 瀏覽器（最新穩定版）
-- 若需瀏覽登入後頁面（如租賃），請自行先以 `--no-headless` 登入 591
-- 系統**不儲存**任何 591 帳號、密碼或 Cookie
+- 預設開啟可見 Chrome；`--headless` 僅為 best-effort，591 頁面或驗證流程可能不支援
+- `--profile-dir <path>` 會把本機 Chrome user-data 目錄傳給 Selenium；請使用專用且未被其他 Chrome 程序占用的目錄
+- 系統不把 591 帳號、密碼、Cookie 或聯絡欄位寫入 manifest、結構化快照或 API；不要把密碼放在命令列。原始 HTML 可能重現公開頁面文字，必須留在本機忽略路徑並依資料保留政策刪除
+
+三種公開桃園路由分別為：
+
+- sale：`https://sale.591.com.tw/?shType=list&regionid=6`
+- newhouse：`https://newhouse.591.com.tw/housing-list.html?regionid=6`（目前會導向 `/list?regionid=6`）
+- rental：`https://rent.591.com.tw/list?region=6`
 
 ### 三種 CLI 模式
 
 ```powershell
 # 僅擷取原始 HTML 頁面（存入 data/raw/listings/591/）
 .\.venv\Scripts\qingpu-data.exe listing-scrape --types sale --max-pages 10
+
+# 使用既有的本機 Chrome user-data 目錄；仍維持可見瀏覽器
+.\.venv\Scripts\qingpu-data.exe listing-scrape --types rental --max-pages 3 --profile-dir C:\path\to\dedicated-profile
+
+# headless 是 best-effort 選項
+.\.venv\Scripts\qingpu-data.exe listing-scrape --types sale --max-pages 1 --headless
 
 # 離線正規化與定位最新原始批次
 .\.venv\Scripts\qingpu-data.exe listing-build
@@ -166,6 +179,20 @@ mysql -u root -p < database/001_market_schema.sql
 ```
 
 `--max-pages` 是擷取上限；尚未抵達末頁的批次會標記為不完整，且不參與下架判定。設定 `QINGPU_DATABASE_URL` 可改用 MySQL；密碼中的 `@` 等保留字元需先做 URL encoding。
+
+2026-07-22 的可見 Chrome 一頁驗收命令為：
+
+```powershell
+python -m qingpu_insight.cli listing-scrape --types sale newhouse rental --max-pages 1 --page-timeout 45 --delay-min 2 --delay-max 4
+```
+
+原始證據（皆維持 `is_complete=false`）位於：
+
+- `data/raw/listings/591/2026-07-21/591-sale-20260721T175130Z`：31 accepted、0 rejected、DOM
+- `data/raw/listings/591/2026-07-21/591-newhouse-20260721T175137Z`：7 accepted、7 rejected、JSON-LD
+- `data/raw/listings/591/2026-07-21/591-rental-20260721T175142Z`：30 accepted、0 rejected、DOM
+
+newhouse 的 JSON-LD 提供每坪單價 `lowPrice` / `highPrice` 與坪數範圍，而非單一總價；無可靠座標的建案保留 `location_eligible=False`，不進入 A17–A19 指標或估價，不以標題猜測位置。
 
 ### 事件類型
 
@@ -182,8 +209,9 @@ mysql -u root -p < database/001_market_schema.sql
 | 檔案 | 階段 | 說明 |
 |------|------|------|
 | `data/raw/listings/591/{date}/{batch}/` | scrape | 原始 HTML 批次（不提交 Git） |
-| `data/processed/current.parquet` | sync | 最新快照 |
-| `data/processed/snapshots/{batch}.parquet` | sync | 歷史批次快照 |
+| `data/processed/current.parquet` | build / sync | 最新快照 |
+| `data/processed/snapshots/{batch}.parquet` | build / sync | 歷史批次快照 |
+| `data/processed/listing_snapshots.parquet` | build / sync | 聚合歷史快照 |
 | `data/processed/events.parquet` | sync | 事件記錄（SHA-256 去重） |
 
 ### API 路由
@@ -199,7 +227,7 @@ mysql -u root -p < database/001_market_schema.sql
 - 原始 HTML **不提交 Git**（`data/raw/listings/` 已排除）
 - 公開 API 回傳已過濾欄位，不包含 `raw_hash`、`batch_id` 等內部欄位
 - 座標經四捨五入至小數四位
-- 不儲存聯絡資訊
+- manifest、結構化快照與 API 不保留聯絡欄位；本機 raw HTML 仍可能包含公開頁面文字
 - 不儲存帳號密碼
 
 ### 方法論文件

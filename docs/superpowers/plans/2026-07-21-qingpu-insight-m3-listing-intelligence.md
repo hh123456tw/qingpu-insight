@@ -733,11 +733,11 @@ git commit -m "feat: publish M3 listing intelligence dashboard"
 **Interfaces:**
 - Produces: reproducible operator commands and M3 release evidence.
 
-- [ ] **Step 1: Document exact setup and operation**
+- [x] **Step 1: Document exact setup and operation**
 
 Document Chrome/Selenium prerequisites, authorization assumption, environment variables, three CLI flows, raw/processed paths, MySQL migration order, API routes, event definitions, M2 separation, privacy rules, and recovery from incomplete batches. State that scheduled execution remains M4.
 
-- [ ] **Step 2: Run the automated release gate**
+- [x] **Step 2: Run the automated release gate**
 
 Run:
 
@@ -749,7 +749,7 @@ git diff --check
 
 Expected: all tests pass, Ruff reports `All checks passed!`, and `git diff --check` has no output.
 
-- [ ] **Step 3: Run fixture-based end-to-end verification**
+- [x] **Step 3: Run fixture-based end-to-end verification**
 
 Run `listing-sync` with a fake/fixture source and assert:
 
@@ -761,7 +761,7 @@ Run `listing-sync` with a fake/fixture source and assert:
 - sale/newhouse valuation results include model versions;
 - rental results never contain sale valuation fields.
 
-- [ ] **Step 4: Run authorized one-page smoke tests manually**
+- [x] **Step 4: Run authorized one-page smoke tests manually**
 
 ```powershell
 .\.venv\Scripts\qingpu-data.exe listing-scrape --types sale --max-pages 1
@@ -771,26 +771,28 @@ Run `listing-sync` with a fake/fixture source and assert:
 
 For each command, verify exit code 0, one rendered HTML page, an intentionally incomplete manifest because `--max-pages 1` is a cap rather than proof of the terminal page, a non-zero parsed count, no contact fields, and no credentials in logs. If a selector changed, update the anonymized fixture and parser test before changing production selectors.
 
-- [ ] **Step 5: Audit the repository for prohibited data**
+- [x] **Step 5: Audit the repository for prohibited data**
 
 Run searches for phone-number patterns, cookie names, authorization text, raw HTML under tracked paths, `.env`, Chrome profiles, tokens, and credentials. Remove any generated secrets from the staging set and rotate them if they were ever committed.
 
-- [ ] **Step 6: Commit documentation and release evidence**
+- [x] **Step 6: Commit documentation and release evidence**
 
 ```powershell
 git add README.md docs/m3-listing-methodology.md .gitignore
 git commit -m "docs: publish M3 listing methodology"
 ```
 
+Task 6 acceptance evidence (2026-07-22): the full pytest suite reached 100% with exit 0; Ruff and `git diff --check` exited 0. The authorized visible combined one-page command exited 0 with sale 31/0 DOM (`591-sale-20260721T175130Z`), newhouse 7/7 JSON-LD (`591-newhouse-20260721T175137Z`), and rental 30/0 DOM (`591-rental-20260721T175142Z`); all original manifests remain intentionally incomplete. Copied-batch builds exited 0 and produced 68 aggregate Parquet rows. The tracked-file audit found no live raw batch, browser profile, `.env`, Taiwan mobile number, or contact/credential field in listing fixtures; deliberate dummy credential URLs remain only in fail-closed parser tests.
+
 ---
 
 ## Final Review Checklist
 
-- [ ] Existing uncommitted draft code has been replaced, not silently committed as-is.
-- [ ] No private endpoint URL or anti-bot bypass behavior remains.
-- [ ] All three listing types have independent parser, batch, repository, event, and API tests.
-- [ ] Every downlisting decision requires two complete missing batches.
-- [ ] A17–A19 two-kilometre eligibility is enforced before metrics and valuation.
-- [ ] M2 model frames still load only official M1 transactions.
-- [ ] Full tests, Ruff, diff check, fixture E2E, and authorized one-page smoke tests pass.
-- [ ] Git status contains no raw HTML, credentials, browser profiles, or contact data.
+- [x] Existing uncommitted draft code has been replaced, not silently committed as-is.
+- [x] No private endpoint URL or anti-bot bypass behavior remains.
+- [x] All three listing types have independent parser, batch, repository, event, and API tests.
+- [x] Every downlisting decision requires two complete missing batches.
+- [x] A17–A19 two-kilometre eligibility is enforced before metrics and valuation.
+- [x] M2 model frames still load only official M1 transactions.
+- [x] Full tests, Ruff, diff check, fixture E2E, and authorized one-page smoke tests pass.
+- [x] Git status contains no raw HTML, credentials, browser profiles, or contact data.
