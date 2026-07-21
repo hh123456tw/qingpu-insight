@@ -241,6 +241,12 @@ CREATE TABLE IF NOT EXISTS listing_snapshots (
   asking_price_twd BIGINT UNSIGNED NULL,
   monthly_rent_twd BIGINT UNSIGNED NULL,
   building_area_ping DECIMAL(10,2) NULL,
+  asking_unit_price_low_twd_per_ping BIGINT UNSIGNED NULL,
+  asking_unit_price_high_twd_per_ping BIGINT UNSIGNED NULL,
+  building_area_min_ping DECIMAL(10,2) NULL,
+  building_area_max_ping DECIMAL(10,2) NULL,
+  acquisition_representation VARCHAR(24) NOT NULL,
+  acquisition_schema_version VARCHAR(64) NOT NULL,
   building_type VARCHAR(80) NULL,
   bedrooms TINYINT UNSIGNED NULL,
   living_rooms TINYINT UNSIGNED NULL,
@@ -272,6 +278,12 @@ CREATE TABLE IF NOT EXISTS listing_current (
   asking_price_twd BIGINT UNSIGNED NULL,
   monthly_rent_twd BIGINT UNSIGNED NULL,
   building_area_ping DECIMAL(10,2) NULL,
+  asking_unit_price_low_twd_per_ping BIGINT UNSIGNED NULL,
+  asking_unit_price_high_twd_per_ping BIGINT UNSIGNED NULL,
+  building_area_min_ping DECIMAL(10,2) NULL,
+  building_area_max_ping DECIMAL(10,2) NULL,
+  acquisition_representation VARCHAR(24) NOT NULL,
+  acquisition_schema_version VARCHAR(64) NOT NULL,
   building_type VARCHAR(80) NULL,
   bedrooms TINYINT UNSIGNED NULL,
   living_rooms TINYINT UNSIGNED NULL,
@@ -325,6 +337,9 @@ INSERT IGNORE INTO listing_snapshots
     (batch_id, source, listing_type, source_listing_id, snapshot_at,
      source_url, title,
      asking_price_twd, monthly_rent_twd, building_area_ping,
+     asking_unit_price_low_twd_per_ping, asking_unit_price_high_twd_per_ping,
+     building_area_min_ping, building_area_max_ping,
+     acquisition_representation, acquisition_schema_version,
      building_type, bedrooms, living_rooms, bathrooms,
      building_age_years, floor, total_floors, parking_type,
      latitude, longitude, station_code, station_distance_m,
@@ -333,6 +348,9 @@ VALUES
     (%(batch_id)s, %(source)s, %(listing_type)s, %(source_listing_id)s, %(snapshot_at)s,
      %(source_url)s, %(title)s,
      %(asking_price_twd)s, %(monthly_rent_twd)s, %(building_area_ping)s,
+     %(asking_unit_price_low_twd_per_ping)s, %(asking_unit_price_high_twd_per_ping)s,
+     %(building_area_min_ping)s, %(building_area_max_ping)s,
+     %(acquisition_representation)s, %(acquisition_schema_version)s,
      %(building_type)s, %(bedrooms)s, %(living_rooms)s, %(bathrooms)s,
      %(building_age_years)s, %(floor)s, %(total_floors)s, %(parking_type)s,
      %(latitude)s, %(longitude)s, %(station_code)s, %(station_distance_m)s,
@@ -344,6 +362,9 @@ INSERT INTO listing_current
     (source, listing_type, source_listing_id, snapshot_at,
      source_url, title,
      asking_price_twd, monthly_rent_twd, building_area_ping,
+     asking_unit_price_low_twd_per_ping, asking_unit_price_high_twd_per_ping,
+     building_area_min_ping, building_area_max_ping,
+     acquisition_representation, acquisition_schema_version,
      building_type, bedrooms, living_rooms, bathrooms,
      building_age_years, floor, total_floors, parking_type,
      latitude, longitude, station_code, station_distance_m,
@@ -353,6 +374,9 @@ VALUES
     (%(source)s, %(listing_type)s, %(source_listing_id)s, %(snapshot_at)s,
      %(source_url)s, %(title)s,
      %(asking_price_twd)s, %(monthly_rent_twd)s, %(building_area_ping)s,
+     %(asking_unit_price_low_twd_per_ping)s, %(asking_unit_price_high_twd_per_ping)s,
+     %(building_area_min_ping)s, %(building_area_max_ping)s,
+     %(acquisition_representation)s, %(acquisition_schema_version)s,
      %(building_type)s, %(bedrooms)s, %(living_rooms)s, %(bathrooms)s,
      %(building_age_years)s, %(floor)s, %(total_floors)s, %(parking_type)s,
      %(latitude)s, %(longitude)s, %(station_code)s, %(station_distance_m)s,
@@ -365,6 +389,12 @@ ON DUPLICATE KEY UPDATE
     asking_price_twd = VALUES(asking_price_twd),
     monthly_rent_twd = VALUES(monthly_rent_twd),
     building_area_ping = VALUES(building_area_ping),
+    asking_unit_price_low_twd_per_ping = VALUES(asking_unit_price_low_twd_per_ping),
+    asking_unit_price_high_twd_per_ping = VALUES(asking_unit_price_high_twd_per_ping),
+    building_area_min_ping = VALUES(building_area_min_ping),
+    building_area_max_ping = VALUES(building_area_max_ping),
+    acquisition_representation = VALUES(acquisition_representation),
+    acquisition_schema_version = VALUES(acquisition_schema_version),
     building_type = VALUES(building_type),
     bedrooms = VALUES(bedrooms),
     living_rooms = VALUES(living_rooms),
@@ -459,6 +489,24 @@ class MySQLListingRepository:
                         "asking_price_twd": _safe_int(row, "asking_price_twd"),
                         "monthly_rent_twd": _safe_int(row, "monthly_rent_twd"),
                         "building_area_ping": _safe_float(row, "building_area_ping"),
+                        "asking_unit_price_low_twd_per_ping": _safe_int(
+                            row, "asking_unit_price_low_twd_per_ping"
+                        ),
+                        "asking_unit_price_high_twd_per_ping": _safe_int(
+                            row, "asking_unit_price_high_twd_per_ping"
+                        ),
+                        "building_area_min_ping": _safe_float(
+                            row, "building_area_min_ping"
+                        ),
+                        "building_area_max_ping": _safe_float(
+                            row, "building_area_max_ping"
+                        ),
+                        "acquisition_representation": _safe_str(
+                            row, "acquisition_representation"
+                        ) or "unknown",
+                        "acquisition_schema_version": _safe_str(
+                            row, "acquisition_schema_version"
+                        ) or "unknown",
                         "building_type": _safe_str(row, "building_type"),
                         "bedrooms": _safe_int(row, "bedrooms"),
                         "living_rooms": _safe_int(row, "living_rooms"),

@@ -44,8 +44,13 @@ def source_newhouse() -> SourceListing:
             "id": "newhouse-001",
             "url": "https://newhouse.591.com.tw/home/ABC",
             "title": "高鐵站前兩房",
-            "asking_price_twd": 12_500_000,
-            "area_ping": 28.0,
+            "asking_price_twd": None,
+            "asking_unit_price_low_twd_per_ping": 500_000,
+            "asking_unit_price_high_twd_per_ping": 560_000,
+            "area_min_ping": 19.0,
+            "area_max_ping": 30.0,
+            "representation": "jsonld",
+            "schema_version": "591-newhouse-jsonld-v1",
             "layout_rooms": 2,
             "layout_living_rooms": 1,
             "layout_bathrooms": 1,
@@ -90,14 +95,38 @@ def test_sale_normalization_never_places_price_in_rent_field(source_sale):
 
 def test_newhouse_normalization(source_newhouse):
     row = normalize_listing(source_newhouse, SNAPSHOT_AT)
-    assert row.asking_price_twd == 12_500_000
+    assert row.asking_price_twd is None
     assert row.monthly_rent_twd is None
+    assert row.asking_unit_price_low_twd_per_ping == 500_000
+    assert row.asking_unit_price_high_twd_per_ping == 560_000
+    assert row.building_area_min_ping == 19.0
+    assert row.building_area_max_ping == 30.0
+    assert row.acquisition_representation == "jsonld"
+    assert row.acquisition_schema_version == "591-newhouse-jsonld-v1"
 
 
 def test_rental_normalization(source_rental):
     row = normalize_listing(source_rental, SNAPSHOT_AT)
     assert row.monthly_rent_twd == 15_000
     assert row.asking_price_twd is None
+
+
+def test_rental_normalization_discards_unit_price_ranges(source_rental):
+    ranged_rental = SourceListing(
+        source_listing_id=source_rental.source_listing_id,
+        listing_type=source_rental.listing_type,
+        source_url=source_rental.source_url,
+        payload=dict(
+            source_rental.payload,
+            asking_unit_price_low_twd_per_ping=1_000,
+            asking_unit_price_high_twd_per_ping=2_000,
+        ),
+    )
+
+    row = normalize_listing(ranged_rental, SNAPSHOT_AT)
+
+    assert row.asking_unit_price_low_twd_per_ping is None
+    assert row.asking_unit_price_high_twd_per_ping is None
 
 
 def test_normalization_contract_fields_present(source_sale):
@@ -184,6 +213,83 @@ def test_raw_hash_changes_when_content_differs(source_sale, source_newhouse):
     row1 = normalize_listing(source_sale, SNAPSHOT_AT)
     row2 = normalize_listing(source_newhouse, SNAPSHOT_AT)
     assert row1.raw_hash != row2.raw_hash
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("asking_unit_price_low_twd_per_ping", 510_000),
+        ("asking_unit_price_high_twd_per_ping", 570_000),
+        ("area_min_ping", 20.0),
+        ("area_max_ping", 31.0),
+        ("representation", "dom"),
+        ("schema_version", "591-newhouse-jsonld-v2"),
+    ],
+)
+def test_raw_hash_changes_when_range_or_acquisition_field_changes(
+    source_newhouse, field, replacement
+):
+    changed = SourceListing(
+        source_listing_id=source_newhouse.source_listing_id,
+        listing_type=source_newhouse.listing_type,
+        source_url=source_newhouse.source_url,
+        payload=dict(source_newhouse.payload, **{field: replacement}),
+    )
+
+    assert normalize_listing(source_newhouse, SNAPSHOT_AT).raw_hash != normalize_listing(
+        changed, SNAPSHOT_AT
+    ).raw_hash
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    [
+        ("asking_price_twd", 0),
+        ("monthly_rent_twd", -1),
+        ("area_ping", 0),
+        ("asking_unit_price_low_twd_per_ping", -1),
+        ("asking_unit_price_high_twd_per_ping", 0),
+        ("area_min_ping", -1.0),
+        ("area_max_ping", 0.0),
+    ],
+)
+def test_non_positive_monetary_and_area_values_are_rejected(
+    source_newhouse, field, invalid
+):
+    invalid_source = SourceListing(
+        source_listing_id=source_newhouse.source_listing_id,
+        listing_type=source_newhouse.listing_type,
+        source_url=source_newhouse.source_url,
+        payload=dict(source_newhouse.payload, **{field: invalid}),
+    )
+
+    with pytest.raises(ValueError, match=field):
+        normalize_listing(invalid_source, SNAPSHOT_AT)
+
+
+@pytest.mark.parametrize(
+    ("low_field", "high_field"),
+    [
+        (
+            "asking_unit_price_low_twd_per_ping",
+            "asking_unit_price_high_twd_per_ping",
+        ),
+        ("area_min_ping", "area_max_ping"),
+    ],
+)
+def test_inverted_ranges_are_rejected(source_newhouse, low_field, high_field):
+    invalid_source = SourceListing(
+        source_listing_id=source_newhouse.source_listing_id,
+        listing_type=source_newhouse.listing_type,
+        source_url=source_newhouse.source_url,
+        payload=dict(
+            source_newhouse.payload,
+            **{low_field: source_newhouse.payload[high_field] + 1},
+        ),
+    )
+
+    with pytest.raises(ValueError, match="range"):
+        normalize_listing(invalid_source, SNAPSHOT_AT)
 
 
 def test_raw_hash_format(source_sale):

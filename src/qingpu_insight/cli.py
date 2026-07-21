@@ -21,7 +21,11 @@ from qingpu_insight.downloads import (
 )
 from qingpu_insight.feasibility import evaluate_feasibility
 from qingpu_insight.geo import assign_life_circle, station_points
-from qingpu_insight.listing_591 import ListingSchemaError, SourceListing, parse_rendered_page
+from qingpu_insight.listing_591 import (
+    ListingSchemaError,
+    SourceListing,
+    extract_rendered_page,
+)
 from qingpu_insight.listing_capture import ChromeConfig, Selenium591Source
 from qingpu_insight.listing_events import detect_listing_events
 from qingpu_insight.listing_location import assign_listing_life_circle
@@ -289,6 +293,12 @@ def _normalized_to_rows(normalized: list[NormalizedListing]) -> list[dict]:
             "asking_price_twd": n.asking_price_twd,
             "monthly_rent_twd": n.monthly_rent_twd,
             "building_area_ping": n.building_area_ping,
+            "asking_unit_price_low_twd_per_ping": n.asking_unit_price_low_twd_per_ping,
+            "asking_unit_price_high_twd_per_ping": n.asking_unit_price_high_twd_per_ping,
+            "building_area_min_ping": n.building_area_min_ping,
+            "building_area_max_ping": n.building_area_max_ping,
+            "acquisition_representation": n.acquisition_representation,
+            "acquisition_schema_version": n.acquisition_schema_version,
             "building_type": n.building_type,
             "bedrooms": n.bedrooms,
             "living_rooms": n.living_rooms,
@@ -302,6 +312,34 @@ def _normalized_to_rows(normalized: list[NormalizedListing]) -> list[dict]:
             "raw_hash": n.raw_hash,
         }
         for n in normalized
+    ]
+
+
+def _parse_page_listings(
+    html: str,
+    listing_type: str,
+    representation: str = "unknown",
+    schema_version: str = "unknown",
+) -> list[SourceListing]:
+    extraction = extract_rendered_page(html, listing_type)
+    acquisition_representation = (
+        representation if representation != "unknown" else extraction.representation
+    )
+    acquisition_schema_version = (
+        schema_version if schema_version != "unknown" else extraction.schema_version
+    )
+    return [
+        SourceListing(
+            source_listing_id=listing.source_listing_id,
+            listing_type=listing.listing_type,
+            source_url=listing.source_url,
+            payload={
+                **listing.payload,
+                "representation": acquisition_representation,
+                "schema_version": acquisition_schema_version,
+            },
+        )
+        for listing in extraction.listings
     ]
 
 
@@ -389,8 +427,11 @@ def listing_build(root: Path, args) -> int:
             print(f"批次缺少頁面檔案: {html_path}", file=sys.stderr)
             return 1
         try:
-            parsed = parse_rendered_page(
-                html_path.read_text(encoding="utf-8"), listing_type
+            parsed = _parse_page_listings(
+                html_path.read_text(encoding="utf-8"),
+                listing_type,
+                str(page_info.get("representation", "unknown")),
+                str(page_info.get("schema_version", "unknown")),
             )
         except ListingSchemaError as exc:
             print(
@@ -482,7 +523,12 @@ def listing_sync(root: Path, args) -> int:
         for page in batch.pages:
             try:
                 all_listings.extend(
-                    parse_rendered_page(page.html, listing_type)
+                    _parse_page_listings(
+                        page.html,
+                        listing_type,
+                        page.representation,
+                        page.schema_version,
+                    )
                 )
             except ListingSchemaError as e:
                 print(

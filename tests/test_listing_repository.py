@@ -6,7 +6,12 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from qingpu_insight.listing_repository import MySQLListingRepository, ParquetListingRepository
+from qingpu_insight.listing_repository import (
+    _CREATE_CURRENT_SQL,
+    _CREATE_SNAPSHOTS_SQL,
+    MySQLListingRepository,
+    ParquetListingRepository,
+)
 from qingpu_insight.listing_sources import CaptureBatch, CapturedPage
 
 # ---------------------------------------------------------------------------
@@ -116,6 +121,12 @@ def normalized_rows() -> pd.DataFrame:
             "asking_price_twd": 18_800_000,
             "monthly_rent_twd": None,
             "building_area_ping": 35.5,
+            "asking_unit_price_low_twd_per_ping": 500_000,
+            "asking_unit_price_high_twd_per_ping": 560_000,
+            "building_area_min_ping": 19.0,
+            "building_area_max_ping": 30.0,
+            "acquisition_representation": "jsonld",
+            "acquisition_schema_version": "591-newhouse-jsonld-v1",
             "building_type": "住宅大樓",
             "bedrooms": 3,
             "living_rooms": 2,
@@ -138,6 +149,12 @@ def normalized_rows() -> pd.DataFrame:
             "asking_price_twd": 22_500_000,
             "monthly_rent_twd": None,
             "building_area_ping": 45.2,
+            "asking_unit_price_low_twd_per_ping": None,
+            "asking_unit_price_high_twd_per_ping": None,
+            "building_area_min_ping": None,
+            "building_area_max_ping": None,
+            "acquisition_representation": "dom",
+            "acquisition_schema_version": "591-sale-dom-v1",
             "building_type": "住宅大樓",
             "bedrooms": 3,
             "living_rooms": 2,
@@ -166,6 +183,12 @@ def rental_rows() -> pd.DataFrame:
             "asking_price_twd": None,
             "monthly_rent_twd": 15_000,
             "building_area_ping": 12.0,
+            "asking_unit_price_low_twd_per_ping": None,
+            "asking_unit_price_high_twd_per_ping": None,
+            "building_area_min_ping": None,
+            "building_area_max_ping": None,
+            "acquisition_representation": "dom",
+            "acquisition_schema_version": "591-rental-dom-v1",
             "building_type": "住宅大樓",
             "bedrooms": 1,
             "living_rooms": 1,
@@ -281,6 +304,31 @@ class TestRepositoryContract:
             ]
             assert len(match) == 1
             assert match.iloc[0]["asking_price_twd"] == row["asking_price_twd"]
+
+    @pytest.mark.parametrize("repo_fixture", [
+        "parquet_repository",
+        "mysql_fake_repository",
+    ])
+    def test_advertised_ranges_and_acquisition_metadata_roundtrip(
+        self, repo_fixture, complete_batch, normalized_rows, request,
+    ):
+        repo = request.getfixturevalue(repo_fixture)
+        repo.save_batch(complete_batch, normalized_rows.iloc[[0]])
+
+        expected = normalized_rows.iloc[0]
+        for stored in (
+            repo.load_snapshots(batch_id=complete_batch.batch_id).iloc[0],
+            repo.load_current().iloc[0],
+        ):
+            for column in (
+                "asking_unit_price_low_twd_per_ping",
+                "asking_unit_price_high_twd_per_ping",
+                "building_area_min_ping",
+                "building_area_max_ping",
+                "acquisition_representation",
+                "acquisition_schema_version",
+            ):
+                assert stored[column] == expected[column]
 
     @pytest.mark.parametrize("repo_fixture", [
         "parquet_repository",
@@ -499,6 +547,12 @@ class TestMySQLRepositoryActualAdapter:
             "active",
             "consecutive_absences",
             "last_seen_batch_id",
+            "asking_unit_price_low_twd_per_ping",
+            "asking_unit_price_high_twd_per_ping",
+            "building_area_min_ping",
+            "building_area_max_ping",
+            "acquisition_representation",
+            "acquisition_schema_version",
         ):
             assert column in sql
             assert column in params
@@ -515,9 +569,48 @@ class TestMySQLRepositoryActualAdapter:
             "station_distance_m",
             "location_eligible",
             "model_evidence",
+            "asking_unit_price_low_twd_per_ping",
+            "asking_unit_price_high_twd_per_ping",
+            "building_area_min_ping",
+            "building_area_max_ping",
+            "acquisition_representation",
+            "acquisition_schema_version",
         ):
             assert column in snapshot_sql
             assert column in snapshot_params
+
+        range_params = current_inserts[0][1]
+        assert range_params["asking_unit_price_low_twd_per_ping"] == 500_000
+        assert range_params["asking_unit_price_high_twd_per_ping"] == 560_000
+        assert range_params["building_area_min_ping"] == 19.0
+        assert range_params["building_area_max_ping"] == 30.0
+        assert range_params["acquisition_representation"] == "jsonld"
+        assert range_params["acquisition_schema_version"] == "591-newhouse-jsonld-v1"
+
+    def test_runtime_and_migration_schemas_define_range_and_acquisition_columns(self):
+        migration_sql = (
+            Path(__file__).parents[1] / "database" / "003_listing_intelligence_schema.sql"
+        ).read_text(encoding="utf-8")
+        migration_snapshots, migration_current = migration_sql.split(
+            "CREATE TABLE IF NOT EXISTS listing_current", maxsplit=1
+        )
+        schemas = (
+            _CREATE_SNAPSHOTS_SQL,
+            _CREATE_CURRENT_SQL,
+            migration_snapshots,
+            migration_current,
+        )
+
+        for schema in schemas:
+            for column in (
+                "asking_unit_price_low_twd_per_ping",
+                "asking_unit_price_high_twd_per_ping",
+                "building_area_min_ping",
+                "building_area_max_ping",
+                "acquisition_representation",
+                "acquisition_schema_version",
+            ):
+                assert column in schema
 
     def test_merge_state_updates_current_rows(self):
         connection = RecordingConnection()

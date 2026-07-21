@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from urllib.parse import urlsplit
@@ -32,6 +33,12 @@ class NormalizedListing:
     latitude: float | None
     longitude: float | None
     raw_hash: str
+    asking_unit_price_low_twd_per_ping: int | None = None
+    asking_unit_price_high_twd_per_ping: int | None = None
+    building_area_min_ping: float | None = None
+    building_area_max_ping: float | None = None
+    acquisition_representation: str = "unknown"
+    acquisition_schema_version: str = "unknown"
 
 
 def _validate_url(url: str) -> None:
@@ -56,6 +63,12 @@ def _stable_dict(
     asking_price_twd: int | None,
     monthly_rent_twd: int | None,
     building_area_ping: float | None,
+    asking_unit_price_low_twd_per_ping: int | None,
+    asking_unit_price_high_twd_per_ping: int | None,
+    building_area_min_ping: float | None,
+    building_area_max_ping: float | None,
+    acquisition_representation: str,
+    acquisition_schema_version: str,
     building_type: str | None,
     bedrooms: int | None,
     living_rooms: int | None,
@@ -76,6 +89,12 @@ def _stable_dict(
         "asking_price_twd": asking_price_twd,
         "monthly_rent_twd": monthly_rent_twd,
         "building_area_ping": building_area_ping,
+        "asking_unit_price_low_twd_per_ping": asking_unit_price_low_twd_per_ping,
+        "asking_unit_price_high_twd_per_ping": asking_unit_price_high_twd_per_ping,
+        "building_area_min_ping": building_area_min_ping,
+        "building_area_max_ping": building_area_max_ping,
+        "acquisition_representation": acquisition_representation,
+        "acquisition_schema_version": acquisition_schema_version,
         "building_type": building_type,
         "bedrooms": bedrooms,
         "living_rooms": living_rooms,
@@ -92,6 +111,43 @@ def _stable_dict(
 def _compute_raw_hash(stable: dict) -> str:
     canonical = json.dumps(stable, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _positive_int(payload: dict[str, object], field: str) -> int | None:
+    value = payload.get(field)
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool):
+        return None
+    if value <= 0:
+        raise ValueError(f"{field} must be positive when present")
+    return value
+
+
+def _positive_float(payload: dict[str, object], field: str) -> float | None:
+    value = payload.get(field)
+    if value is None:
+        return None
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise ValueError(f"{field} must be positive when present")
+    return parsed
+
+
+def _metadata(payload: dict[str, object], field: str, legacy_field: str) -> str:
+    value = payload.get(field, payload.get(legacy_field, "unknown"))
+    return value if isinstance(value, str) and value else "unknown"
+
+
+def _require_ordered_range(
+    low: int | float | None,
+    high: int | float | None,
+    label: str,
+) -> None:
+    if low is not None and high is not None and low > high:
+        raise ValueError(f"{label} range must have low <= high")
 
 
 def normalize_listing(source: SourceListing, snapshot_at: datetime) -> NormalizedListing:
@@ -112,11 +168,21 @@ def normalize_listing(source: SourceListing, snapshot_at: datetime) -> Normalize
         latitude = None
         longitude = None
 
-    asking_price = payload.get("asking_price_twd")
-    monthly_rent = payload.get("monthly_rent_twd")
-
-    raw_area = payload.get("area_ping")
-    building_area_ping = float(raw_area) if raw_area else None
+    asking_price = _positive_int(payload, "asking_price_twd")
+    monthly_rent = _positive_int(payload, "monthly_rent_twd")
+    asking_unit_price_low = _positive_int(
+        payload, "asking_unit_price_low_twd_per_ping"
+    )
+    asking_unit_price_high = _positive_int(
+        payload, "asking_unit_price_high_twd_per_ping"
+    )
+    building_area_ping = _positive_float(payload, "area_ping")
+    building_area_min = _positive_float(payload, "area_min_ping")
+    building_area_max = _positive_float(payload, "area_max_ping")
+    _require_ordered_range(
+        asking_unit_price_low, asking_unit_price_high, "asking unit price"
+    )
+    _require_ordered_range(building_area_min, building_area_max, "building area")
 
     bedrooms = payload.get("layout_rooms")
     living_rooms = payload.get("layout_living_rooms")
@@ -130,9 +196,19 @@ def normalize_listing(source: SourceListing, snapshot_at: datetime) -> Normalize
         listing_type=source.listing_type,
         source_url=source.source_url,
         title=str(payload.get("title", "")),
-        asking_price_twd=asking_price if isinstance(asking_price, int) else None,
-        monthly_rent_twd=monthly_rent if isinstance(monthly_rent, int) else None,
+        asking_price_twd=asking_price,
+        monthly_rent_twd=monthly_rent,
         building_area_ping=building_area_ping,
+        asking_unit_price_low_twd_per_ping=asking_unit_price_low,
+        asking_unit_price_high_twd_per_ping=asking_unit_price_high,
+        building_area_min_ping=building_area_min,
+        building_area_max_ping=building_area_max,
+        acquisition_representation=_metadata(
+            payload, "representation", "acquisition_representation"
+        ),
+        acquisition_schema_version=_metadata(
+            payload, "schema_version", "acquisition_schema_version"
+        ),
         building_type=None,
         bedrooms=bedrooms if isinstance(bedrooms, int) else None,
         living_rooms=living_rooms if isinstance(living_rooms, int) else None,
@@ -149,6 +225,8 @@ def normalize_listing(source: SourceListing, snapshot_at: datetime) -> Normalize
         stable["monthly_rent_twd"] = None
     elif stable["listing_type"] == "rental":
         stable["asking_price_twd"] = None
+        stable["asking_unit_price_low_twd_per_ping"] = None
+        stable["asking_unit_price_high_twd_per_ping"] = None
 
     raw_hash = _compute_raw_hash(stable)
 

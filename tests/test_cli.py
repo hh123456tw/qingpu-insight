@@ -10,10 +10,40 @@ import pytest
 from qingpu_insight import cli
 from qingpu_insight.cli import main
 from qingpu_insight.downloads import DownloadRecord, record_file
+from qingpu_insight.listing_591 import SourceListing
+from qingpu_insight.listing_normalization import normalize_listing
 from qingpu_insight.listing_sources import CaptureBatch, CapturedPage
 from tests.test_market_cleaning import sample_rows
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def test_normalized_rows_preserve_ranges_and_acquisition_metadata() -> None:
+    source = SourceListing(
+        source_listing_id="newhouse-001",
+        listing_type="newhouse",
+        source_url="https://newhouse.591.com.tw/home/123",
+        payload={
+            "title": "高鐵站前兩房",
+            "asking_price_twd": None,
+            "asking_unit_price_low_twd_per_ping": 500_000,
+            "asking_unit_price_high_twd_per_ping": 560_000,
+            "area_min_ping": 19.0,
+            "area_max_ping": 30.0,
+            "representation": "jsonld",
+            "schema_version": "591-newhouse-jsonld-v1",
+        },
+    )
+    normalized = normalize_listing(source, datetime(2026, 7, 21, tzinfo=UTC))
+
+    row = cli._normalized_to_rows([normalized])[0]
+
+    assert row["asking_unit_price_low_twd_per_ping"] == 500_000
+    assert row["asking_unit_price_high_twd_per_ping"] == 560_000
+    assert row["building_area_min_ping"] == 19.0
+    assert row["building_area_max_ping"] == 30.0
+    assert row["acquisition_representation"] == "jsonld"
+    assert row["acquisition_schema_version"] == "591-newhouse-jsonld-v1"
 
 
 _CHINESE_DIGITS = "零一二三四五六七八九十"
@@ -433,6 +463,12 @@ class TestListingSync:
         )
         assert len(snapshots) == 6
         assert set(snapshots["listing_type"]) == {"sale", "newhouse", "rental"}
+        assert set(snapshots["acquisition_representation"]) == {"dom"}
+        assert set(snapshots["acquisition_schema_version"]) == {
+            "591-sale-dom-v1",
+            "591-newhouse-dom-v1",
+            "591-rental-dom-v1",
+        }
         assert set(snapshots["station_code"].dropna()).issubset({"A17", "A18", "A19"})
         assert snapshots.loc[
             snapshots["listing_type"] == "rental", "model_evidence"
