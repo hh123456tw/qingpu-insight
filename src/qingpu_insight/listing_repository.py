@@ -40,7 +40,7 @@ class ListingRepository(Protocol):
         """Return stored listing events, optionally filtered by *listing_type*."""
 
     def merge_state(self, state: pd.DataFrame) -> None:
-        """Merge state columns (active, consecutive_absences, last_seen_batch_id) into the current snapshot."""
+        """Merge state columns into the current snapshot."""
 
     def append_events(self, events: pd.DataFrame) -> None:
         """Append new event records (duplicate keys are ignored)."""
