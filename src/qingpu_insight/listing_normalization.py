@@ -139,27 +139,16 @@ def normalize_listing(source: SourceListing, snapshot_at: datetime) -> Normalize
         latitude=latitude,
         longitude=longitude,
     )
+
+    if stable["listing_type"] in ("sale", "newhouse"):
+        stable["monthly_rent_twd"] = None
+    elif stable["listing_type"] == "rental":
+        stable["asking_price_twd"] = None
+
     raw_hash = _compute_raw_hash(stable)
 
     return NormalizedListing(
-        source="591",
-        source_listing_id=source.source_listing_id,
-        listing_type=source.listing_type,
+        **stable,
         snapshot_at=snapshot_at,
-        source_url=source.source_url,
-        title=str(payload.get("title", "")),
-        asking_price_twd=asking_price if isinstance(asking_price, int) else None,
-        monthly_rent_twd=monthly_rent if isinstance(monthly_rent, int) else None,
-        building_area_ping=building_area_ping,
-        building_type=None,
-        bedrooms=bedrooms if isinstance(bedrooms, int) else None,
-        living_rooms=living_rooms if isinstance(living_rooms, int) else None,
-        bathrooms=bathrooms if isinstance(bathrooms, int) else None,
-        building_age_years=None,
-        floor=floor if isinstance(floor, int) else None,
-        total_floors=total_floors if isinstance(total_floors, int) else None,
-        parking_type=None,
-        latitude=latitude,
-        longitude=longitude,
         raw_hash=raw_hash,
     )
