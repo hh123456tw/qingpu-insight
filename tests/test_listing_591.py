@@ -2,13 +2,92 @@ from pathlib import Path
 
 import pytest
 
-from qingpu_insight.listing_591 import ListingSchemaError, parse_rendered_page
+from qingpu_insight.listing_591 import (
+    ListingSchemaError,
+    extract_rendered_page,
+    parse_rendered_page,
+)
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "listings"
 
 
 def fixture_path(name: str) -> Path:
     return FIXTURE_DIR / name
+
+
+def live_fixture(name: str) -> str:
+    return fixture_path(name).read_text(encoding="utf-8")
+
+
+def test_live_sale_dom_extracts_required_fields():
+    result = extract_rendered_page(live_fixture("591_sale_live_page.html"), "sale")
+    row = result.listings[0]
+
+    assert result.representation == "dom"
+    assert result.schema_version == "591-sale-dom-v1"
+    assert row.source_listing_id == "20215131"
+    assert row.source_url == "https://sale.591.com.tw/home/house/detail/2/20215131.html"
+    assert row.payload["asking_price_twd"] == 8_500_000
+    assert row.payload["area_ping"] == 30.66
+    assert row.payload["layout_rooms"] == 3
+    assert row.payload["floor"] == 10
+    assert set(row.payload).isdisjoint({"phone", "name", "contact", "agent", "role_name"})
+
+
+def test_live_rental_dom_extracts_required_fields():
+    result = extract_rendered_page(live_fixture("591_rental_live_page.html"), "rental")
+    row = result.listings[0]
+
+    assert result.representation == "dom"
+    assert result.schema_version == "591-rental-dom-v1"
+    assert row.source_listing_id == "21649547"
+    assert row.source_url == "https://rent.591.com.tw/21649547"
+    assert row.payload["monthly_rent_twd"] == 14_500
+    assert row.payload["area_ping"] == 24.5
+    assert row.payload["layout_rooms"] == 3
+    assert set(row.payload).isdisjoint({"phone", "name", "contact", "agent", "role_name"})
+
+
+def test_live_rental_dom_reads_price_from_strong_without_unit_text():
+    html = live_fixture("591_rental_live_page.html").replace(" 元/月", "")
+
+    result = extract_rendered_page(html, "rental")
+
+    assert result.listings[0].payload["monthly_rent_twd"] == 14_500
+
+
+def test_live_newhouse_jsonld_preserves_advertised_ranges():
+    result = extract_rendered_page(live_fixture("591_newhouse_live_page.html"), "newhouse")
+    row = result.listings[0]
+
+    assert result.representation == "jsonld"
+    assert result.schema_version == "591-newhouse-jsonld-v1"
+    assert row.payload["asking_price_twd"] is None
+    assert row.payload["asking_unit_price_low_twd_per_ping"] == 500_000
+    assert row.payload["asking_unit_price_high_twd_per_ping"] == 560_000
+    assert row.payload["area_min_ping"] == 19.0
+    assert row.payload["area_max_ping"] == 30.0
+    assert set(row.payload).isdisjoint({"phone", "name", "contact", "agent", "role_name"})
+
+
+def test_live_dom_rejects_malformed_card_without_discarding_valid_sibling():
+    html = live_fixture("591_sale_live_page.html").replace(
+        "</body>",
+        """
+        <div class=\"ware-item\" data-id=\"bad-001\">
+          <div class=\"ware-item__header\"><a href=\"https://sale.591.com.tw/bad-001\">缺少價格</a></div>
+          <div class=\"ware-item__attrs\">2房1廳1衛 20坪 2F/10F</div>
+        </div>
+        </body>
+        """,
+    )
+
+    result = extract_rendered_page(html, "sale")
+
+    assert [row.source_listing_id for row in result.listings] == ["20215131"]
+    assert [(rejection.source_ref, rejection.reason_code) for rejection in result.rejected] == [
+        ("bad-001", "missing_price")
+    ]
 
 
 @pytest.mark.parametrize(
