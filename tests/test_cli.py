@@ -389,6 +389,46 @@ class TestListingScrape:
 
         assert cli.listing_scrape(tmp_path, args) == 1
 
+    def test_summary_uses_capture_batch_dir_across_utc_midnight(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        batch_dir = (
+            tmp_path
+            / "data"
+            / "raw"
+            / "listings"
+            / "591"
+            / "2026-07-23"
+            / "591-sale-20260723T000001Z"
+        )
+        batch_dir.mkdir(parents=True)
+
+        class Source:
+            def capture(self, listing_type, max_pages):
+                return CaptureBatch(
+                    batch_id="591-sale-20260723T000001Z",
+                    source="591",
+                    listing_type=listing_type,
+                    started_at=datetime(2026, 7, 22, 23, 59, 59, tzinfo=UTC),
+                    batch_dir=batch_dir,
+                    pages=[
+                        CapturedPage(
+                            page_number=1,
+                            url="https://sale.591.com.tw/",
+                            html="<html></html>",
+                            accepted_count=1,
+                            representation="dom",
+                        )
+                    ],
+                )
+
+        monkeypatch.setattr(cli, "create_listing_source", lambda *_: Source())
+        args = cli.build_parser().parse_args(["listing-scrape", "--types", "sale"])
+
+        assert cli.listing_scrape(tmp_path, args) == 0
+        assert batch_dir.is_dir()
+        assert f"batch_path={batch_dir}" in capsys.readouterr().out
+
     def test_invalid_type_exits_nonzero(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         assert main(["listing-scrape", "--types", "INVALID"]) != 0
@@ -481,17 +521,28 @@ class TestListingBuild:
         assert main(["listing-build", "--batch-dir", str(batch_dir)]) == 0
         assert saved[0][0].is_complete is True
 
-    def test_schema_error_in_any_page_rejects_the_batch(self, tmp_path, monkeypatch):
+    def test_schema_error_reports_prior_page_rejections_and_rejects_batch(
+        self, tmp_path, monkeypatch, capsys
+    ):
         monkeypatch.chdir(tmp_path)
         raw = tmp_path / "data" / "raw"
         raw.mkdir(parents=True)
         shutil.copy2(FIXTURES / "doorplates.csv", raw / "doorplates.csv")
         batch_dir = raw / "listings" / "591" / "2026-07-21" / "batch-003"
         batch_dir.mkdir(parents=True)
-        shutil.copy2(
-            FIXTURES / "listings" / "591_sale_page.html",
-            batch_dir / "page-0001.html",
+        page_one_html = (FIXTURES / "listings" / "591_sale_live_page.html").read_text(
+            encoding="utf-8"
+        ).replace(
+            "</body>",
+            """
+            <div class="ware-item" data-id="bad-001">
+              <div class="ware-item__header"><a href="https://sale.591.com.tw/bad-001">缺少價格</a></div>
+              <div class="ware-item__attrs">2房1廳1衛 20坪 2F/10F</div>
+            </div>
+            </body>
+            """,
         )
+        (batch_dir / "page-0001.html").write_text(page_one_html, encoding="utf-8")
         (batch_dir / "page-0002.html").write_text(
             "<html><body>changed schema</body></html>", encoding="utf-8"
         )
@@ -512,6 +563,7 @@ class TestListingBuild:
         )
 
         assert main(["listing-build", "--batch-dir", str(batch_dir)]) == 1
+        assert "rejection_reasons=missing_price:1" in capsys.readouterr().out
 
     def test_reports_aggregated_card_rejection_reasons(
         self, tmp_path, monkeypatch, capsys

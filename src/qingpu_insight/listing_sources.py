@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Literal, Protocol
 
 ListingType = Literal["sale", "newhouse", "rental"]
@@ -32,6 +33,7 @@ class CaptureBatch:
     pages: list[CapturedPage] = field(default_factory=list)
     errors: list[CaptureError] = field(default_factory=list)
     reached_terminal_page: bool = False
+    batch_dir: Path | None = None
 
     @property
     def is_complete(self) -> bool:

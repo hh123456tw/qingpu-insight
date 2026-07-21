@@ -42,6 +42,7 @@ def test_writer_batch_dir_contains_type_and_matches_manifest(tmp_path):
     manifest = json.loads((writer.batch_dir / "manifest.json").read_text("utf-8"))
 
     assert writer.batch_dir.name == batch.batch_id
+    assert batch.batch_dir == writer.batch_dir
     assert writer.batch_dir.name.startswith("591-sale-")
     assert manifest["batch_id"] == batch.batch_id
 

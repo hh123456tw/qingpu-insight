@@ -316,18 +316,6 @@ def _normalized_to_rows(normalized: list[NormalizedListing]) -> list[dict]:
     ]
 
 
-def _parse_page_listings(
-    html: str,
-    listing_type: str,
-    representation: str = "unknown",
-    schema_version: str = "unknown",
-) -> list[SourceListing]:
-    extraction = extract_rendered_page(html, listing_type)
-    return _source_listings_from_extraction(
-        extraction, representation, schema_version
-    )
-
-
 def _source_listings_from_extraction(
     extraction,
     representation: str = "unknown",
@@ -360,18 +348,10 @@ def _rejection_summary(rejections: Counter[str]) -> str:
     )
 
 
-def _capture_summary(root: Path, batch: CaptureBatch) -> str:
+def _capture_summary(batch: CaptureBatch) -> str:
     representations = sorted({page.representation for page in batch.pages})
     representation = ",".join(representations) if representations else "unknown"
-    batch_path = (
-        root
-        / "data"
-        / "raw"
-        / "listings"
-        / batch.source
-        / batch.started_at.date().isoformat()
-        / batch.batch_id
-    )
+    batch_path = batch.batch_dir or "unknown"
     return (
         f"captured_pages={len(batch.pages)} "
         f"accepted={sum(page.accepted_count for page in batch.pages)} "
@@ -404,7 +384,7 @@ def listing_scrape(root: Path, args) -> int:
         )
         source = create_listing_source(root, config)
         batch = source.capture(listing_type, max_pages=args.max_pages)
-        print(f"[{listing_type}] {_capture_summary(root, batch)}")
+        print(f"[{listing_type}] {_capture_summary(batch)}")
         if sum(page.accepted_count for page in batch.pages) == 0:
             exit_code = 1
         if batch.errors:
@@ -484,6 +464,8 @@ def listing_build(root: Path, args) -> int:
                 str(page_info.get("schema_version", "unknown")),
             )
         except ListingSchemaError as exc:
+            if rejection_reasons:
+                print(f"rejection_reasons={_rejection_summary(rejection_reasons)}")
             print(
                 f"批次頁面 {page_info['page_number']} 解析失敗: {exc}",
                 file=sys.stderr,
@@ -564,7 +546,7 @@ def listing_sync(root: Path, args) -> int:
         )
         source = create_listing_source(root, config)
         batch = source.capture(listing_type, max_pages=args.max_pages)
-        print(f"[{listing_type}] {_capture_summary(root, batch)}")
+        print(f"[{listing_type}] {_capture_summary(batch)}")
 
         if sum(page.accepted_count for page in batch.pages) == 0:
             exit_code = 1

@@ -192,6 +192,7 @@ class Selenium591Source:
             source="591",
             listing_type=listing_type,
             started_at=datetime.now(UTC),
+            batch_dir=writer.batch_dir,
         )
 
         try:
