@@ -66,9 +66,16 @@ def _json_default(obj: Any) -> Any:
 
 def parse_valuation_payload(payload: dict[str, Any]) -> ValuationInput:
     required = (
-        "transaction_type", "station_code", "building_area_ping",
-        "station_distance_m", "building_type", "bedrooms", "living_rooms",
-        "bathrooms", "floor", "total_floors",
+        "transaction_type",
+        "station_code",
+        "building_area_ping",
+        "station_distance_m",
+        "building_type",
+        "bedrooms",
+        "living_rooms",
+        "bathrooms",
+        "floor",
+        "total_floors",
     )
     missing = {name: "required" for name in required if payload.get(name) in (None, "")}
     if missing:
@@ -82,12 +89,16 @@ def parse_valuation_payload(payload: dict[str, Any]) -> ValuationInput:
         bedrooms=int(payload["bedrooms"]),
         living_rooms=int(payload["living_rooms"]),
         bathrooms=int(payload["bathrooms"]),
-        building_age_years=float(payload["building_age_years"]) if payload.get("building_age_years") is not None else None,
+        building_age_years=float(payload["building_age_years"])
+        if payload.get("building_age_years") is not None
+        else None,
         floor=int(payload["floor"]),
         total_floors=int(payload["total_floors"]),
         parking_type=payload.get("parking_type"),
         parking_area_ping=float(payload.get("parking_area_ping", 0)),
-        asking_total_price_twd=int(payload["asking_total_price_twd"]) if payload.get("asking_total_price_twd") else None,
+        asking_total_price_twd=int(payload["asking_total_price_twd"])
+        if payload.get("asking_total_price_twd")
+        else None,
     )
 
 
@@ -178,9 +189,15 @@ def create_app(
         try:
             input_ = parse_valuation_payload(request.get_json(force=True))
         except ApiInputError as error:
-            return jsonify({
-                "error": {"code": "invalid_request", "message": error.message, "fields": error.fields}
-            }), 400
+            return jsonify(
+                {
+                    "error": {
+                        "code": "invalid_request",
+                        "message": error.message,
+                        "fields": error.fields,
+                    }
+                }
+            ), 400
 
         market = ds.load(MarketFilters(transaction_type=input_.transaction_type))
         market_model = build_model_frame(market, input_.transaction_type)
@@ -194,9 +211,9 @@ def create_app(
     def get_valuation(valuation_id: str):
         record = store.get(valuation_id)
         if record is None:
-            return jsonify({
-                "error": {"code": "not_found", "message": "估價記錄不存在。", "fields": None}
-            }), 404
+            return jsonify(
+                {"error": {"code": "not_found", "message": "估價記錄不存在。", "fields": None}}
+            ), 404
         return jsonify(record)
 
     return app

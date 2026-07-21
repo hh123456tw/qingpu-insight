@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 from flask.testing import FlaskClient
+from sklearn.dummy import DummyRegressor
 
 from qingpu_insight.market_metrics import MarketFilters
+from qingpu_insight.valuation import ModelRegistry, ValuationBundle
 
 
 class InMemoryMarketDataSource:
@@ -82,37 +85,25 @@ class TestMarketApi:
             }
         }
 
-    def test_summary_keeps_transaction_type_isolated(
-        self, client: FlaskClient
-    ) -> None:
-        response = client.get(
-            "/api/market/summary?transaction_type=resale&station=A18"
-        )
+    def test_summary_keeps_transaction_type_isolated(self, client: FlaskClient) -> None:
+        response = client.get("/api/market/summary?transaction_type=resale&station=A18")
         assert response.status_code == 200
         assert response.get_json()["transaction_type"] == "resale"
 
-    def test_trends_and_transactions_share_filters(
-        self, client: FlaskClient
-    ) -> None:
+    def test_trends_and_transactions_share_filters(self, client: FlaskClient) -> None:
         query = "transaction_type=presale&station=A17&date_from=2026-01-01"
-        assert (
-            client.get(f"/api/market/trends?{query}").status_code == 200
-        )
+        assert client.get(f"/api/market/trends?{query}").status_code == 200
         payload = client.get(f"/api/transactions?{query}&limit=10").get_json()
         assert all(row["station_code"] == "A17" for row in payload["items"])
         assert all(row["transaction_type"] == "presale" for row in payload["items"])
 
-    def test_unhandled_exception_uses_safe_error_shape(
-        self, failing_source: FlaskClient
-    ) -> None:
+    def test_unhandled_exception_uses_safe_error_shape(self, failing_source: FlaskClient) -> None:
         response = failing_source.get("/api/market/summary?transaction_type=resale")
         assert response.status_code == 503
         assert response.get_json()["error"]["code"] == "market_data_unavailable"
         assert "Traceback" not in response.get_data(as_text=True)
 
-    def test_transactions_handles_nullable_numeric_fields(
-        self, client: FlaskClient
-    ) -> None:
+    def test_transactions_handles_nullable_numeric_fields(self, client: FlaskClient) -> None:
         response = client.get("/api/transactions?transaction_type=presale&limit=1")
         assert response.status_code == 200
         payload = response.get_json()
@@ -121,19 +112,13 @@ class TestMarketApi:
         assert isinstance(payload["items"], list)
         assert "NaN" not in response.get_data(as_text=True)
 
-    def test_empty_summary_serializes_missing_medians_as_null(
-        self, client: FlaskClient
-    ) -> None:
-        response = client.get(
-            "/api/market/summary?transaction_type=resale&date_from=2099-01-01"
-        )
+    def test_empty_summary_serializes_missing_medians_as_null(self, client: FlaskClient) -> None:
+        response = client.get("/api/market/summary?transaction_type=resale&date_from=2099-01-01")
         assert response.status_code == 200
         assert response.get_json()["median_unit_price_per_ping_twd"] is None
         assert "NaN" not in response.get_data(as_text=True)
 
-    def test_transactions_do_not_expose_internal_location_fields(
-        self, client: FlaskClient
-    ) -> None:
+    def test_transactions_do_not_expose_internal_location_fields(self, client: FlaskClient) -> None:
         response = client.get("/api/transactions?transaction_type=resale&limit=1")
         raw = response.get_data(as_text=True)
         assert response.status_code == 200
@@ -155,42 +140,57 @@ def test_unknown_route_preserves_http_404(client: FlaskClient) -> None:
 
 # --- Valuation API tests ---
 
-from dataclasses import replace
-
-import numpy as np
-from sklearn.dummy import DummyRegressor
-
-from qingpu_insight.valuation import ModelRegistry, ValuationBundle
-
 
 @pytest.fixture
 def trained_registry(tmp_path) -> ModelRegistry:
     import joblib
+
     dummy = DummyRegressor(strategy="constant", constant=500_000)
     dummy.fit(np.zeros((5, 5)), np.ones(5))
     bundle = ValuationBundle(
-        transaction_type="resale", model_name="ridge", model_version="v1",
-        pipeline=dummy, interval_abs_residual_twd_per_ping=50000,
+        transaction_type="resale",
+        model_name="ridge",
+        model_version="v1",
+        pipeline=dummy,
+        interval_abs_residual_twd_per_ping=50000,
         feature_ranges={
-            "building_area_ping": (20, 80), "station_distance_m": (100, 1500),
-            "bedrooms": (1, 5), "living_rooms": (1, 4), "bathrooms": (1, 4),
-            "building_age_years": (0, 30), "floor": (1, 20),
-            "total_floors": (5, 25), "parking_area_ping": (0, 20),
+            "building_area_ping": (20, 80),
+            "station_distance_m": (100, 1500),
+            "bedrooms": (1, 5),
+            "living_rooms": (1, 4),
+            "bathrooms": (1, 4),
+            "building_age_years": (0, 30),
+            "floor": (1, 20),
+            "total_floors": (5, 25),
+            "parking_area_ping": (0, 20),
         },
         feature_hard_ranges={
-            "building_area_ping": (15, 90), "station_distance_m": (50, 1800),
-            "bedrooms": (1, 5), "living_rooms": (1, 4), "bathrooms": (1, 4),
-            "building_age_years": (0, 40), "floor": (1, 22),
-            "total_floors": (3, 28), "parking_area_ping": (0, 25),
+            "building_area_ping": (15, 90),
+            "station_distance_m": (50, 1800),
+            "bedrooms": (1, 5),
+            "living_rooms": (1, 4),
+            "bathrooms": (1, 4),
+            "building_age_years": (0, 40),
+            "floor": (1, 22),
+            "total_floors": (3, 28),
+            "parking_area_ping": (0, 25),
         },
         feature_medians={
-            "building_area_ping": 35.0, "station_distance_m": 500.0,
-            "bedrooms": 3.0, "living_rooms": 2.0, "bathrooms": 2.0,
-            "building_age_years": 8.0, "floor": 8.0, "total_floors": 15.0,
+            "building_area_ping": 35.0,
+            "station_distance_m": 500.0,
+            "bedrooms": 3.0,
+            "living_rooms": 2.0,
+            "bathrooms": 2.0,
+            "building_age_years": 8.0,
+            "floor": 8.0,
+            "total_floors": 15.0,
             "parking_area_ping": 5.0,
         },
-        global_importance=[], reference_rows=pd.DataFrame({"dummy": [1]}),
-        data_min_date="2024-01-01", data_max_date="2026-06-01", metrics={},
+        global_importance=[],
+        reference_rows=pd.DataFrame({"dummy": [1]}),
+        data_min_date="2024-01-01",
+        data_max_date="2026-06-01",
+        metrics={},
     )
     joblib.dump(bundle, tmp_path / "resale.joblib")
     return ModelRegistry(tmp_path)
@@ -198,8 +198,9 @@ def trained_registry(tmp_path) -> ModelRegistry:
 
 @pytest.fixture
 def valuation_client(market_frame: pd.DataFrame, trained_registry, tmp_path) -> FlaskClient:
-    from qingpu_insight.web import create_app
     from qingpu_insight.valuation_store import FileValuationStore
+    from qingpu_insight.web import create_app
+
     mf = market_frame.copy()
     mf["floor"] = "五層"
     mf["total_floors"] = 15
@@ -232,9 +233,10 @@ VALID_RESALE_PAYLOAD = {
 
 @pytest.fixture
 def client_without_models(market_frame: pd.DataFrame, tmp_path) -> FlaskClient:
-    from qingpu_insight.web import create_app
-    from qingpu_insight.valuation_store import FileValuationStore
     from qingpu_insight.valuation import ModelRegistry
+    from qingpu_insight.valuation_store import FileValuationStore
+    from qingpu_insight.web import create_app
+
     mf = market_frame.copy()
     mf["floor"] = "五層"
     mf["total_floors"] = 15
@@ -288,10 +290,18 @@ def test_get_nonexistent_valuation_returns_404(valuation_client):
 def test_homepage_contains_complete_valuation_contract(client):
     html = client.get("/").get_data(as_text=True)
     for element_id in (
-        "valuation-form", "valuation-type", "valuation-station",
-        "valuation-area", "valuation-distance", "valuation-age",
-        "valuation-floor", "valuation-total-floors", "valuation-bedrooms",
-        "valuation-parking-area", "asking-price", "valuation-result",
+        "valuation-form",
+        "valuation-type",
+        "valuation-station",
+        "valuation-area",
+        "valuation-distance",
+        "valuation-age",
+        "valuation-floor",
+        "valuation-total-floors",
+        "valuation-bedrooms",
+        "valuation-parking-area",
+        "asking-price",
+        "valuation-result",
     ):
         assert f'id="{element_id}"' in html
 

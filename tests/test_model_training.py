@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -10,6 +12,7 @@ from qingpu_insight.model_training import (
     candidate_estimators,
     evaluate_candidate,
     leakage_audit,
+    make_preprocessor,
     metric_rows,
     select_release_candidate,
     split_by_time,
@@ -128,7 +131,9 @@ def fallback_frame() -> pd.DataFrame:
 
 def test_recent_median_falls_back_from_group_to_station_then_global(fallback_frame):
     baseline = RecentMedianBaseline(months=24).fit(fallback_frame)
-    a17_median = fallback_frame.loc[fallback_frame.station_code.eq("A17"), "target_unit_price_twd"].median()
+    a17_median = fallback_frame.loc[
+        fallback_frame.station_code.eq("A17"), "target_unit_price_twd"
+    ].median()
     global_median = fallback_frame["target_unit_price_twd"].median()
     group_median = fallback_frame.loc[
         (fallback_frame.station_code == "A17") & (fallback_frame.building_type == "住宅大樓"),
@@ -178,10 +183,18 @@ def test_metrics_excludes_small_groups():
 
 def test_leakage_audit_detects_no_overlap():
     train = pd.DataFrame(
-        {"transaction_key": ["a", "b"], "road_key": ["r1", "r2"], "target_unit_price_twd": [1.0, 2.0]}
+        {
+            "transaction_key": ["a", "b"],
+            "road_key": ["r1", "r2"],
+            "target_unit_price_twd": [1.0, 2.0],
+        }
     )
     test = pd.DataFrame(
-        {"transaction_key": ["c", "d"], "road_key": ["r3", "r4"], "target_unit_price_twd": [3.0, 4.0]}
+        {
+            "transaction_key": ["c", "d"],
+            "road_key": ["r3", "r4"],
+            "target_unit_price_twd": [3.0, 4.0],
+        }
     )
     cal = pd.DataFrame(
         {"transaction_key": ["e"], "road_key": ["r5"], "target_unit_price_twd": [5.0]}
@@ -195,10 +208,18 @@ def test_leakage_audit_detects_no_overlap():
 
 def test_leakage_audit_detects_overlaps():
     train = pd.DataFrame(
-        {"transaction_key": ["a", "b"], "road_key": ["r1", "r2"], "target_unit_price_twd": [1.0, 2.0]}
+        {
+            "transaction_key": ["a", "b"],
+            "road_key": ["r1", "r2"],
+            "target_unit_price_twd": [1.0, 2.0],
+        }
     )
     test = pd.DataFrame(
-        {"transaction_key": ["a", "c"], "road_key": ["r1", "r3"], "target_unit_price_twd": [3.0, 4.0]}
+        {
+            "transaction_key": ["a", "c"],
+            "road_key": ["r1", "r3"],
+            "target_unit_price_twd": [3.0, 4.0],
+        }
     )
     cal = pd.DataFrame(
         {"transaction_key": ["d"], "road_key": ["r4"], "target_unit_price_twd": [5.0]}
@@ -226,6 +247,14 @@ def test_evaluate_candidate_returns_evaluation(model_frame):
 def test_candidate_inventory_contains_required_models():
     estimators = candidate_estimators(seed=42)
     assert set(estimators) == {"ridge", "random_forest", "hist_gradient_boosting"}
+
+
+def test_preprocessor_keeps_intentionally_empty_presale_age(model_frame):
+    frame = model_frame.copy()
+    frame["building_age_years"] = np.nan
+    with warnings.catch_warnings(record=True) as caught:
+        make_preprocessor().fit(frame[list(FEATURE_COLUMNS)])
+    assert not any("Skipping features" in str(item.message) for item in caught)
 
 
 def test_release_gate_requires_overall_improvement_and_station_stability():
@@ -284,3 +313,21 @@ def test_release_gate_requires_overall_improvement_and_station_stability():
 
     assert select_release_candidate(results_with_ridge_win).name == "ridge"
     assert select_release_candidate(results_with_station_regression).name == "baseline"
+
+
+def test_release_gate_ignores_unpublished_small_station_metrics():
+    baseline = CandidateEvaluation(
+        name="baseline",
+        estimator=None,
+        overall_mae=100_000.0,
+        station_mape={"A17": 5.0, "A19": 7.0},
+        metrics=pd.DataFrame(),
+    )
+    candidate = CandidateEvaluation(
+        name="ridge",
+        estimator=None,
+        overall_mae=90_000.0,
+        station_mape={"A17": 4.5, "A19": 6.5},
+        metrics=pd.DataFrame(),
+    )
+    assert select_release_candidate([baseline, candidate]).name == "ridge"

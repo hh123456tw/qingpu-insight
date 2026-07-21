@@ -54,32 +54,35 @@ def copy_fixture_to_processed(tmp_path: Path) -> Path:
             fl = int(np.random.randint(1, 15))
             tfl = int(np.random.randint(5, 25))
 
-            rows.append({
-                "transaction_type": ttype,
-                "record_id": f"{ttype[0]}{i}",
-                "transaction_date": base + pd.DateOffset(days=int(i * total_days / n_rows)),
-                "station_code": s,
-                "station_distance_m": float(np.random.randint(100, 1500)),
-                "building_area_ping": float(np.random.uniform(15, 60)),
-                "building_area_sqm": float(np.random.uniform(49.5, 198.3)),
-                "building_type": bt,
-                "bedrooms": int(np.random.randint(1, 5)),
-                "living_rooms": int(np.random.randint(1, 3)),
-                "bathrooms": int(np.random.randint(1, 3)),
-                "building_age_years": building_age,
-                "floor": _int_to_floor(fl),
-                "total_floors": float(tfl),
-                "parking_type": pt,
-                "parking_area_sqm": float(np.random.uniform(0, 33) if pt else 0),
-                "parking_price_twd": float(np.random.uniform(1000000, 2500000) if pt else 0),
-                "total_price_twd": float(target * (15 + np.random.uniform(0, 45))),
-                "unit_price_per_ping_twd": float(target),
-                "analysis_eligible": True,
-                "transaction_key": f"T{ttype[0]}{i}",
-                "road_key": f"R{i % 10}",
-                "completion_date": (pd.Timestamp("2020-01-01") + pd.DateOffset(days=i)).date()
-                    if ttype == "resale" else None,
-            })
+            rows.append(
+                {
+                    "transaction_type": ttype,
+                    "record_id": f"{ttype[0]}{i}",
+                    "transaction_date": base + pd.DateOffset(days=int(i * total_days / n_rows)),
+                    "station_code": s,
+                    "station_distance_m": float(np.random.randint(100, 1500)),
+                    "building_area_ping": float(np.random.uniform(15, 60)),
+                    "building_area_sqm": float(np.random.uniform(49.5, 198.3)),
+                    "building_type": bt,
+                    "bedrooms": int(np.random.randint(1, 5)),
+                    "living_rooms": int(np.random.randint(1, 3)),
+                    "bathrooms": int(np.random.randint(1, 3)),
+                    "building_age_years": building_age,
+                    "floor": _int_to_floor(fl),
+                    "total_floors": float(tfl),
+                    "parking_type": pt,
+                    "parking_area_sqm": float(np.random.uniform(0, 33) if pt else 0),
+                    "parking_price_twd": float(np.random.uniform(1000000, 2500000) if pt else 0),
+                    "total_price_twd": float(target * (15 + np.random.uniform(0, 45))),
+                    "unit_price_per_ping_twd": float(target),
+                    "analysis_eligible": True,
+                    "transaction_key": f"T{ttype[0]}{i}",
+                    "road_key": f"R{i % 10}",
+                    "completion_date": (pd.Timestamp("2020-01-01") + pd.DateOffset(days=i)).date()
+                    if ttype == "resale"
+                    else None,
+                }
+            )
 
     df = pd.DataFrame(rows)
     path = processed / "market_transactions.parquet"
@@ -119,9 +122,7 @@ def test_acquire_continues_after_one_season_fails_and_checkpoints_manifest(
             raise RuntimeError("connection reset")
         return create_record(f"{base_url}/{season}", destination)
 
-    def fake_download_current(
-        base_url: str, table_name: str, destination: Path
-    ) -> DownloadRecord:
+    def fake_download_current(base_url: str, table_name: str, destination: Path) -> DownloadRecord:
         return create_record(f"{base_url}/{table_name}", destination)
 
     def fake_download_file(url: str, destination: Path) -> DownloadRecord:
@@ -137,9 +138,7 @@ def test_acquire_continues_after_one_season_fails_and_checkpoints_manifest(
         cli.acquire(tmp_path, "110S3", "110S4")
 
     assert attempted == ["110S3", "110S4"]
-    manifest = json.loads(
-        (tmp_path / "data" / "raw" / "manifest.json").read_text(encoding="utf-8")
-    )
+    manifest = json.loads((tmp_path / "data" / "raw" / "manifest.json").read_text(encoding="utf-8"))
     urls = {item["source_url"] for item in manifest}
     assert "https://plvr.land.moi.gov.tw/110S4" in urls
     assert "https://plvr.land.moi.gov.tw/h_lvr_land_a.csv" in urls

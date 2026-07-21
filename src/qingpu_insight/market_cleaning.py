@@ -7,18 +7,20 @@ SQM_PER_PING = 3.305785
 PRICE_PER_PING_MIN = 100_000
 PRICE_PER_PING_MAX = 2_000_000
 
-REQUIRED_COLUMNS = frozenset({
-    "transaction_type",
-    "record_id",
-    "transaction_date",
-    "source_file",
-    "building_area_sqm",
-    "unit_price_sqm_twd",
-    "completion_date",
-    "main_use",
-    "coordinate_eligible",
-    "station_code",
-})
+REQUIRED_COLUMNS = frozenset(
+    {
+        "transaction_type",
+        "record_id",
+        "transaction_date",
+        "source_file",
+        "building_area_sqm",
+        "unit_price_sqm_twd",
+        "completion_date",
+        "main_use",
+        "coordinate_eligible",
+        "station_code",
+    }
+)
 
 
 @dataclass(frozen=True)

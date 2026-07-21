@@ -78,26 +78,28 @@ def market() -> pd.DataFrame:
     np.random.seed(42)
     n = 100
     dates = pd.date_range("2023-06-01", "2026-06-01", periods=n)
-    return pd.DataFrame({
-        "record_id": [f"R{i}" for i in range(n)],
-        "transaction_type": ["resale"] * n,
-        "transaction_date": dates,
-        "station_code": np.random.choice(["A17", "A18", "A19"], n),
-        "building_type": np.random.choice(["住宅大樓", "華廈"], n),
-        "building_area_ping": np.random.uniform(15, 80, n),
-        "unit_price_per_ping_twd": np.random.uniform(200_000, 800_000, n).astype(int),
-        "total_price_twd": np.random.uniform(5_000_000, 40_000_000, n).astype(int),
-        "station_distance_m": np.random.uniform(100, 1500, n),
-        "bedrooms": np.random.randint(1, 5, n),
-        "floor_ratio": np.random.uniform(0.1, 0.9, n),
-        "longitude": np.random.uniform(121.20, 121.25, n),
-        "latitude": np.random.uniform(25.00, 25.05, n),
-        "building_age_years": np.where(
-            np.random.random(n) > 0.2,
-            np.random.uniform(0, 30, n),
-            np.nan,
-        ),
-    })
+    return pd.DataFrame(
+        {
+            "record_id": [f"R{i}" for i in range(n)],
+            "transaction_type": ["resale"] * n,
+            "transaction_date": dates,
+            "station_code": np.random.choice(["A17", "A18", "A19"], n),
+            "building_type": np.random.choice(["住宅大樓", "華廈"], n),
+            "building_area_ping": np.random.uniform(15, 80, n),
+            "unit_price_per_ping_twd": np.random.uniform(200_000, 800_000, n).astype(int),
+            "total_price_twd": np.random.uniform(5_000_000, 40_000_000, n).astype(int),
+            "station_distance_m": np.random.uniform(100, 1500, n),
+            "bedrooms": np.random.randint(1, 5, n),
+            "floor_ratio": np.random.uniform(0.1, 0.9, n),
+            "longitude": np.random.uniform(121.20, 121.25, n),
+            "latitude": np.random.uniform(25.00, 25.05, n),
+            "building_age_years": np.where(
+                np.random.random(n) > 0.2,
+                np.random.uniform(0, 30, n),
+                np.nan,
+            ),
+        }
+    )
 
 
 class FakeRegistry:
@@ -106,10 +108,13 @@ class FakeRegistry:
 
     def get(self, transaction_type: str) -> ValuationBundle:
         if self._bundle.transaction_type != transaction_type:
-            raise ModelUnavailableError(
-                f"{transaction_type} model artifact not found"
-            )
+            raise ModelUnavailableError(f"{transaction_type} model artifact not found")
         return self._bundle
+
+
+class UnavailableRegistry:
+    def get(self, transaction_type: str) -> ValuationBundle:
+        raise ModelUnavailableError(f"{transaction_type} model artifact not found")
 
 
 def test_registry_never_serves_other_transaction_type(tmp_path):
@@ -136,7 +141,9 @@ def test_registry_never_serves_other_transaction_type(tmp_path):
         registry.get("presale")
 
 
-def test_valuation_has_ordered_interval_and_five_or_fewer_comparables(bundle, market, valid_resale_input):
+def test_valuation_has_ordered_interval_and_five_or_fewer_comparables(
+    bundle, market, valid_resale_input
+):
     result = valuate(valid_resale_input, FakeRegistry(bundle), market)
     low, high = result["interval_total_price_twd"]
     assert low <= result["estimated_total_price_twd"] <= high
@@ -167,11 +174,19 @@ def test_prediction_interval_symmetric():
     dummy = DummyRegressor()
     dummy.fit(np.zeros((5, 5)), np.ones(5))
     bundle = ValuationBundle(
-        transaction_type="resale", model_name="test", model_version="v1",
-        pipeline=dummy, interval_abs_residual_twd_per_ping=10000,
-        feature_ranges={}, feature_hard_ranges={}, feature_medians={},
-        global_importance=[], reference_rows=pd.DataFrame(),
-        data_min_date="", data_max_date="", metrics={},
+        transaction_type="resale",
+        model_name="test",
+        model_version="v1",
+        pipeline=dummy,
+        interval_abs_residual_twd_per_ping=10000,
+        feature_ranges={},
+        feature_hard_ranges={},
+        feature_medians={},
+        global_importance=[],
+        reference_rows=pd.DataFrame(),
+        data_min_date="",
+        data_max_date="",
+        metrics={},
     )
     low, high = prediction_interval(bundle, 500_000)
     assert low == 490_000
@@ -182,11 +197,19 @@ def test_prediction_interval_low_floor():
     dummy = DummyRegressor()
     dummy.fit(np.zeros((5, 5)), np.ones(5))
     bundle = ValuationBundle(
-        transaction_type="resale", model_name="test", model_version="v1",
-        pipeline=dummy, interval_abs_residual_twd_per_ping=50000,
-        feature_ranges={}, feature_hard_ranges={}, feature_medians={},
-        global_importance=[], reference_rows=pd.DataFrame(),
-        data_min_date="", data_max_date="", metrics={},
+        transaction_type="resale",
+        model_name="test",
+        model_version="v1",
+        pipeline=dummy,
+        interval_abs_residual_twd_per_ping=50000,
+        feature_ranges={},
+        feature_hard_ranges={},
+        feature_medians={},
+        global_importance=[],
+        reference_rows=pd.DataFrame(),
+        data_min_date="",
+        data_max_date="",
+        metrics={},
     )
     low, high = prediction_interval(bundle, 10_000)
     assert low == 0.0
@@ -194,55 +217,164 @@ def test_prediction_interval_low_floor():
 
 
 def test_confidence_high_when_all_conditions_met(bundle):
-    row = pd.DataFrame({
-        "building_area_ping": [30], "station_distance_m": [500],
-        "bedrooms": [3], "living_rooms": [2], "bathrooms": [2],
-        "building_age_years": [6], "floor": [12], "total_floors": [15],
-        "parking_area_ping": [10],
-    })
+    row = pd.DataFrame(
+        {
+            "building_area_ping": [30],
+            "station_distance_m": [500],
+            "bedrooms": [3],
+            "living_rooms": [2],
+            "bathrooms": [2],
+            "building_age_years": [6],
+            "floor": [12],
+            "total_floors": [15],
+            "parking_area_ping": [10],
+        }
+    )
     result = confidence_assessment(
-        bundle, row, 500_000, (400_000, 600_000),
+        bundle,
+        row,
+        500_000,
+        (425_000, 575_000),
         [{"similarity_score": 0.7}, {"similarity_score": 0.8}, {"similarity_score": 0.9}],
     )
     assert result["confidence"] == "high"
+
+
+def test_confidence_compares_interval_in_unit_price_units(bundle):
+    row = pd.DataFrame(
+        {
+            "building_area_ping": [30],
+            "station_distance_m": [500],
+            "bedrooms": [3],
+            "living_rooms": [2],
+            "bathrooms": [2],
+            "building_age_years": [6],
+            "floor": [12],
+            "total_floors": [15],
+            "parking_area_ping": [10],
+        }
+    )
+    result = confidence_assessment(
+        bundle,
+        row,
+        500_000,
+        (400_000, 600_001),
+        [{"similarity_score": 0.7}, {"similarity_score": 0.8}, {"similarity_score": 0.9}],
+    )
+    assert result["confidence"] == "medium"
+    assert "估價區間寬度超過估計總價 30%" in result["confidence_reasons"]
 
 
 def test_confidence_low_when_degraded():
     dummy = DummyRegressor()
     dummy.fit(np.zeros((5, 5)), np.ones(5))
     bundle = ValuationBundle(
-        transaction_type="resale", model_name="test", model_version="v1",
-        pipeline=dummy, interval_abs_residual_twd_per_ping=50000,
-        feature_ranges={}, feature_hard_ranges={}, feature_medians={},
-        global_importance=[], reference_rows=pd.DataFrame(),
-        data_min_date="", data_max_date="", metrics={},
+        transaction_type="resale",
+        model_name="test",
+        model_version="v1",
+        pipeline=dummy,
+        interval_abs_residual_twd_per_ping=50000,
+        feature_ranges={},
+        feature_hard_ranges={},
+        feature_medians={},
+        global_importance=[],
+        reference_rows=pd.DataFrame(),
+        data_min_date="",
+        data_max_date="",
+        metrics={},
     )
-    row = pd.DataFrame({
-        "building_area_ping": [30], "station_distance_m": [500],
-        "bedrooms": [3], "living_rooms": [2], "bathrooms": [2],
-        "building_age_years": None, "floor": [12], "total_floors": [15],
-        "parking_area_ping": [10],
-    })
+    row = pd.DataFrame(
+        {
+            "building_area_ping": [30],
+            "station_distance_m": [500],
+            "bedrooms": [3],
+            "living_rooms": [2],
+            "bathrooms": [2],
+            "building_age_years": None,
+            "floor": [12],
+            "total_floors": [15],
+            "parking_area_ping": [10],
+        }
+    )
     result = confidence_assessment(
-        bundle, row, 500_000, (400_000, 600_000),
-        [{"similarity_score": 0.7}], degraded=True,
+        bundle,
+        row,
+        500_000,
+        (400_000, 600_000),
+        [{"similarity_score": 0.7}],
+        degraded=True,
     )
     assert result["confidence"] == "low"
 
 
+def test_degraded_valuation_uses_recent_same_station_and_building_type(valid_resale_input):
+    market = pd.DataFrame(
+        {
+            "transaction_type": ["resale"] * 5,
+            "transaction_date": pd.to_datetime(
+                [
+                    "2023-01-01",
+                    "2025-01-01",
+                    "2025-02-01",
+                    "2025-03-01",
+                    "2025-04-01",
+                ]
+            ),
+            "station_code": ["A17", "A17", "A17", "A18", "A17"],
+            "building_type": ["住宅大樓", "住宅大樓", "住宅大樓", "住宅大樓", "華廈"],
+            "unit_price_per_ping_twd": [100_000, 500_000, 700_000, 900_000, 300_000],
+        }
+    )
+    value = replace(valid_resale_input, building_type="住宅大樓")
+    result = valuate(value, UnavailableRegistry(), market)
+    assert result["estimated_unit_price_per_ping_twd"] == 600_000
+    assert result["data_date"] == "2025-04-01"
+
+
+def test_degraded_valuation_refuses_to_invent_price_without_market_data(valid_resale_input):
+    empty = pd.DataFrame(
+        columns=[
+            "transaction_type",
+            "transaction_date",
+            "station_code",
+            "building_type",
+            "unit_price_per_ping_twd",
+        ]
+    )
+    with pytest.raises(ModelUnavailableError, match="market data"):
+        valuate(valid_resale_input, UnavailableRegistry(), empty)
+
+
 def test_similar_transactions_insufficient_data(bundle):
-    row = pd.DataFrame({
-        "station_code": ["A17"], "building_area_ping": [30],
-        "station_distance_m": [500], "bedrooms": [3],
-        "building_age_years": [6], "floor_ratio": [0.8],
-        "building_type": ["住宅大樓"],
-    })
-    empty_market = pd.DataFrame(columns=[
-        "transaction_type", "transaction_date", "station_code",
-        "building_type", "building_area_ping", "unit_price_per_ping_twd",
-        "total_price_twd", "floor_ratio", "longitude", "latitude",
-        "building_age_years", "record_id", "bedrooms", "station_distance_m",
-    ])
+    row = pd.DataFrame(
+        {
+            "station_code": ["A17"],
+            "building_area_ping": [30],
+            "station_distance_m": [500],
+            "bedrooms": [3],
+            "building_age_years": [6],
+            "floor_ratio": [0.8],
+            "building_type": ["住宅大樓"],
+        }
+    )
+    empty_market = pd.DataFrame(
+        columns=[
+            "transaction_type",
+            "transaction_date",
+            "station_code",
+            "building_type",
+            "building_area_ping",
+            "unit_price_per_ping_twd",
+            "total_price_twd",
+            "floor_ratio",
+            "longitude",
+            "latitude",
+            "building_age_years",
+            "record_id",
+            "bedrooms",
+            "station_distance_m",
+        ]
+    )
     result = similar_transactions(bundle, row, empty_market)
     assert result["comparable_scope"] == "insufficient_data"
     assert len(result["comparables"]) == 0
@@ -250,10 +382,12 @@ def test_similar_transactions_insufficient_data(bundle):
 
 def test_train_artifact_round_trip(tmp_path):
     np.random.seed(42)
-    train = pd.DataFrame({
-        "transaction_date": pd.date_range("2024-01-01", periods=200, freq="D"),
-        "target_unit_price_twd": np.random.uniform(200_000, 800_000, 200),
-    })
+    train = pd.DataFrame(
+        {
+            "transaction_date": pd.date_range("2024-01-01", periods=200, freq="D"),
+            "target_unit_price_twd": np.random.uniform(200_000, 800_000, 200),
+        }
+    )
     for col in FEATURE_COLUMNS:
         if col in ("station_code", "building_type", "parking_type"):
             train[col] = "A17"
@@ -286,14 +420,23 @@ def test_train_artifact_round_trip(tmp_path):
 
     estimator = DummyRegressor(strategy="mean")
     estimator.fit(train[list(FEATURE_COLUMNS)], train["target_unit_price_twd"])
-    metrics = pd.DataFrame({"overall": {"mae": 50000, "mape": 10, "rmse": 60000, "r2": 0.5, "count": 50}}).T
+    metrics = pd.DataFrame(
+        {"overall": {"mae": 50000, "mape": 10, "rmse": 60000, "r2": 0.5, "count": 50}}
+    ).T
 
     bundle = ValuationBundle(
-        transaction_type="resale", model_name="baseline", model_version="v1",
-        pipeline=estimator, interval_abs_residual_twd_per_ping=50000,
-        feature_ranges={}, feature_hard_ranges={}, feature_medians={},
-        global_importance=[], reference_rows=train,
-        data_min_date="2024-01-01", data_max_date="2026-06-01",
+        transaction_type="resale",
+        model_name="baseline",
+        model_version="v1",
+        pipeline=estimator,
+        interval_abs_residual_twd_per_ping=50000,
+        feature_ranges={},
+        feature_hard_ranges={},
+        feature_medians={},
+        global_importance=[],
+        reference_rows=train,
+        data_min_date="2024-01-01",
+        data_max_date="2026-06-01",
         metrics={},
     )
     selected = FakeSelected(name="baseline", estimator=estimator, metrics=metrics)
@@ -305,3 +448,4 @@ def test_train_artifact_round_trip(tmp_path):
     loaded: ValuationBundle = joblib.load(result_path)
     assert loaded.transaction_type == "resale"
     assert loaded.model_name == "baseline"
+    assert loaded.metrics["overall"]["mae"] == 50000

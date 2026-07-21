@@ -36,14 +36,13 @@ def evaluate_feasibility(frame: pd.DataFrame, thresholds: Thresholds) -> Feasibi
         .reset_index()
     )
     total_by_type = assigned.groupby("transaction_type").size()
-    recent_by_type = assigned[assigned["transaction_date"] >= recent_cutoff].groupby(
-        "transaction_type"
-    ).size()
+    recent_by_type = (
+        assigned[assigned["transaction_date"] >= recent_cutoff].groupby("transaction_type").size()
+    )
     expected_types = {"resale", "presale"}
     failed: list[str] = []
     if any(
-        total_by_type.get(kind, 0) < thresholds.minimum_total_by_type
-        for kind in expected_types
+        total_by_type.get(kind, 0) < thresholds.minimum_total_by_type for kind in expected_types
     ):
         failed.append("minimum_total_by_type")
     expected_cells = {
@@ -54,15 +53,13 @@ def evaluate_feasibility(frame: pd.DataFrame, thresholds: Thresholds) -> Feasibi
         for row in summary.itertuples(index=False)
     }
     if any(
-        actual_cells.get(cell, 0) < thresholds.minimum_station_type_cell
-        for cell in expected_cells
+        actual_cells.get(cell, 0) < thresholds.minimum_station_type_cell for cell in expected_cells
     ):
         failed.append("minimum_station_type_cell")
     if coordinate_coverage < thresholds.minimum_coordinate_coverage:
         failed.append("minimum_coordinate_coverage")
     if any(
-        recent_by_type.get(kind, 0) < thresholds.minimum_recent_by_type
-        for kind in expected_types
+        recent_by_type.get(kind, 0) < thresholds.minimum_recent_by_type for kind in expected_types
     ):
         failed.append("minimum_recent_by_type")
     return FeasibilityResult(

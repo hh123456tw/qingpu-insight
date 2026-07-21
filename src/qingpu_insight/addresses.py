@@ -89,9 +89,7 @@ def match_addresses(transactions: pd.DataFrame, doorplates: pd.DataFrame) -> pd.
             ["district", "road_key", "twd97_x", "twd97_y", "house_number"]
         ].rename(columns={"twd97_x": "nn_x", "twd97_y": "nn_y", "house_number": "nn_house"})
         candidates = remaining.merge(nn, on=["district", "road_key"], how="left")
-        candidates["number_gap"] = (
-            (candidates["nn_house"] - candidates["house_number"]).abs()
-        )
+        candidates["number_gap"] = (candidates["nn_house"] - candidates["house_number"]).abs()
         best_nn = (
             candidates.loc[candidates["house_number"].notna()]
             .sort_values("number_gap")

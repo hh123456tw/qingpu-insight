@@ -80,9 +80,7 @@ def market_summary(frame: pd.DataFrame, filters: MarketFilters) -> dict[str, Any
         "transaction_type": filters.transaction_type,
         "station_codes": list(filters.station_codes),
         "record_count": int(count),
-        "median_unit_price_per_ping_twd": (
-            float(median_price) if pd.notna(median_price) else None
-        ),
+        "median_unit_price_per_ping_twd": (float(median_price) if pd.notna(median_price) else None),
         "median_total_price_twd": float(median_total) if pd.notna(median_total) else None,
         "latest_transaction_date": latest_date_str,
     }

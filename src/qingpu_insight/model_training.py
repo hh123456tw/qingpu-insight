@@ -72,10 +72,7 @@ class RecentMedianBaseline(BaseEstimator):
         result = []
         for _, row in X.iterrows():
             key = (row["station_code"], row["building_type"])
-            if (
-                key in self._group_medians.index
-                and self._group_counts.get(key, 0) >= 20
-            ):
+            if key in self._group_medians.index and self._group_counts.get(key, 0) >= 20:
                 result.append(self._group_medians[key])
             elif (
                 row["station_code"] in self._station_medians.index
@@ -103,9 +100,7 @@ def _compute_metrics(actual: np.ndarray, predicted: np.ndarray, mask: np.ndarray
     return {"mae": mae, "mape": mape, "rmse": rmse, "r2": r2, "count": count}
 
 
-def metric_rows(
-    actual: np.ndarray, predicted: np.ndarray, frame: pd.DataFrame
-) -> pd.DataFrame:
+def metric_rows(actual: np.ndarray, predicted: np.ndarray, frame: pd.DataFrame) -> pd.DataFrame:
     n = len(actual)
     rows = {}
     rows["overall"] = _compute_metrics(actual, predicted, np.ones(n, dtype=bool))
@@ -141,9 +136,7 @@ class CandidateEvaluation:
     metrics: pd.DataFrame
 
 
-def evaluate_candidate(
-    name: str, estimator: Any, split: TimeSplit
-) -> CandidateEvaluation:
+def evaluate_candidate(name: str, estimator: Any, split: TimeSplit) -> CandidateEvaluation:
     estimator.fit(split.train[list(FEATURE_COLUMNS)], split.train["target_unit_price_twd"])
     predicted = estimator.predict(split.test[list(FEATURE_COLUMNS)])
     actual = split.test["target_unit_price_twd"].values
@@ -155,49 +148,112 @@ def evaluate_candidate(
         if idx.startswith("station:")
     }
     return CandidateEvaluation(
-        name=name, estimator=estimator, overall_mae=overall_mae, station_mape=station_mape, metrics=metrics
+        name=name,
+        estimator=estimator,
+        overall_mae=overall_mae,
+        station_mape=station_mape,
+        metrics=metrics,
     )
 
 
 NUMERIC_FEATURES = [
-    "station_distance_m", "building_area_ping", "bedrooms", "living_rooms",
-    "bathrooms", "building_age_years", "floor", "total_floors", "floor_ratio",
-    "parking_area_ping", "transaction_year", "transaction_month",
+    "station_distance_m",
+    "building_area_ping",
+    "bedrooms",
+    "living_rooms",
+    "bathrooms",
+    "building_age_years",
+    "floor",
+    "total_floors",
+    "floor_ratio",
+    "parking_area_ping",
+    "transaction_year",
+    "transaction_month",
 ]
 CATEGORICAL_FEATURES = ["station_code", "building_type", "parking_type"]
 
 
 def make_preprocessor() -> ColumnTransformer:
-    return ColumnTransformer([
-        ("numeric", Pipeline([
-            ("impute", SimpleImputer(strategy="median", add_indicator=True)),
-            ("scale", StandardScaler()),
-        ]), NUMERIC_FEATURES),
-        ("categorical", Pipeline([
-            ("impute", SimpleImputer(strategy="most_frequent")),
-            ("onehot", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
-        ]), CATEGORICAL_FEATURES),
-    ])
+    return ColumnTransformer(
+        [
+            (
+                "numeric",
+                Pipeline(
+                    [
+                        (
+                            "impute",
+                            SimpleImputer(
+                                strategy="median",
+                                add_indicator=True,
+                                keep_empty_features=True,
+                            ),
+                        ),
+                        ("scale", StandardScaler()),
+                    ]
+                ),
+                NUMERIC_FEATURES,
+            ),
+            (
+                "categorical",
+                Pipeline(
+                    [
+                        ("impute", SimpleImputer(strategy="most_frequent")),
+                        ("onehot", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
+                    ]
+                ),
+                CATEGORICAL_FEATURES,
+            ),
+        ]
+    )
 
 
 def candidate_estimators(seed: int = 42) -> dict[str, Pipeline]:
     return {
         "ridge": Pipeline([("features", make_preprocessor()), ("model", Ridge(alpha=10.0))]),
-        "random_forest": Pipeline([("features", make_preprocessor()), ("model", RandomForestRegressor(
-            n_estimators=400, min_samples_leaf=5, max_features=0.8,
-            random_state=seed, n_jobs=-1,
-        ))]),
-        "hist_gradient_boosting": Pipeline([("features", make_preprocessor()), ("model", HistGradientBoostingRegressor(
-            learning_rate=0.06, max_iter=350, max_leaf_nodes=31,
-            l2_regularization=1.0, random_state=seed,
-        ))]),
+        "random_forest": Pipeline(
+            [
+                ("features", make_preprocessor()),
+                (
+                    "model",
+                    RandomForestRegressor(
+                        n_estimators=400,
+                        min_samples_leaf=5,
+                        max_features=0.8,
+                        random_state=seed,
+                        n_jobs=-1,
+                    ),
+                ),
+            ]
+        ),
+        "hist_gradient_boosting": Pipeline(
+            [
+                ("features", make_preprocessor()),
+                (
+                    "model",
+                    HistGradientBoostingRegressor(
+                        learning_rate=0.06,
+                        max_iter=350,
+                        max_leaf_nodes=31,
+                        l2_regularization=1.0,
+                        random_state=seed,
+                    ),
+                ),
+            ]
+        ),
     }
 
 
 def select_release_candidate(results: list[CandidateEvaluation]) -> CandidateEvaluation:
     baseline = next(result for result in results if result.name == "baseline")
-    eligible = [result for result in results if result.name != "baseline"
+    published_stations = set(baseline.station_mape)
+    eligible = [
+        result
+        for result in results
+        if result.name != "baseline"
         and result.overall_mae <= baseline.overall_mae * 0.98
-        and all(result.station_mape[s] <= baseline.station_mape[s] * 1.10
-                for s in ("A17", "A18", "A19"))]
+        and published_stations <= set(result.station_mape)
+        and all(
+            result.station_mape[s] <= baseline.station_mape[s] * 1.10 for s in published_stations
+        )
+    ]
     return min(eligible, key=lambda result: result.overall_mae, default=baseline)

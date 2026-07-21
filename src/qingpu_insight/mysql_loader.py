@@ -23,14 +23,18 @@ INSERT_COLUMNS: tuple[str, ...] = (
     "latitude",
     "match_quality",
     "source_file",
+    "floor",
+    "total_floors",
+    "parking_type",
+    "parking_area_sqm",
+    "parking_price_twd",
+    "analysis_eligible",
 )
 
 _placeholders = ", ".join("%s" for _ in INSERT_COLUMNS)
 _columns_sql = ", ".join(INSERT_COLUMNS)
 
-_updates_sql = ",\n  ".join(
-    f"{column}=VALUES({column})" for column in INSERT_COLUMNS[1:]
-)
+_updates_sql = ",\n  ".join(f"{column}=VALUES({column})" for column in INSERT_COLUMNS[1:])
 
 _UPSERT_SQL = f"""INSERT INTO market_transactions ({_columns_sql})
 VALUES ({_placeholders})

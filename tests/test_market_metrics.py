@@ -34,9 +34,7 @@ def test_trends_group_by_calendar_month(market_frame: pd.DataFrame) -> None:
 
 
 def test_recent_transactions_limit_and_round_coordinates(market_frame: pd.DataFrame) -> None:
-    result = recent_transactions(
-        market_frame, MarketFilters(transaction_type="presale"), limit=3
-    )
+    result = recent_transactions(market_frame, MarketFilters(transaction_type="presale"), limit=3)
     assert len(result) == 3
     assert result[0]["transaction_date"] >= result[1]["transaction_date"]
     assert len(str(result[0]["latitude"]).split(".")[-1]) <= 4
@@ -45,9 +43,7 @@ def test_recent_transactions_limit_and_round_coordinates(market_frame: pd.DataFr
 def test_recent_transactions_exposes_only_public_fields(
     market_frame: pd.DataFrame,
 ) -> None:
-    result = recent_transactions(
-        market_frame, MarketFilters(transaction_type="resale"), limit=1
-    )
+    result = recent_transactions(market_frame, MarketFilters(transaction_type="resale"), limit=1)
     assert set(result[0]) == {
         "transaction_type",
         "record_id",
@@ -71,9 +67,7 @@ def test_recent_transactions_exposes_only_public_fields(
 def test_empty_summary_uses_none_instead_of_nan(market_frame: pd.DataFrame) -> None:
     result = market_summary(
         market_frame,
-        MarketFilters(
-            transaction_type="resale", date_from=pd.Timestamp("2099-01-01")
-        ),
+        MarketFilters(transaction_type="resale", date_from=pd.Timestamp("2099-01-01")),
     )
     assert result["record_count"] == 0
     assert result["median_unit_price_per_ping_twd"] is None

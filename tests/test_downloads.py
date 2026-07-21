@@ -37,9 +37,7 @@ def test_download_season_uses_official_history_endpoint(tmp_path: Path) -> None:
     url = "https://plvr.land.moi.gov.tw/DownloadHistory?type=season&fileName=115S2"
     responses.get(url, body=taoyuan_zip_bytes(), status=200)
 
-    record = download_season(
-        "https://plvr.land.moi.gov.tw", "115S2", tmp_path / "115S2.zip"
-    )
+    record = download_season("https://plvr.land.moi.gov.tw", "115S2", tmp_path / "115S2.zip")
 
     assert record.source_url == url
     assert record.path.name == "115S2.zip"

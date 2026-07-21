@@ -30,6 +30,12 @@ ALLOWLISTED_COLUMNS: tuple[str, ...] = (
     "latitude",
     "match_quality",
     "source_file",
+    "floor",
+    "total_floors",
+    "parking_type",
+    "parking_area_sqm",
+    "parking_price_twd",
+    "analysis_eligible",
 )
 
 COLUMNS_SQL = ", ".join(ALLOWLISTED_COLUMNS)
@@ -47,13 +53,14 @@ NUMERIC_COLUMNS: tuple[str, ...] = (
     "station_distance_m",
     "longitude",
     "latitude",
+    "parking_area_sqm",
+    "parking_price_twd",
 )
 
 
 class MarketDataSource(ABC):
     @abstractmethod
-    def load(self, filters: MarketFilters) -> pd.DataFrame:
-        ...
+    def load(self, filters: MarketFilters) -> pd.DataFrame: ...
 
 
 class ParquetMarketDataSource(MarketDataSource):
@@ -160,6 +167,7 @@ class MySQLMarketDataSource(MarketDataSource):
         frame["transaction_date"] = pd.to_datetime(frame["transaction_date"])
         for column in NUMERIC_COLUMNS:
             frame[column] = pd.to_numeric(frame[column], errors="coerce")
+        frame["analysis_eligible"] = frame["analysis_eligible"].astype(bool)
         return frame
 
 

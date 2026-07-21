@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass
 from typing import Literal
 
@@ -46,11 +47,17 @@ def _chinese_to_int(text: str) -> int:
 
 
 def parse_floor(value) -> int | None:
-    if not isinstance(value, str) or not value:
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        if pd.isna(value) or not float(value).is_integer():
+            return None
+        number = int(value)
+        return number if 0 < abs(number) <= 200 else None
+    if not isinstance(value, str) or not value.strip():
         return None
     cleaned = value.strip()
     if cleaned == "全":
         return None
+    cleaned = cleaned.split("，", 1)[0]
     negative = False
     if cleaned.startswith("地下"):
         negative = True
@@ -59,7 +66,10 @@ def parse_floor(value) -> int | None:
         cleaned = cleaned[:-1]
     if not cleaned:
         return None
-    num = _chinese_to_int(cleaned)
+    try:
+        num = int(cleaned)
+    except ValueError:
+        num = _chinese_to_int(cleaned)
     if negative:
         num = -num
     if num == 0 or abs(num) > 200:
@@ -78,11 +88,11 @@ def parking_adjusted_target(row: pd.Series) -> tuple[float, str]:
 
 def build_model_frame(frame: pd.DataFrame, transaction_type: str) -> pd.DataFrame:
     result = frame.loc[
-        frame["analysis_eligible"].fillna(False)
-        & frame["transaction_type"].eq(transaction_type)
+        frame["analysis_eligible"].fillna(False) & frame["transaction_type"].eq(transaction_type)
     ].copy()
     result["floor"] = result["floor"].map(parse_floor)
-    result["total_floors"] = pd.to_numeric(result["total_floors"], errors="coerce")
+    result["total_floors"] = result["total_floors"].map(parse_floor)
+    result.loc[result["total_floors"].le(0), "total_floors"] = pd.NA
     result["floor_ratio"] = result["floor"] / result["total_floors"]
     result["parking_area_ping"] = result["parking_area_sqm"].fillna(0) / 3.305785
     result["transaction_year"] = result["transaction_date"].dt.year
@@ -112,6 +122,22 @@ class ValuationInput:
     asking_total_price_twd: int | None = None
 
     def __post_init__(self):
+        if self.transaction_type not in {"resale", "presale"}:
+            raise ValueError("transaction_type must be resale or presale")
+        if self.station_code not in {"A17", "A18", "A19"}:
+            raise ValueError("station_code must be A17, A18, or A19")
+        numeric_values = (
+            self.station_distance_m,
+            self.building_area_ping,
+            self.bedrooms,
+            self.living_rooms,
+            self.bathrooms,
+            self.floor,
+            self.total_floors,
+            self.parking_area_ping,
+        )
+        if not all(math.isfinite(float(value)) for value in numeric_values):
+            raise ValueError("numeric inputs must be finite")
         if not (5 <= self.building_area_ping <= 200):
             raise ValueError("building_area_ping must be between 5 and 200")
         if not (0 <= self.station_distance_m <= 2000):
@@ -122,12 +148,20 @@ class ValuationInput:
             raise ValueError("living_rooms must be between 0 and 10")
         if not (0 <= self.bathrooms <= 10):
             raise ValueError("bathrooms must be between 0 and 10")
+        if self.total_floors < 1:
+            raise ValueError("total_floors must be at least 1")
+        if self.floor < 1:
+            raise ValueError("floor must be at least 1")
         if self.floor > self.total_floors:
             raise ValueError("floor must not exceed total_floors")
         if not (0 <= self.parking_area_ping <= 60):
             raise ValueError("parking_area_ping must be between 0 and 60")
         if self.transaction_type == "presale" and self.building_age_years is not None:
             raise ValueError("building_age_years must be omitted for presale")
+        if self.transaction_type == "resale" and self.building_age_years is None:
+            raise ValueError("building_age_years is required for resale")
+        if self.building_age_years is not None and not math.isfinite(self.building_age_years):
+            raise ValueError("building_age_years must be finite")
         if self.building_age_years is not None and not (0 <= self.building_age_years <= 100):
             raise ValueError("building_age_years must be between 0 and 100")
         if self.asking_total_price_twd is not None and self.asking_total_price_twd <= 0:
@@ -143,7 +177,9 @@ def input_frame(value: ValuationInput, data_date: pd.Timestamp) -> pd.DataFrame:
         "bedrooms": [value.bedrooms],
         "living_rooms": [value.living_rooms],
         "bathrooms": [value.bathrooms],
-        "building_age_years": [value.building_age_years if value.building_age_years is not None else None],
+        "building_age_years": [
+            value.building_age_years if value.building_age_years is not None else None
+        ],
         "floor": [value.floor],
         "total_floors": [value.total_floors],
         "floor_ratio": [value.floor / value.total_floors],

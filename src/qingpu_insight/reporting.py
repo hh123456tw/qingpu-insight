@@ -26,9 +26,7 @@ def render_markdown(result: FeasibilityResult, sources: Iterable[str]) -> str:
     )
     source_lines = "\n".join(f"- {source}" for source in sources)
     table = (
-        result.summary.to_markdown(index=False)
-        if not result.summary.empty
-        else "無可歸屬紀錄。"
+        result.summary.to_markdown(index=False) if not result.summary.empty else "無可歸屬紀錄。"
     )
     return f"""# 青埔智價 M0 資料可行性報告
 

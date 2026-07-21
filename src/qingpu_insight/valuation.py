@@ -1,6 +1,6 @@
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -41,9 +41,7 @@ class ModelRegistry:
         if transaction_type not in self._bundles:
             path = self._artifact_dir / f"{transaction_type}.joblib"
             if not path.exists():
-                raise ModelUnavailableError(
-                    f"{transaction_type} model artifact not found"
-                )
+                raise ModelUnavailableError(f"{transaction_type} model artifact not found")
             bundle: ValuationBundle = joblib.load(path)
             if bundle.transaction_type != transaction_type:
                 raise ModelUnavailableError(
@@ -53,16 +51,12 @@ class ModelRegistry:
         return self._bundles[transaction_type]
 
 
-def prediction_interval(
-    bundle: ValuationBundle, unit_price: float
-) -> tuple[float, float]:
+def prediction_interval(bundle: ValuationBundle, unit_price: float) -> tuple[float, float]:
     radius = bundle.interval_abs_residual_twd_per_ping
     return max(0.0, unit_price - radius), unit_price + radius
 
 
-def local_factors(
-    bundle: ValuationBundle, row: pd.DataFrame
-) -> list[dict[str, object]]:
+def local_factors(bundle: ValuationBundle, row: pd.DataFrame) -> list[dict[str, object]]:
     base = float(bundle.pipeline.predict(row)[0])
     factors = []
     for feature, median in bundle.feature_medians.items():
@@ -102,7 +96,11 @@ def similar_transactions(
     ref_area = float(input_row.at[0, "building_area_ping"])
     ref_dist = float(input_row.at[0, "station_distance_m"])
     ref_bed = float(input_row.at[0, "bedrooms"])
-    ref_age = float(input_row.at[0, "building_age_years"]) if pd.notna(input_row.at[0, "building_age_years"]) else 0
+    ref_age = (
+        float(input_row.at[0, "building_age_years"])
+        if pd.notna(input_row.at[0, "building_age_years"])
+        else 0
+    )
     ref_ratio = float(input_row.at[0, "floor_ratio"])
     ref_type = str(input_row.at[0, "building_type"])
 
@@ -163,13 +161,18 @@ def confidence_assessment(
     if degraded:
         return {"confidence": "low", "confidence_reasons": ["使用降級模型（近期中位數基準）"]}
 
-    estimated_total = unit_price * float(input_row.at[0, "building_area_ping"])
     interval_width = interval[1] - interval[0]
-    width_ratio = interval_width / estimated_total if estimated_total > 0 else 1
+    width_ratio = interval_width / unit_price if unit_price > 0 else 1
 
     numeric_fields = [
-        "building_area_ping", "station_distance_m", "bedrooms", "living_rooms",
-        "bathrooms", "floor", "total_floors", "parking_area_ping",
+        "building_area_ping",
+        "station_distance_m",
+        "bedrooms",
+        "living_rooms",
+        "bathrooms",
+        "floor",
+        "total_floors",
+        "parking_area_ping",
     ]
     if pd.notna(input_row.at[0, "building_age_years"]):
         numeric_fields.append("building_age_years")
@@ -187,9 +190,7 @@ def confidence_assessment(
             if val < h_low or val > h_high:
                 p1_fails += 1
 
-    good_comparables = sum(
-        1 for c in comparables if c.get("similarity_score", 0) >= 0.60
-    )
+    good_comparables = sum(1 for c in comparables if c.get("similarity_score", 0) >= 0.60)
 
     fails = 0
     if p5_fails > 0:
@@ -225,28 +226,35 @@ def valuate(
         degraded = True
 
     if degraded or bundle is None:
-        recent = market.loc[
-            (market["transaction_type"] == input_.transaction_type)
-        ].copy()
-        if len(recent) > 0:
-            median_price = float(recent["unit_price_per_ping_twd"].median())
-        else:
-            median_price = 300_000
+        recent = market.loc[(market["transaction_type"] == input_.transaction_type)].copy()
+        recent = recent.dropna(subset=["transaction_date", "unit_price_per_ping_twd"])
+        if recent.empty:
+            raise ModelUnavailableError("model artifact and market data are unavailable")
+        data_date = pd.Timestamp(recent["transaction_date"].max())
+        recent = recent.loc[recent["transaction_date"] >= data_date - pd.DateOffset(months=24)]
+        same_station = recent.loc[recent["station_code"] == input_.station_code]
+        same_cohort = same_station.loc[same_station["building_type"] == input_.building_type]
+        cohort = same_cohort if not same_cohort.empty else same_station
+        if cohort.empty:
+            cohort = recent
+        median_price = float(cohort["unit_price_per_ping_twd"].median())
+        deviations = (cohort["unit_price_per_ping_twd"] - median_price).abs()
+        interval_radius = float(deviations.quantile(0.90))
         total_price = median_price * input_.building_area_ping
         return {
             "transaction_type": input_.transaction_type,
             "estimated_unit_price_per_ping_twd": round(median_price),
             "estimated_total_price_twd": round(total_price),
             "interval_total_price_twd": (
-                round(total_price * 0.8),
-                round(total_price * 1.2),
+                round(max(0, median_price - interval_radius) * input_.building_area_ping),
+                round((median_price + interval_radius) * input_.building_area_ping),
             ),
             "confidence": "low",
             "confidence_reasons": ["模型 artifact 不可用，使用近期中位數降級估價"],
             "factors": [],
             "comparables": [],
             "comparable_scope": "degraded",
-            "data_date": "",
+            "data_date": str(data_date.date()),
             "degraded": True,
             "asking_price_assessment": None,
             "model": {
@@ -268,9 +276,7 @@ def valuate(
     comparables_list = comparables_result["comparables"]
     comparable_scope = comparables_result["comparable_scope"]
 
-    assessing = confidence_assessment(
-        bundle, row, unit_price, interval, comparables_list
-    )
+    assessing = confidence_assessment(bundle, row, unit_price, interval, comparables_list)
 
     result: dict[str, Any] = {
         "transaction_type": input_.transaction_type,
@@ -309,9 +315,7 @@ def valuate(
     return result
 
 
-def _model_version(
-    transaction_type: str, max_date: str, contract_hash: str
-) -> str:
+def _model_version(transaction_type: str, max_date: str, contract_hash: str) -> str:
     return f"{transaction_type}-{max_date}-{contract_hash[:8]}"
 
 
@@ -327,9 +331,7 @@ def train_artifact(
     calibration_pred = selected.estimator.predict(split.calibration[list(FEATURE_COLUMNS)])
     radius = float(
         np.quantile(
-            np.abs(
-                split.calibration["target_unit_price_twd"].values - calibration_pred
-            ),
+            np.abs(split.calibration["target_unit_price_twd"].values - calibration_pred),
             0.90,
         )
     )
@@ -378,7 +380,7 @@ def train_artifact(
         reference_rows=split.train,
         data_min_date=str(split.train["transaction_date"].min().date()),
         data_max_date=str(split.train["transaction_date"].max().date()),
-        metrics=selected.metrics.to_dict(),
+        metrics=selected.metrics.to_dict(orient="index"),
     )
 
     artifact_dir.mkdir(parents=True, exist_ok=True)

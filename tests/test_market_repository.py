@@ -13,6 +13,7 @@ from qingpu_insight.market_repository import (
     _build_filter_sql,
     repository_from_env,
 )
+from qingpu_insight.model_features import build_model_frame
 
 
 def test_repository_defaults_to_parquet(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -69,10 +70,35 @@ class FakeConnection:
 def test_mysql_source_generates_parameterized_sql() -> None:
     fake = FakeConnection()
     cursor = fake.cursor_instance
-    cursor.fetchall_result = [
-        ("k1", "resale", "R1", "A18", date(2026, 1, 15), 99.17355, 30.0, 181500, 600000.0, 18000000,
-         "住宅大樓", 3, 2, 2, 6.04, 500.0, 121.21, 25.01, "exact", "a.csv")
-    ]
+    row = {
+        "transaction_key": "k1",
+        "transaction_type": "resale",
+        "record_id": "R1",
+        "station_code": "A18",
+        "transaction_date": date(2026, 1, 15),
+        "building_area_sqm": 99.17355,
+        "building_area_ping": 30.0,
+        "unit_price_sqm_twd": 181500,
+        "unit_price_per_ping_twd": 600000.0,
+        "total_price_twd": 18000000,
+        "building_type": "住宅大樓",
+        "bedrooms": 3,
+        "living_rooms": 2,
+        "bathrooms": 2,
+        "building_age_years": 6.04,
+        "station_distance_m": 500.0,
+        "longitude": 121.21,
+        "latitude": 25.01,
+        "match_quality": "exact",
+        "source_file": "a.csv",
+        "floor": "五層",
+        "total_floors": "十五層",
+        "parking_type": "坡道平面",
+        "parking_area_sqm": 33.0,
+        "parking_price_twd": 2_000_000,
+        "analysis_eligible": True,
+    }
+    cursor.fetchall_result = [tuple(row[column] for column in ALLOWLISTED_COLUMNS)]
 
     parsed = urlparse("mysql://user:pass@localhost/qingpu_insight")
     source = MySQLMarketDataSource(parsed, _test_connection=fake)
@@ -100,27 +126,30 @@ def test_mysql_source_generates_parameterized_sql() -> None:
     assert df.iloc[0]["transaction_key"] == "k1"
     assert pd.api.types.is_datetime64_any_dtype(df["transaction_date"])
     assert market_trends(df, filters)[0]["month"] == "2026-01"
+    assert len(build_model_frame(df, "resale")) == 1
 
 
 def test_parquet_source_filters_by_transaction_type(tmp_path: Path) -> None:
-    df = pd.DataFrame({
-        "transaction_type": ["resale", "presale", "resale"],
-        "station_code": ["A17", "A17", "A18"],
-        "transaction_date": pd.to_datetime(["2026-01-01", "2026-01-02", "2026-01-03"]),
-        "building_area_ping": [30.0, 25.0, 40.0],
-        "building_type": ["住宅大樓", "住宅大樓", "華廈"],
-        "bedrooms": [3, 2, 4],
-        "unit_price_per_ping_twd": [600000.0, 800000.0, 500000.0],
-        "total_price_twd": [18000000, 20000000, 20000000],
-        "longitude": [121.21, 121.22, 121.20],
-        "latitude": [25.01, 25.02, 25.00],
-        "record_id": ["R1", "P1", "R2"],
-        "building_area_sqm": [99.17355, 82.644625, 132.2314],
-        "unit_price_sqm_twd": [181500, 242000, 151250],
-        "station_distance_m": [500.0, 600.0, 300.0],
-        "match_quality": ["exact", "exact", "exact"],
-        "source_file": ["a.csv", "b.csv", "a.csv"],
-    })
+    df = pd.DataFrame(
+        {
+            "transaction_type": ["resale", "presale", "resale"],
+            "station_code": ["A17", "A17", "A18"],
+            "transaction_date": pd.to_datetime(["2026-01-01", "2026-01-02", "2026-01-03"]),
+            "building_area_ping": [30.0, 25.0, 40.0],
+            "building_type": ["住宅大樓", "住宅大樓", "華廈"],
+            "bedrooms": [3, 2, 4],
+            "unit_price_per_ping_twd": [600000.0, 800000.0, 500000.0],
+            "total_price_twd": [18000000, 20000000, 20000000],
+            "longitude": [121.21, 121.22, 121.20],
+            "latitude": [25.01, 25.02, 25.00],
+            "record_id": ["R1", "P1", "R2"],
+            "building_area_sqm": [99.17355, 82.644625, 132.2314],
+            "unit_price_sqm_twd": [181500, 242000, 151250],
+            "station_distance_m": [500.0, 600.0, 300.0],
+            "match_quality": ["exact", "exact", "exact"],
+            "source_file": ["a.csv", "b.csv", "a.csv"],
+        }
+    )
     path = tmp_path / "market_transactions.parquet"
     df.to_parquet(path, index=False)
 

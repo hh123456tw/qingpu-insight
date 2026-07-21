@@ -52,28 +52,36 @@ def fake_connection() -> FakeConnection:
 
 @pytest.fixture
 def market_frame() -> pd.DataFrame:
-    return pd.DataFrame({
-        "transaction_key": [f"key_{i:03d}" for i in range(12)],
-        "transaction_type": ["resale"] * 12,
-        "record_id": [f"R{i}" for i in range(12)],
-        "station_code": ["A17"] * 12,
-        "transaction_date": pd.to_datetime(["2026-01-15"] * 12),
-        "building_area_sqm": [99.17355] * 12,
-        "building_area_ping": [30.0] * 12,
-        "unit_price_sqm_twd": [181500] * 12,
-        "unit_price_per_ping_twd": [600000.0] * 12,
-        "total_price_twd": [18000000] * 12,
-        "building_type": ["住宅大樓"] * 12,
-        "bedrooms": [3] * 12,
-        "living_rooms": [2] * 12,
-        "bathrooms": [2] * 12,
-        "building_age_years": [6.04] * 12,
-        "station_distance_m": [500.0] * 12,
-        "longitude": [121.21] * 12,
-        "latitude": [25.01] * 12,
-        "match_quality": ["exact"] * 12,
-        "source_file": ["a.csv"] * 12,
-    })
+    return pd.DataFrame(
+        {
+            "transaction_key": [f"key_{i:03d}" for i in range(12)],
+            "transaction_type": ["resale"] * 12,
+            "record_id": [f"R{i}" for i in range(12)],
+            "station_code": ["A17"] * 12,
+            "transaction_date": pd.to_datetime(["2026-01-15"] * 12),
+            "building_area_sqm": [99.17355] * 12,
+            "building_area_ping": [30.0] * 12,
+            "unit_price_sqm_twd": [181500] * 12,
+            "unit_price_per_ping_twd": [600000.0] * 12,
+            "total_price_twd": [18000000] * 12,
+            "building_type": ["住宅大樓"] * 12,
+            "bedrooms": [3] * 12,
+            "living_rooms": [2] * 12,
+            "bathrooms": [2] * 12,
+            "building_age_years": [6.04] * 12,
+            "station_distance_m": [500.0] * 12,
+            "longitude": [121.21] * 12,
+            "latitude": [25.01] * 12,
+            "match_quality": ["exact"] * 12,
+            "source_file": ["a.csv"] * 12,
+            "floor": ["五層"] * 12,
+            "total_floors": ["十五層"] * 12,
+            "parking_type": ["坡道平面"] * 12,
+            "parking_area_sqm": [33.0] * 12,
+            "parking_price_twd": [2_000_000] * 12,
+            "analysis_eligible": [True] * 12,
+        }
+    )
 
 
 def test_loader_uses_upsert_and_returns_loaded_count(
@@ -101,28 +109,36 @@ def test_loader_batches_remainder_correctly(
 
 
 def test_loader_converts_nan_to_none(fake_connection: FakeConnection) -> None:
-    df = pd.DataFrame({
-        "transaction_key": ["k_nan"],
-        "transaction_type": ["resale"],
-        "record_id": [None],
-        "station_code": ["A17"],
-        "transaction_date": [pd.Timestamp("2026-01-15")],
-        "building_area_sqm": [99.17355],
-        "building_area_ping": [30.0],
-        "unit_price_sqm_twd": [181500],
-        "unit_price_per_ping_twd": [600000.0],
-        "total_price_twd": [18000000],
-        "building_type": [None],
-        "bedrooms": [None],
-        "living_rooms": [None],
-        "bathrooms": [None],
-        "building_age_years": [float("nan")],
-        "station_distance_m": [500.0],
-        "longitude": [121.21],
-        "latitude": [25.01],
-        "match_quality": ["exact"],
-        "source_file": ["a.csv"],
-    })
+    df = pd.DataFrame(
+        {
+            "transaction_key": ["k_nan"],
+            "transaction_type": ["resale"],
+            "record_id": [None],
+            "station_code": ["A17"],
+            "transaction_date": [pd.Timestamp("2026-01-15")],
+            "building_area_sqm": [99.17355],
+            "building_area_ping": [30.0],
+            "unit_price_sqm_twd": [181500],
+            "unit_price_per_ping_twd": [600000.0],
+            "total_price_twd": [18000000],
+            "building_type": [None],
+            "bedrooms": [None],
+            "living_rooms": [None],
+            "bathrooms": [None],
+            "building_age_years": [float("nan")],
+            "station_distance_m": [500.0],
+            "longitude": [121.21],
+            "latitude": [25.01],
+            "match_quality": ["exact"],
+            "source_file": ["a.csv"],
+            "floor": ["五層"],
+            "total_floors": ["十五層"],
+            "parking_type": [None],
+            "parking_area_sqm": [float("nan")],
+            "parking_price_twd": [float("nan")],
+            "analysis_eligible": [True],
+        }
+    )
     df.loc[0, "building_type"] = float("nan")
     df.loc[0, "bedrooms"] = float("nan")
 
@@ -157,28 +173,36 @@ def test_loader_rollback_on_error(fake_connection: FakeConnection) -> None:
             return bad_cursor
 
     fc = FailingConnection()
-    df = pd.DataFrame({
-        "transaction_key": [f"k{i}" for i in range(15)],
-        "transaction_type": ["resale"] * 15,
-        "record_id": [f"R{i}" for i in range(15)],
-        "station_code": ["A17"] * 15,
-        "transaction_date": pd.to_datetime(["2026-01-15"] * 15),
-        "building_area_sqm": [99.17355] * 15,
-        "building_area_ping": [30.0] * 15,
-        "unit_price_sqm_twd": [181500] * 15,
-        "unit_price_per_ping_twd": [600000.0] * 15,
-        "total_price_twd": [18000000] * 15,
-        "building_type": ["住宅大樓"] * 15,
-        "bedrooms": [3] * 15,
-        "living_rooms": [2] * 15,
-        "bathrooms": [2] * 15,
-        "building_age_years": [6.04] * 15,
-        "station_distance_m": [500.0] * 15,
-        "longitude": [121.21] * 15,
-        "latitude": [25.01] * 15,
-        "match_quality": ["exact"] * 15,
-        "source_file": ["a.csv"] * 15,
-    })
+    df = pd.DataFrame(
+        {
+            "transaction_key": [f"k{i}" for i in range(15)],
+            "transaction_type": ["resale"] * 15,
+            "record_id": [f"R{i}" for i in range(15)],
+            "station_code": ["A17"] * 15,
+            "transaction_date": pd.to_datetime(["2026-01-15"] * 15),
+            "building_area_sqm": [99.17355] * 15,
+            "building_area_ping": [30.0] * 15,
+            "unit_price_sqm_twd": [181500] * 15,
+            "unit_price_per_ping_twd": [600000.0] * 15,
+            "total_price_twd": [18000000] * 15,
+            "building_type": ["住宅大樓"] * 15,
+            "bedrooms": [3] * 15,
+            "living_rooms": [2] * 15,
+            "bathrooms": [2] * 15,
+            "building_age_years": [6.04] * 15,
+            "station_distance_m": [500.0] * 15,
+            "longitude": [121.21] * 15,
+            "latitude": [25.01] * 15,
+            "match_quality": ["exact"] * 15,
+            "source_file": ["a.csv"] * 15,
+            "floor": ["五層"] * 15,
+            "total_floors": ["十五層"] * 15,
+            "parking_type": [""] * 15,
+            "parking_area_sqm": [0.0] * 15,
+            "parking_price_twd": [0] * 15,
+            "analysis_eligible": [True] * 15,
+        }
+    )
 
     with pytest.raises(RuntimeError, match="Deadlock found"):
         load_market_rows(fc, df, batch_size=10)

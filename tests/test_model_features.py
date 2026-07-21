@@ -62,6 +62,8 @@ def valid_presale_input() -> ValuationInput:
 
 def test_parse_floor_handles_chinese_and_rejects_impossible_values():
     assert parse_floor("十層") == 10
+    assert parse_floor("二十一層") == 21
+    assert parse_floor("15") == 15
     assert parse_floor("地下二層") == -2
     assert parse_floor("全") is None
 
@@ -74,6 +76,14 @@ def test_build_model_frame_isolates_type_and_adjusts_parking(fixture_frame):
     )
 
 
+def test_build_model_frame_parses_chinese_total_floors(fixture_frame):
+    fixture_frame["total_floors"] = fixture_frame["total_floors"].astype(object)
+    fixture_frame.loc[fixture_frame["transaction_type"].eq("resale"), "total_floors"] = "二十一層"
+    resale = build_model_frame(fixture_frame, "resale")
+    assert resale["total_floors"].eq(21).all()
+    assert resale["floor_ratio"].notna().all()
+
+
 def test_input_frame_matches_training_feature_columns(valid_resale_input):
     online = input_frame(valid_resale_input, pd.Timestamp("2026-06-12"))
     assert list(online.columns) == list(FEATURE_COLUMNS)
@@ -84,3 +94,19 @@ def test_presale_input_rejects_age_and_floor_above_total(valid_presale_input):
         replace(valid_presale_input, building_age_years=1.0)
     with pytest.raises(ValueError, match="floor must not exceed total_floors"):
         replace(valid_presale_input, floor=21, total_floors=20)
+
+
+@pytest.mark.parametrize("station_code", ["Z99", "", "A16"])
+def test_valuation_input_rejects_unknown_station(valid_resale_input, station_code):
+    with pytest.raises(ValueError, match="station_code"):
+        replace(valid_resale_input, station_code=station_code)
+
+
+def test_valuation_input_rejects_zero_total_floors(valid_resale_input):
+    with pytest.raises(ValueError, match="total_floors"):
+        replace(valid_resale_input, floor=0, total_floors=0)
+
+
+def test_resale_input_requires_building_age(valid_resale_input):
+    with pytest.raises(ValueError, match="building_age_years is required"):
+        replace(valid_resale_input, building_age_years=None)

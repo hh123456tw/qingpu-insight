@@ -127,8 +127,10 @@ mysql -u root -p < database/001_market_schema.sql
 |------|------|------|
 | `artifacts/resale.joblib` | model-train | 中古屋估價 artifact（不提交 Git） |
 | `artifacts/presale.joblib` | model-train | 預售屋估價 artifact（不提交 Git） |
-| `outputs/reports/m2-evaluation-*.json` | model-train | 候選模型評估報告 |
-| `outputs/reports/m2-model-card-*.md` | model-train | 模型卡（含限制與不適用情境） |
+| `outputs/reports/resale-evaluation.json` | model-train | 中古屋候選模型評估報告 |
+| `outputs/reports/presale-evaluation.json` | model-train | 預售屋候選模型評估報告 |
+| `outputs/reports/resale-model-card.md` | model-train | 中古屋模型卡 |
+| `outputs/reports/presale-model-card.md` | model-train | 預售屋模型卡 |
 
 ### 啟用估價產品
 

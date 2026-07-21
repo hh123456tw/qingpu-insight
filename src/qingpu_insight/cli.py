@@ -91,9 +91,7 @@ def acquire(root: Path, start: str, end: str) -> None:
         except Exception as error:
             errors.append(f"{name}: {error}")
     try:
-        record = download_file(
-            settings.sources.doorplate_url, settings.raw_dir / "doorplates.csv"
-        )
+        record = download_file(settings.sources.doorplate_url, settings.raw_dir / "doorplates.csv")
         write_manifest([record], manifest)
     except Exception as error:
         errors.append(f"doorplates.csv: {error}")
@@ -189,7 +187,8 @@ def model_train(root: Path, input_path: str, artifact_dir: str, report_dir: str)
             if idx.startswith("station:")
         }
         baseline_eval = CandidateEvaluation(
-            name="baseline", estimator=baseline,
+            name="baseline",
+            estimator=baseline,
             overall_mae=baseline_mae,
             station_mape=baseline_station_mape,
             metrics=baseline_metrics,
@@ -204,11 +203,15 @@ def model_train(root: Path, input_path: str, artifact_dir: str, report_dir: str)
 
         temp_bundle = ValuationBundle(
             transaction_type=transaction_type,
-            model_name="", model_version="",
+            model_name="",
+            model_version="",
             pipeline=None,
             interval_abs_residual_twd_per_ping=0,
-            feature_ranges={}, feature_hard_ranges={}, feature_medians={},
-            global_importance=[], reference_rows=pd.DataFrame(),
+            feature_ranges={},
+            feature_hard_ranges={},
+            feature_medians={},
+            global_importance=[],
+            reference_rows=pd.DataFrame(),
             data_min_date="",
             data_max_date=str(split.train["transaction_date"].max().date()),
             metrics={},
@@ -220,7 +223,8 @@ def model_train(root: Path, input_path: str, artifact_dir: str, report_dir: str)
         eval_path = write_evaluation(bundle, candidates, split, report_path)
         card_path = write_model_card(bundle, candidates, leakage, report_path)
 
-        print(f"  {transaction_type}: {selected.name} -> {artifact_path / f'{transaction_type}.joblib'}")
+        artifact_file = artifact_path / f"{transaction_type}.joblib"
+        print(f"  {transaction_type}: {selected.name} -> {artifact_file}")
         print(f"    evaluation: {eval_path}")
         print(f"    model card: {card_path}")
 

@@ -3,7 +3,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import pandas as pd
 
 from qingpu_insight.model_features import FEATURE_COLUMNS
 from qingpu_insight.model_training import CandidateEvaluation, TimeSplit, leakage_audit
@@ -17,8 +16,6 @@ def write_evaluation(
     report_dir: Path,
 ) -> Path:
     leakage = leakage_audit(split)
-    selected = next(c for c in candidates if c.name == bundle.model_name)
-
     test_pred = bundle.pipeline.predict(split.test[list(FEATURE_COLUMNS)])
     test_actual = split.test["target_unit_price_twd"].values
     radius = bundle.interval_abs_residual_twd_per_ping
@@ -92,10 +89,12 @@ def write_model_card(
         marker = " ✓" if c.name == bundle.model_name else ""
         lines.append(f"- {c.name}：MAE = {c.overall_mae:,.0f}{marker}")
 
-    lines.extend([
-        "",
-        "## 分群誤差",
-    ])
+    lines.extend(
+        [
+            "",
+            "## 分群誤差",
+        ]
+    )
 
     for group_name, group_metrics in bundle.metrics.items():
         mae = group_metrics.get("mae", "N/A")
@@ -103,14 +102,16 @@ def write_model_card(
         count = group_metrics.get("count", 0)
         lines.append(f"- {group_name}：MAE = {mae}，MAPE = {mape}%，n = {count}")
 
-    lines.extend([
-        "",
-        "## 區間覆蓋率",
-        f"- 校準分位數：{bundle.interval_abs_residual_twd_per_ping:,.0f} 元/坪",
-        "- 測試集覆蓋率依校準分位數計算",
-        "",
-        "## 限制",
-    ])
+    lines.extend(
+        [
+            "",
+            "## 區間覆蓋率",
+            f"- 校準分位數：{bundle.interval_abs_residual_twd_per_ping:,.0f} 元/坪",
+            "- 測試集覆蓋率依校準分位數計算",
+            "",
+            "## 限制",
+        ]
+    )
 
     has_leakage_flag = False
     if leakage.get("target_in_features"):
@@ -126,14 +127,16 @@ def write_model_card(
     if not has_leakage_flag:
         lines.append("- 無重大資料洩漏")
 
-    lines.extend([
-        "",
-        "## 不適用情境",
-        "- 輸入數值超出特徵訓練範圍",
-        "- 交易類型與模型類型不符",
-        "- 缺乏附近站點近期交易資料",
-        "",
-    ])
+    lines.extend(
+        [
+            "",
+            "## 不適用情境",
+            "- 輸入數值超出特徵訓練範圍",
+            "- 交易類型與模型類型不符",
+            "- 缺乏附近站點近期交易資料",
+            "",
+        ]
+    )
 
     report_dir.mkdir(parents=True, exist_ok=True)
     path = report_dir / f"{bundle.transaction_type}-model-card.md"

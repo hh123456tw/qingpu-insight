@@ -22,6 +22,7 @@ def test_atomic_write_preserves_on_failure(tmp_path, monkeypatch):
     original = path.read_text(encoding="utf-8")
 
     import json as _json
+
     original_dumps = _json.dumps
     call_count = 0
 
