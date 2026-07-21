@@ -5,6 +5,7 @@ import json
 import pytest
 
 from qingpu_insight.listing_capture import (
+    ChromeConfig,
     FakeBrowser,
     RawBatchWriter,
     Selenium591Source,
@@ -94,10 +95,12 @@ def test_browser_quit_called(tmp_path):
 
 def test_explicit_wait_timeout(tmp_path):
     browser = FakeBrowser(pages=[SALE_HTML], fail_on_find=True)
-    source = Selenium591Source(browser=browser, writer=RawBatchWriter(tmp_path))
+    config = ChromeConfig(page_timeout_seconds=1, max_retries=0)
+    source = Selenium591Source(browser=browser, writer=RawBatchWriter(tmp_path), config=config)
     batch = source.capture("sale", max_pages=1)
-    assert batch.reached_terminal_page is True
-    assert len(batch.pages) == 0
+    assert batch.reached_terminal_page is False
+    assert len(batch.errors) == 1
+    assert batch.errors[0].code == "page_failed"
 
 
 def test_three_retries(tmp_path):
@@ -116,3 +119,61 @@ def test_checkpoint_resume(tmp_path):
     assert checkpoint.exists()
     data = json.loads(checkpoint.read_text(encoding="utf-8"))
     assert data["last_page"] == 2
+
+
+def test_empty_result_marked_terminal(tmp_path):
+    browser = FakeBrowser(
+        pages=["<html><body><div class='no-result'>沒結果</div></body></html>"],
+        found_selectors={"div.no-result", ".empty-state", "p.empty"},
+    )
+    config = ChromeConfig(page_timeout_seconds=1, max_retries=0)
+    source = Selenium591Source(browser=browser, writer=RawBatchWriter(tmp_path), config=config)
+    batch = source.capture("sale", max_pages=1)
+    assert batch.reached_terminal_page is False
+    assert len(batch.pages) == 0
+    assert len(batch.errors) == 0
+
+
+def test_neither_cards_nor_empty_is_error(tmp_path):
+    browser = FakeBrowser(
+        pages=["<html><body><div>some other page</div></body></html>"],
+        found_selectors=set(),
+    )
+    config = ChromeConfig(page_timeout_seconds=1, max_retries=0)
+    source = Selenium591Source(browser=browser, writer=RawBatchWriter(tmp_path), config=config)
+    batch = source.capture("sale", max_pages=1)
+    assert batch.reached_terminal_page is False
+    assert len(batch.pages) == 0
+    assert len(batch.errors) == 1
+    assert batch.errors[0].code == "page_failed"
+
+
+def test_from_checkpoint_classmethod(tmp_path):
+    writer = RawBatchWriter(tmp_path)
+    batch_dir = writer.batch_dir
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    (batch_dir / "checkpoint.json").write_text(
+        json.dumps({"last_page": 2}), encoding="utf-8"
+    )
+    resume_writer = RawBatchWriter.from_checkpoint(tmp_path, batch_dir)
+    assert resume_writer.batch_dir == batch_dir
+
+
+def test_checkpoint_resume_from_file(tmp_path):
+    browser = FakeBrowser(pages=[SALE_HTML, SALE_HTML, SALE_HTML])
+    writer = RawBatchWriter(tmp_path)
+    batch_dir = writer.batch_dir
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    (batch_dir / "checkpoint.json").write_text(
+        json.dumps({"last_page": 2}), encoding="utf-8"
+    )
+    (batch_dir / "page-0002.html").write_text("<html/>", encoding="utf-8")
+    resume_writer = RawBatchWriter.from_checkpoint(tmp_path, batch_dir)
+    source = Selenium591Source(
+        browser=browser, writer=resume_writer, resume_batch_id="resume-001"
+    )
+    batch = source.capture("sale", max_pages=5)
+    assert len(batch.pages) == 3
+    assert batch.pages[0].page_number == 3
+    assert batch.pages[1].page_number == 4
+    assert batch.pages[2].page_number == 5

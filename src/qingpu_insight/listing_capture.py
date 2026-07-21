@@ -25,6 +25,12 @@ ROUTES: dict[str, str] = {
     "rental": "https://rent.591.com.tw/list?region=6",
 }
 
+EMPTY_SELECTORS: dict[str, tuple[str, ...]] = {
+    "sale": ("div.no-result", ".empty-state", "p.empty"),
+    "newhouse": ("div.no-result", ".empty-state", "p.empty"),
+    "rental": ("div.no-result", ".empty-state", "p.empty"),
+}
+
 
 @dataclass(frozen=True)
 class ChromeConfig:
@@ -38,12 +44,14 @@ class ChromeConfig:
 
 class FakeBrowser:
     def __init__(self, pages: list[str] | None = None, fail_on_next: bool = False,
-                 fail_on_find: bool = False, fail_page_source: int = 0):
+                 fail_on_find: bool = False, fail_page_source: int = 0,
+                 found_selectors: set[str] | None = None):
         self.pages = pages or []
         self._page_index = 0
         self._fail_on_next = fail_on_next
         self._fail_on_find = fail_on_find
         self._fail_page_source_remaining = fail_page_source
+        self._found_selectors = found_selectors
         self.current_url = ""
         self._page_source = ""
         self.calls: list[str] = []
@@ -75,6 +83,9 @@ class FakeBrowser:
         self.calls.append(f"find_element:{value or selector}")
         if self._fail_on_find:
             raise Exception("find_failed")
+        sel = value or selector or ""
+        if self._found_selectors is not None and sel not in self._found_selectors:
+            raise Exception("element_not_found")
         return _FakeElement(browser=self)
 
     def find_elements(self, by: str, value: str | None = None, selector: str | None = None):
@@ -133,6 +144,12 @@ class RawBatchWriter:
         tmp.write_text(json.dumps({"last_page": page_number}, ensure_ascii=False), encoding="utf-8")
         tmp.replace(final)
 
+    @classmethod
+    def from_checkpoint(cls, base_dir: Path, existing_batch_dir: Path) -> "RawBatchWriter":
+        writer = cls.__new__(cls)
+        writer._batch_dir = existing_batch_dir
+        return writer
+
     def write_manifest(self, batch: CaptureBatch) -> None:
         self._batch_dir.mkdir(parents=True, exist_ok=True)
         manifest = {
@@ -158,14 +175,26 @@ class Selenium591Source:
         browser: webdriver.Chrome | FakeBrowser | None = None,
         writer: RawBatchWriter | None = None,
         config: ChromeConfig | None = None,
+        resume_batch_id: str | None = None,
     ):
         self._config = config or ChromeConfig()
         self._browser = browser
         self._writer = writer
+        self._resume_batch_id = resume_batch_id
 
     def capture(self, listing_type: ListingType, max_pages: int = 10) -> CaptureBatch:
         browser = self._browser or create_chrome(self._config)
         writer = self._writer or RawBatchWriter(Path.cwd())
+
+        start_page = 1
+        if self._resume_batch_id and writer:
+            checkpoint_path = writer.batch_dir / "checkpoint.json"
+            if checkpoint_path.exists():
+                try:
+                    data = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+                    start_page = data.get("last_page", 0) + 1
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    pass
 
         batch_id = f"591-{listing_type}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
         batch = CaptureBatch(
@@ -192,8 +221,11 @@ class Selenium591Source:
             writer.write_manifest(batch)
             return batch
 
+        should_stop = False
         try:
-            for page_num in range(1, max_pages + 1):
+            for page_num in range(start_page, max_pages + 1):
+                if should_stop:
+                    break
                 for attempt in range(self._config.max_retries + 1):
                     try:
                         selectors = CARD_SELECTORS.get(listing_type, ())
@@ -209,8 +241,28 @@ class Selenium591Source:
                                 continue
 
                         if not matched:
-                            batch.reached_terminal_page = True
-                            break
+                            empty_selectors = EMPTY_SELECTORS.get(listing_type, ())
+                            empty_found = False
+                            for sel in empty_selectors:
+                                try:
+                                    WebDriverWait(browser, self._config.page_timeout_seconds).until(
+                                        EC.presence_of_element_located(("css selector", sel))
+                                    )
+                                    empty_found = True
+                                    break
+                                except Exception:
+                                    continue
+
+                            if empty_found:
+                                if len(batch.pages) > 0:
+                                    batch.reached_terminal_page = True
+                                should_stop = True
+                                break
+
+                            raise Exception(
+                                "No card or empty-result selectors matched; "
+                                "page structure may have changed"
+                            )
 
                         html = browser.page_source
                         page = CapturedPage(
@@ -229,6 +281,7 @@ class Selenium591Source:
                             )
                             if not next_btn.is_enabled() or not next_btn.is_displayed():
                                 batch.reached_terminal_page = True
+                                should_stop = True
                                 break
                             old_url = browser.current_url
                             next_btn.click()
@@ -237,6 +290,7 @@ class Selenium591Source:
                             )
                         except Exception:
                             batch.reached_terminal_page = True
+                            should_stop = True
                             break
 
                         delay = random.uniform(*self._config.delay_seconds)
