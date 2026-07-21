@@ -115,6 +115,8 @@ def _extract_coordinates(card) -> tuple[float, float]:
 def _parse_price_wan(text: str) -> int:
     if not text:
         return 0
+    if "萬" not in text:
+        return 0
     clean = text.replace(",", "").replace(" ", "")
     match = re.search(r"([\d.]+)", clean)
     if not match:
@@ -124,6 +126,8 @@ def _parse_price_wan(text: str) -> int:
 
 def _parse_price_monthly(text: str) -> int:
     if not text:
+        return 0
+    if "元/月" not in text:
         return 0
     clean = text.replace(",", "").replace(" ", "")
     match = re.search(r"([\d.]+)", clean)
