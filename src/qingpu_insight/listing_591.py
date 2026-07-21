@@ -62,7 +62,16 @@ def extract_rendered_page(html: str, listing_type: ListingType) -> ExtractionRes
     soup = BeautifulSoup(html, "html.parser")
     if listing_type == "newhouse" and soup.select("script[type='application/ld+json']"):
         jsonld_result, has_usable_item_list = _extract_newhouse_jsonld(soup)
-        result = jsonld_result if has_usable_item_list else _extract_dom(soup, listing_type)
+        if has_usable_item_list:
+            result = jsonld_result
+        else:
+            dom_result = _extract_dom(soup, listing_type)
+            result = ExtractionResult(
+                listings=dom_result.listings,
+                rejected=[*jsonld_result.rejected, *dom_result.rejected],
+                representation=dom_result.representation,
+                schema_version=dom_result.schema_version,
+            )
     else:
         result = _extract_dom(soup, listing_type)
 
@@ -383,7 +392,13 @@ def _parse_floor(text: str) -> tuple[int, int]:
 def _jsonld_source_ref(item: object) -> str:
     if isinstance(item, dict) and isinstance(item.get("item"), dict):
         url = item["item"].get("url")
-        return str(url) if url else "jsonld"
+        if not isinstance(url, str):
+            return "jsonld"
+        try:
+            segment = urlsplit(url).path.rstrip("/").rsplit("/", maxsplit=1)[-1]
+        except ValueError:
+            return "jsonld"
+        return f"jsonld:{segment}" if segment.isdigit() else "jsonld"
     return "jsonld"
 
 

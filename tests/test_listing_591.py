@@ -217,6 +217,42 @@ def test_newhouse_rejects_inverted_ranges_without_discarding_valid_sibling(
     assert [rejection.reason_code for rejection in result.rejected] == [reason_code]
 
 
+def test_jsonld_rejection_redacts_credential_bearing_product_url():
+    bad_item = newhouse_item("138380")
+    bad_item["item"]["url"] = "https://privateuser:privatepassword@newhouse.591.com.tw/138380"
+
+    result = extract_rendered_page(
+        newhouse_jsonld_html([newhouse_item("138379"), bad_item]), "newhouse"
+    )
+
+    assert [row.source_listing_id for row in result.listings] == ["138379"]
+    assert [rejection.reason_code for rejection in result.rejected] == ["invalid_url"]
+    assert "privateuser" not in repr(result)
+    assert "privatepassword" not in repr(result)
+
+
+def test_unusable_jsonld_fallback_preserves_jsonld_rejection_diagnostics():
+    html = fixture_path("591_newhouse_page.html").read_text(encoding="utf-8").replace(
+        "</body>", '<script type="application/ld+json">not json</script></body>'
+    )
+
+    result = extract_rendered_page(html, "newhouse")
+
+    assert result.representation == "dom"
+    assert [row.source_listing_id for row in result.listings] == ["NH-2001", "NH-2002"]
+    assert [rejection.reason_code for rejection in result.rejected] == ["malformed_jsonld"]
+
+
+def test_unusable_jsonld_without_dom_reports_jsonld_rejection_diagnostics():
+    html = '<script type="application/ld+json">not json</script>'
+
+    with pytest.raises(
+        ListingSchemaError,
+        match=r"accepted=0 rejected=1 reasons=malformed_jsonld",
+    ):
+        extract_rendered_page(html, "newhouse")
+
+
 @pytest.mark.parametrize(
     ("listing_type", "expected_price_field"),
     [("sale", "asking_price_twd"), ("newhouse", "asking_price_twd"),
