@@ -11,7 +11,7 @@ from selenium import webdriver
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from qingpu_insight.listing_591 import CARD_SELECTORS
+from qingpu_insight.listing_591 import CARD_SELECTORS, extract_rendered_page
 from qingpu_insight.listing_sources import (
     CaptureBatch,
     CapturedPage,
@@ -21,7 +21,7 @@ from qingpu_insight.listing_sources import (
 
 ROUTES: dict[str, str] = {
     "sale": "https://sale.591.com.tw/?shType=list&regionid=6",
-    "newhouse": "https://newhouse.591.com.tw/home/housing/search?regionid=6",
+    "newhouse": "https://newhouse.591.com.tw/housing-list.html?regionid=6",
     "rental": "https://rent.591.com.tw/list?region=6",
 }
 
@@ -36,26 +36,42 @@ EMPTY_SELECTORS: dict[str, tuple[str, ...]] = {
 class ChromeConfig:
     binary: str | None = None
     profile_dir: str | None = None
-    headless: bool = True
+    headless: bool = False
     page_timeout_seconds: int = 30
     delay_seconds: tuple[float, float] = (2.0, 5.0)
     max_retries: int = 3
 
 
 class RawBatchWriter:
-    def __init__(self, base_dir: Path):
-        ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-        date_str = datetime.now(UTC).strftime("%Y-%m-%d")
-        self._batch_dir = base_dir / "data" / "raw" / "listings" / "591" / date_str / f"591-{ts}"
+    def __init__(self, base_dir: Path, listing_type: ListingType):
+        created_at = datetime.now(UTC)
+        timestamp = created_at.strftime("%Y%m%dT%H%M%SZ")
+        self._batch_id = f"591-{listing_type}-{timestamp}"
+        self._batch_dir = (
+            base_dir / "data" / "raw" / "listings" / "591"
+            / created_at.strftime("%Y-%m-%d") / self._batch_id
+        )
 
     @property
     def batch_dir(self) -> Path:
         return self._batch_dir
 
+    @property
+    def batch_id(self) -> str:
+        return self._batch_id
+
     def write_page(self, page_number: int, html: str) -> Path:
         self._batch_dir.mkdir(parents=True, exist_ok=True)
         tmp = self._batch_dir / f"page-{page_number:04d}.html.tmp"
         final = self._batch_dir / f"page-{page_number:04d}.html"
+        tmp.write_text(html, encoding="utf-8")
+        tmp.replace(final)
+        return final
+
+    def write_diagnostic(self, page_number: int, html: str) -> Path:
+        self._batch_dir.mkdir(parents=True, exist_ok=True)
+        tmp = self._batch_dir / f"diagnostic-page-{page_number:04d}.html.tmp"
+        final = self._batch_dir / f"diagnostic-page-{page_number:04d}.html"
         tmp.write_text(html, encoding="utf-8")
         tmp.replace(final)
         return final
@@ -71,6 +87,7 @@ class RawBatchWriter:
     def from_checkpoint(cls, base_dir: Path, existing_batch_dir: Path) -> "RawBatchWriter":
         writer = cls.__new__(cls)
         writer._batch_dir = existing_batch_dir
+        writer._batch_id = existing_batch_dir.name
         return writer
 
     def write_manifest(self, batch: CaptureBatch) -> None:
@@ -81,7 +98,17 @@ class RawBatchWriter:
             "listing_type": batch.listing_type,
             "started_at": batch.started_at.isoformat(),
             "completed_at": datetime.now(UTC).isoformat(),
-            "pages": [{"page_number": p.page_number, "url": p.url} for p in batch.pages],
+            "pages": [
+                {
+                    "page_number": p.page_number,
+                    "url": p.url,
+                    "accepted_count": p.accepted_count,
+                    "rejected_count": p.rejected_count,
+                    "representation": p.representation,
+                    "schema_version": p.schema_version,
+                }
+                for p in batch.pages
+            ],
             "errors": [{"page_number": e.page_number, "code": e.code,
                          "message": e.message} for e in batch.errors],
             "reached_terminal_page": batch.reached_terminal_page,
@@ -108,7 +135,23 @@ class Selenium591Source:
 
     def capture(self, listing_type: ListingType, max_pages: int = 10) -> CaptureBatch:
         browser = self._browser or create_chrome(self._config)
-        writer = self._writer or RawBatchWriter(Path.cwd())
+        writer = self._writer
+
+        url = ROUTES.get(listing_type)
+        if not url:
+            batch = CaptureBatch(
+                batch_id=f"591-{listing_type}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}",
+                source="591",
+                listing_type=listing_type,
+                started_at=datetime.now(UTC),
+            )
+            batch.errors.append(
+                CaptureError(page_number=0, code="invalid_type",
+                             message=f"Unknown listing type: {listing_type}")
+            )
+            browser.quit()
+            return batch
+        writer = writer or RawBatchWriter(Path.cwd(), listing_type)
 
         start_page = 1
         if self._resume_batch_id and writer:
@@ -120,21 +163,12 @@ class Selenium591Source:
                 except (json.JSONDecodeError, KeyError, TypeError):
                     pass
 
-        batch_id = f"591-{listing_type}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
         batch = CaptureBatch(
-            batch_id=batch_id,
+            batch_id=writer.batch_id,
             source="591",
             listing_type=listing_type,
             started_at=datetime.now(UTC),
         )
-
-        url = ROUTES.get(listing_type)
-        if not url:
-            batch.errors.append(
-                CaptureError(page_number=0, code="invalid_type",
-                             message=f"Unknown listing type: {listing_type}")
-            )
-            return batch
 
         try:
             browser.get(url)
@@ -153,45 +187,33 @@ class Selenium591Source:
                     break
                 for attempt in range(self._config.max_retries + 1):
                     try:
-                        selectors = CARD_SELECTORS.get(listing_type, ())
-                        matched = False
-                        for sel in selectors:
-                            try:
-                                WebDriverWait(browser, self._config.page_timeout_seconds).until(
-                                    EC.presence_of_element_located(("css selector", sel))
-                                )
-                                matched = True
-                                break
-                            except Exception:
-                                continue
-
-                        if not matched:
-                            empty_selectors = EMPTY_SELECTORS.get(listing_type, ())
-                            empty_found = False
-                            for sel in empty_selectors:
-                                try:
-                                    WebDriverWait(browser, self._config.page_timeout_seconds).until(
-                                        EC.presence_of_element_located(("css selector", sel))
-                                    )
-                                    empty_found = True
-                                    break
-                                except Exception:
-                                    continue
-
-                            if empty_found:
-                                if len(batch.pages) > 0:
-                                    batch.reached_terminal_page = True
-                                should_stop = True
-                                break
-
-                            raise Exception(
-                                "No card or empty-result selectors matched; "
-                                "page structure may have changed"
+                        ready_state = WebDriverWait(
+                            browser, self._config.page_timeout_seconds
+                        ).until(
+                            lambda active_browser: _capture_readiness(
+                                active_browser,
+                                CARD_SELECTORS.get(listing_type, ()),
+                                EMPTY_SELECTORS.get(listing_type, ()),
                             )
-
+                        )
                         html = browser.page_source
+                        if ready_state == "verification":
+                            raise _VerificationRequired(html)
+                        if ready_state == "empty":
+                            if batch.pages:
+                                batch.reached_terminal_page = True
+                            should_stop = True
+                            break
+
+                        extraction = extract_rendered_page(html, listing_type)
                         page = CapturedPage(
-                            page_number=page_num, url=browser.current_url, html=html
+                            page_number=page_num,
+                            url=browser.current_url,
+                            html=html,
+                            accepted_count=len(extraction.listings),
+                            rejected_count=len(extraction.rejected),
+                            representation=extraction.representation,
+                            schema_version=extraction.schema_version,
                         )
                         batch.pages.append(page)
                         writer.write_page(page_num, html)
@@ -228,19 +250,75 @@ class Selenium591Source:
                         time.sleep(delay)
                         break
 
+                    except _VerificationRequired as exc:
+                        writer.write_diagnostic(page_num, exc.html)
+                        batch.errors.append(
+                            CaptureError(
+                                page_number=page_num,
+                                code="verification_required",
+                                message="591 verification page detected",
+                            )
+                        )
+                        should_stop = True
+                        break
                     except Exception as exc:
                         if attempt < self._config.max_retries:
                             wait = 2 ** attempt
                             time.sleep(wait)
                             continue
+                        writer.write_diagnostic(page_num, _diagnostic_html(browser))
                         batch.errors.append(
                             CaptureError(page_number=page_num, code="page_failed",
                                          message=str(exc))
                         )
+                        should_stop = True
+                        break
         finally:
+            if batch.errors:
+                batch.reached_terminal_page = False
             writer.write_manifest(batch)
             browser.quit()
         return batch
+
+
+class _VerificationRequired(Exception):
+    def __init__(self, html: str):
+        self.html = html
+
+
+def _capture_readiness(
+    browser: webdriver.Chrome,
+    card_selectors: tuple[str, ...],
+    empty_selectors: tuple[str, ...],
+) -> str | bool:
+    html = browser.page_source
+    if _likely_verification(html):
+        return "verification"
+    card_matches = [
+        browser.find_elements("css selector", selector)
+        for selector in card_selectors
+    ]
+    empty_matches = [
+        browser.find_elements("css selector", selector)
+        for selector in empty_selectors
+    ]
+    if any(card_matches):
+        return "cards"
+    if any(empty_matches):
+        return "empty"
+    return False
+
+
+def _likely_verification(html: str) -> bool:
+    lowered = html.lower()
+    return any(token in lowered for token in ("驗證", "captcha", "verify"))
+
+
+def _diagnostic_html(browser: webdriver.Chrome) -> str:
+    try:
+        return browser.page_source
+    except Exception:
+        return ""
 
 
 def create_chrome(config: ChromeConfig) -> webdriver.Chrome:

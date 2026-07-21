@@ -1,5 +1,15 @@
 """Fake Selenium browser for testing listing capture flows."""
 
+from bs4 import BeautifulSoup
+
+
+class FakeWaitClock:
+    def __init__(self) -> None:
+        self.timeouts: list[int] = []
+
+    def record(self, timeout: int) -> None:
+        self.timeouts.append(timeout)
+
 
 class FakeBrowser:
     def __init__(self, pages: list[str] | None = None, fail_on_next: bool = False,
@@ -16,6 +26,7 @@ class FakeBrowser:
         self.current_url = ""
         self._page_source = ""
         self.calls: list[str] = []
+        self.wait_clock = FakeWaitClock()
 
     @property
     def page_source(self):
@@ -54,7 +65,14 @@ class FakeBrowser:
 
     def find_elements(self, by: str, value: str | None = None, selector: str | None = None):
         self.calls.append(f"find_elements:{value or selector}")
-        return []
+        if self._fail_on_find:
+            raise Exception("find_failed")
+        sel = value or selector or ""
+        if self._found_selectors is not None:
+            return [_FakeElement(browser=self)] if sel in self._found_selectors else []
+        return [_FakeElement(browser=self) for _ in BeautifulSoup(
+            self._page_source, "html.parser"
+        ).select(sel)]
 
     def quit(self) -> None:
         self.calls.append("quit")

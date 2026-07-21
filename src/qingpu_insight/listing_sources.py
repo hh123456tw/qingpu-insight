@@ -10,6 +10,10 @@ class CapturedPage:
     page_number: int
     url: str
     html: str
+    accepted_count: int = 0
+    rejected_count: int = 0
+    representation: str = "unknown"
+    schema_version: str = "unknown"
 
 
 @dataclass(frozen=True)

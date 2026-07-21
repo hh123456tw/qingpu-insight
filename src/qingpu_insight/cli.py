@@ -22,7 +22,7 @@ from qingpu_insight.downloads import (
 from qingpu_insight.feasibility import evaluate_feasibility
 from qingpu_insight.geo import assign_life_circle, station_points
 from qingpu_insight.listing_591 import ListingSchemaError, SourceListing, parse_rendered_page
-from qingpu_insight.listing_capture import ChromeConfig, RawBatchWriter, Selenium591Source
+from qingpu_insight.listing_capture import ChromeConfig, Selenium591Source
 from qingpu_insight.listing_events import detect_listing_events
 from qingpu_insight.listing_location import assign_listing_life_circle
 from qingpu_insight.listing_normalization import NormalizedListing, normalize_listing
@@ -250,8 +250,7 @@ listing_type_choices = ("sale", "newhouse", "rental")
 def create_listing_source(
     root: Path, config: ChromeConfig | None = None
 ) -> ListingSource:
-    writer = RawBatchWriter(root)
-    return Selenium591Source(writer=writer, config=config or ChromeConfig())
+    return Selenium591Source(config=config or ChromeConfig())
 
 
 def create_listing_repository(root: Path) -> ListingRepository:

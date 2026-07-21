@@ -46,9 +46,15 @@ class _CardError(Exception):
 
 
 CARD_SELECTORS: dict[str, tuple[str, ...]] = {
-    "sale": ("div.ware-item[data-id]", "article[data-houseid]", "[data-id][class*='house']"),
+    "sale": ("div.ware-item[data-id]",),
+    "rental": ("div.item[data-id]",),
+    "newhouse": ('script[type="application/ld+json"]', "#__NUXT_DATA__"),
+}
+
+LEGACY_CARD_SELECTORS: dict[str, tuple[str, ...]] = {
+    "sale": ("article[data-houseid]", "[data-id][class*='house']"),
+    "rental": ("article[data-houseid]", "[data-id][class*='item']"),
     "newhouse": ("article[data-housingid]", "[data-id][class*='housing']"),
-    "rental": ("div.item[data-id]", "article[data-houseid]", "[data-id][class*='item']"),
 }
 
 
@@ -88,7 +94,12 @@ def extract_rendered_page(html: str, listing_type: ListingType) -> ExtractionRes
 
 
 def _extract_dom(soup: BeautifulSoup, listing_type: ListingType) -> ExtractionResult:
-    cards = first_nonempty_selector(soup, CARD_SELECTORS[listing_type])
+    if listing_type == "newhouse":
+        cards = first_nonempty_selector(soup, LEGACY_CARD_SELECTORS[listing_type])
+    else:
+        cards = first_nonempty_selector(soup, CARD_SELECTORS[listing_type])
+        if not cards:
+            cards = first_nonempty_selector(soup, LEGACY_CARD_SELECTORS[listing_type])
     listings: list[SourceListing] = []
     rejected: list[RejectedListing] = []
     for card in cards:
