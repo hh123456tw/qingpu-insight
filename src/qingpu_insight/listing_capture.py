@@ -344,8 +344,20 @@ def _likely_verification(html: str) -> bool:
         element.decompose()
     title = soup.title.get_text(" ", strip=True) if soup.title else ""
     body = soup.body.get_text(" ", strip=True) if soup.body else ""
-    lowered = f"{title} {body}".lower()
-    return any(token in lowered for token in ("驗證", "captcha", "verify"))
+    lowered_title = title.lower()
+    lowered_body = body.lower()
+    title_terms = ("驗證", "captcha", "verify")
+    body_phrases = (
+        "人機驗證",
+        "安全驗證",
+        "完成驗證",
+        "captcha",
+        "verify you are human",
+        "verification required",
+    )
+    return any(term in lowered_title for term in title_terms) or any(
+        phrase in lowered_body for phrase in body_phrases
+    )
 
 
 def _diagnostic_html(browser: webdriver.Chrome) -> str:

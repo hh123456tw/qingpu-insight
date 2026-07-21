@@ -198,6 +198,20 @@ def test_script_verification_token_does_not_block_normal_listing_capture(tmp_pat
     assert batch.errors == []
 
 
+def test_verification_code_button_does_not_block_normal_listing_capture(tmp_path):
+    html = SALE_HTML.replace(
+        "</body>", '<button class="roster-popup__form-get-code">獲取驗證碼</button></body>'
+    )
+    batch = Selenium591Source(
+        browser=FakeBrowser(pages=[html]),
+        writer=RawBatchWriter(tmp_path, "sale"),
+        config=ChromeConfig(max_retries=0),
+    ).capture("sale", 1)
+
+    assert len(batch.pages) == 1
+    assert batch.errors == []
+
+
 @pytest.mark.parametrize("fail_on_next", [False, True])
 def test_browser_quits_when_manifest_write_fails(tmp_path, fail_on_next):
     class FailingManifestWriter(RawBatchWriter):

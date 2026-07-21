@@ -189,8 +189,11 @@ def _extract_dom_title_and_url(card, listing_type: ListingType) -> tuple[str, st
 
 def _extract_dom_details(card, listing_type: ListingType) -> dict[str, str]:
     if listing_type == "sale" and card.select_one(".ware-item__price-value"):
+        price_element = card.select_one(".ware-item__price") or card.select_one(
+            ".ware-item__price-value"
+        )
         return {
-            "price": _text(card.select_one(".ware-item__price-value")),
+            "price": _text(price_element),
             "attributes": " ".join(
                 _text(element)
                 for element in (
@@ -419,7 +422,7 @@ def _numeric_final_path_segment(url: str) -> str | None:
 
 
 def _parse_newhouse_area_range(description: str) -> tuple[float, float] | None:
-    match = re.search(r"坪數\s*([\d.]+)\s*~\s*([\d.]+)\s*坪", description)
+    match = re.search(r"坪數(?:規劃)?\s*([\d.]+)\s*~\s*([\d.]+)\s*坪", description)
     if not match:
         return None
     try:

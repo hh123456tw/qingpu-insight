@@ -500,6 +500,11 @@ def listing_build(root: Path, args) -> int:
     )
     repo = create_listing_repository(root)
     repo.save_batch(batch, located)
+    all_snapshots = repo.load_snapshots()
+    if not all_snapshots.empty:
+        snapshots_path = root / "data" / "processed" / "listing_snapshots.parquet"
+        snapshots_path.parent.mkdir(parents=True, exist_ok=True)
+        all_snapshots.to_parquet(snapshots_path, index=False)
     print(f"已儲存 {len(located)} 筆 listing 資料至批次 {batch_id}")
     return 0
 

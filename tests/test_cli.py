@@ -511,15 +511,27 @@ class TestListingBuild:
             encoding="utf-8",
         )
         saved = []
+        parquet_repository = cli.ParquetListingRepository(
+            tmp_path / "data" / "processed"
+        )
 
         class Repository:
             def save_batch(self, batch, rows):
                 saved.append((batch, rows))
+                parquet_repository.save_batch(batch, rows)
+
+            def load_snapshots(self):
+                return parquet_repository.load_snapshots()
 
         monkeypatch.setattr(cli, "create_listing_repository", lambda root: Repository())
 
         assert main(["listing-build", "--batch-dir", str(batch_dir)]) == 0
         assert saved[0][0].is_complete is True
+        snapshots = pd.read_parquet(
+            tmp_path / "data" / "processed" / "listing_snapshots.parquet"
+        )
+        assert len(snapshots) == 2
+        assert set(snapshots["batch_id"]) == {"batch-002"}
 
     def test_schema_error_reports_prior_page_rejections_and_rejects_batch(
         self, tmp_path, monkeypatch, capsys
@@ -606,6 +618,9 @@ class TestListingBuild:
         class Repository:
             def save_batch(self, batch, rows):
                 pass
+
+            def load_snapshots(self):
+                return pd.DataFrame()
 
         monkeypatch.setattr(cli, "create_listing_repository", lambda *_: Repository())
 

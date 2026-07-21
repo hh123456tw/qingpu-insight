@@ -66,6 +66,25 @@ def test_live_sale_dom_extracts_required_fields():
     assert set(row.payload).isdisjoint({"phone", "name", "contact", "agent", "role_name"})
 
 
+def test_live_sale_dom_reads_unit_from_price_container():
+    html = """
+    <div class="ware-item" data-id="10000001">
+      <div class="ware-item__header">
+        <a href="https://sale.591.com.tw/home/house/detail/2/10000001.html">匿名物件</a>
+      </div>
+      <div class="ware-item__attrs">3房2廳2衛 30坪 10F/15F</div>
+      <div class="ware-item__price">
+        <div class="ware-item__price-value">850</div>
+        <span>萬</span>
+      </div>
+    </div>
+    """
+
+    result = extract_rendered_page(html, "sale")
+
+    assert result.listings[0].payload["asking_price_twd"] == 8_500_000
+
+
 def test_live_rental_dom_extracts_required_fields():
     result = extract_rendered_page(live_fixture("591_rental_live_page.html"), "rental")
     row = result.listings[0]
@@ -100,6 +119,18 @@ def test_live_newhouse_jsonld_preserves_advertised_ranges():
     assert row.payload["area_min_ping"] == 19.0
     assert row.payload["area_max_ping"] == 30.0
     assert set(row.payload).isdisjoint({"phone", "name", "contact", "agent", "role_name"})
+
+
+def test_live_newhouse_jsonld_accepts_area_planning_label():
+    item = newhouse_item(
+        "138379",
+        description="位於桃園市中壢區，格局規劃二房(19~30坪)、坪數規劃19~30坪",
+    )
+
+    result = extract_rendered_page(newhouse_jsonld_html([item]), "newhouse")
+
+    assert result.listings[0].payload["area_min_ping"] == 19.0
+    assert result.listings[0].payload["area_max_ping"] == 30.0
 
 
 def test_live_dom_rejects_malformed_card_without_discarding_valid_sibling():
