@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import urllib.parse
+from datetime import datetime
 from pathlib import Path
 
 import joblib
@@ -20,6 +21,13 @@ from qingpu_insight.downloads import (
 )
 from qingpu_insight.feasibility import evaluate_feasibility
 from qingpu_insight.geo import assign_life_circle, station_points
+from qingpu_insight.listing_591 import ListingSchemaError, SourceListing, parse_rendered_page
+from qingpu_insight.listing_capture import ChromeConfig, RawBatchWriter, Selenium591Source
+from qingpu_insight.listing_events import detect_listing_events
+from qingpu_insight.listing_location import assign_listing_life_circle
+from qingpu_insight.listing_normalization import NormalizedListing, normalize_listing
+from qingpu_insight.listing_repository import ListingRepository, ParquetListingRepository
+from qingpu_insight.listing_sources import CaptureBatch, ListingSource
 from qingpu_insight.market_cleaning import build_market_dataset
 from qingpu_insight.model_features import build_model_frame
 from qingpu_insight.model_training import (
@@ -231,6 +239,240 @@ def model_train(root: Path, input_path: str, artifact_dir: str, report_dir: str)
     return 0
 
 
+listing_type_choices = ("sale", "newhouse", "rental")
+
+
+def create_listing_source(
+    root: Path, config: ChromeConfig | None = None
+) -> ListingSource:
+    writer = RawBatchWriter(root)
+    return Selenium591Source(writer=writer, config=config or ChromeConfig())
+
+
+def create_listing_repository(root: Path) -> ListingRepository:
+    return ParquetListingRepository(root / "data" / "processed")
+
+
+def _normalized_to_rows(normalized: list[NormalizedListing]) -> list[dict]:
+    return [
+        {
+            "source": n.source,
+            "source_listing_id": n.source_listing_id,
+            "listing_type": n.listing_type,
+            "snapshot_at": n.snapshot_at,
+            "source_url": n.source_url,
+            "title": n.title,
+            "asking_price_twd": n.asking_price_twd,
+            "monthly_rent_twd": n.monthly_rent_twd,
+            "building_area_ping": n.building_area_ping,
+            "building_type": n.building_type,
+            "bedrooms": n.bedrooms,
+            "living_rooms": n.living_rooms,
+            "bathrooms": n.bathrooms,
+            "building_age_years": n.building_age_years,
+            "floor": n.floor,
+            "total_floors": n.total_floors,
+            "parking_type": n.parking_type,
+            "latitude": n.latitude,
+            "longitude": n.longitude,
+            "raw_hash": n.raw_hash,
+        }
+        for n in normalized
+    ]
+
+
+def listing_scrape(root: Path, args) -> int:
+    for lt in args.types:
+        if lt not in listing_type_choices:
+            print(f"未知的 listing 類型: {lt}", file=sys.stderr)
+            return 1
+    if args.max_pages < 1:
+        print("max-pages 必須 >= 1", file=sys.stderr)
+        return 1
+    if args.delay_min > args.delay_max:
+        print("delay-min 不能大於 delay-max", file=sys.stderr)
+        return 1
+
+    exit_code = 0
+    for listing_type in args.types:
+        config = ChromeConfig(
+            headless=not args.no_headless,
+            page_timeout_seconds=args.page_timeout,
+            delay_seconds=(args.delay_min, args.delay_max),
+        )
+        source = create_listing_source(root, config)
+        batch = source.capture(listing_type, max_pages=args.max_pages)
+        if batch.errors:
+            exit_code = 1
+            for err in batch.errors:
+                print(
+                    f"[{listing_type}] 頁面 {err.page_number}: {err.message}",
+                    file=sys.stderr,
+                )
+    return exit_code
+
+
+def listing_build(root: Path, args) -> int:
+    doorplates_path = root / "data" / "raw" / "doorplates.csv"
+    if not doorplates_path.exists():
+        print(
+            "缺少 data/raw/doorplates.csv。請先執行 acquire 或手動下載門牌資料。",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args.batch_dir:
+        batch_root = Path(args.batch_dir)
+    else:
+        listing_root = root / "data" / "raw" / "listings" / "591"
+        if not listing_root.exists():
+            print("尚未有原始 listing 資料，請先執行 listing-scrape。", file=sys.stderr)
+            return 1
+        date_dirs = sorted(listing_root.iterdir())
+        if not date_dirs:
+            print("尚未有原始 listing 資料，請先執行 listing-scrape。", file=sys.stderr)
+            return 1
+        batch_root = max(
+            (d for d in date_dirs[-1].iterdir() if d.is_dir()),
+            key=lambda p: p.name,
+            default=None,
+        )
+        if batch_root is None:
+            print("尚未有原始 listing 資料，請先執行 listing-scrape。", file=sys.stderr)
+            return 1
+
+    manifest_path = batch_root / "manifest.json"
+    if not manifest_path.exists():
+        print(f"找不到 manifest: {manifest_path}", file=sys.stderr)
+        return 1
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    listing_type = manifest["listing_type"]
+    batch_id = manifest["batch_id"]
+    started_at = datetime.fromisoformat(manifest["started_at"])
+
+    settings = get_settings(root)
+    doorplates = build_doorplate_frame(doorplates_path)
+    stations = station_points(settings.stations, doorplates)
+
+    listings_map: dict[str, SourceListing] = {}
+    for page_info in sorted(manifest["pages"], key=lambda p: p["page_number"]):
+        html_path = batch_root / f"page-{page_info['page_number']:04d}.html"
+        if not html_path.exists():
+            continue
+        try:
+            parsed = parse_rendered_page(
+                html_path.read_text(encoding="utf-8"), listing_type
+            )
+        except ListingSchemaError:
+            continue
+        for sl in parsed:
+            if sl.source_listing_id not in listings_map:
+                listings_map[sl.source_listing_id] = sl
+
+    if not listings_map:
+        print("批次中無有效 listing 資料。", file=sys.stderr)
+        return 1
+
+    normalized = [
+        normalize_listing(sl, started_at) for sl in listings_map.values()
+    ]
+    rows = _normalized_to_rows(normalized)
+    df = pd.DataFrame(rows)
+    located = assign_listing_life_circle(df, stations, settings.radius_m)
+
+    batch = CaptureBatch(
+        batch_id=batch_id,
+        source="591",
+        listing_type=listing_type,
+        started_at=started_at,
+    )
+    repo = create_listing_repository(root)
+    repo.save_batch(batch, located)
+    print(f"已儲存 {len(located)} 筆 listing 資料至批次 {batch_id}")
+    return 0
+
+
+def listing_sync(root: Path, args) -> int:
+    for lt in args.types:
+        if lt not in listing_type_choices:
+            print(f"未知的 listing 類型: {lt}", file=sys.stderr)
+            return 1
+    if args.max_pages < 1:
+        print("max-pages 必須 >= 1", file=sys.stderr)
+        return 1
+    if args.delay_min > args.delay_max:
+        print("delay-min 不能大於 delay-max", file=sys.stderr)
+        return 1
+
+    doorplates_path = root / "data" / "raw" / "doorplates.csv"
+    if not doorplates_path.exists():
+        print(
+            "缺少 data/raw/doorplates.csv。請先執行 acquire 或手動下載門牌資料。",
+            file=sys.stderr,
+        )
+        return 1
+
+    settings = get_settings(root)
+    doorplates = build_doorplate_frame(doorplates_path)
+    stations = station_points(settings.stations, doorplates)
+    repo = create_listing_repository(root)
+
+    exit_code = 0
+    for listing_type in args.types:
+        config = ChromeConfig(
+            headless=not args.no_headless,
+            page_timeout_seconds=args.page_timeout,
+            delay_seconds=(args.delay_min, args.delay_max),
+        )
+        source = create_listing_source(root, config)
+        batch = source.capture(listing_type, max_pages=args.max_pages)
+
+        if batch.errors:
+            exit_code = 1
+            for err in batch.errors:
+                print(
+                    f"[{listing_type}] 頁面 {err.page_number}: {err.message}",
+                    file=sys.stderr,
+                )
+
+        all_listings: list[SourceListing] = []
+        for page in batch.pages:
+            try:
+                all_listings.extend(
+                    parse_rendered_page(page.html, listing_type)
+                )
+            except ListingSchemaError as e:
+                print(
+                    f"[{listing_type}] 頁面 {page.page_number}: 解析失敗: {e}",
+                    file=sys.stderr,
+                )
+
+        if not all_listings:
+            continue
+
+        normalized = [
+            normalize_listing(sl, batch.started_at) for sl in all_listings
+        ]
+        rows = _normalized_to_rows(normalized)
+        df = pd.DataFrame(rows)
+        located = assign_listing_life_circle(df, stations, settings.radius_m)
+
+        repo.save_batch(batch, located)
+
+        previous = repo.load_current(listing_type)
+        event_result = detect_listing_events(previous, located, batch)
+        if not event_result.events.empty:
+            repo.append_events(event_result.events)
+
+    all_snapshots = repo.load_snapshots()
+    snapshots_path = root / "data" / "processed" / "listing_snapshots.parquet"
+    snapshots_path.parent.mkdir(parents=True, exist_ok=True)
+    all_snapshots.to_parquet(snapshots_path, index=False)
+
+    return exit_code
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="qingpu-data")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -250,6 +492,34 @@ def build_parser() -> argparse.ArgumentParser:
     model_parser.add_argument("--input", default="data/processed/market_transactions.parquet")
     model_parser.add_argument("--artifact-dir", default="artifacts")
     model_parser.add_argument("--report-dir", default="outputs/reports")
+
+    scrape_parser = subparsers.add_parser(
+        "listing-scrape", help="capture raw listing data from 591"
+    )
+    scrape_parser.add_argument("--types", nargs="+", required=True)
+    scrape_parser.add_argument("--max-pages", type=int, default=10)
+    scrape_parser.add_argument("--delay-min", type=float, default=2.0)
+    scrape_parser.add_argument("--delay-max", type=float, default=5.0)
+    scrape_parser.add_argument("--page-timeout", type=int, default=30)
+    scrape_parser.add_argument("--no-headless", action="store_true")
+
+    build_parser = subparsers.add_parser(
+        "listing-build",
+        help="normalize and persist an existing raw batch",
+    )
+    build_parser.add_argument("--batch-dir", default=None)
+
+    sync_parser = subparsers.add_parser(
+        "listing-sync",
+        help="capture, normalize, locate, persist, detect events, and value listings",
+    )
+    sync_parser.add_argument("--types", nargs="+", required=True)
+    sync_parser.add_argument("--max-pages", type=int, default=10)
+    sync_parser.add_argument("--delay-min", type=float, default=2.0)
+    sync_parser.add_argument("--delay-max", type=float, default=5.0)
+    sync_parser.add_argument("--page-timeout", type=int, default=30)
+    sync_parser.add_argument("--no-headless", action="store_true")
+
     return parser
 
 
@@ -266,6 +536,12 @@ def main(argv: list[str] | None = None) -> int:
         return mysql_load(root, args.input)
     if args.command == "model-train":
         return model_train(root, args.input, args.artifact_dir, args.report_dir)
+    if args.command == "listing-scrape":
+        return listing_scrape(root, args)
+    if args.command == "listing-build":
+        return listing_build(root, args)
+    if args.command == "listing-sync":
+        return listing_sync(root, args)
     return 0
 
 

@@ -1,4 +1,6 @@
 import json
+import shutil
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -8,6 +10,7 @@ import pytest
 from qingpu_insight import cli
 from qingpu_insight.cli import main
 from qingpu_insight.downloads import DownloadRecord, record_file
+from qingpu_insight.listing_sources import CaptureBatch
 from tests.test_market_cleaning import sample_rows
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -206,3 +209,103 @@ def test_model_train_builds_both_types_without_network(tmp_path, monkeypatch) ->
     assert exit_code == 0
     assert (tmp_path / "artifacts/resale.joblib").exists()
     assert (tmp_path / "artifacts/presale.joblib").exists()
+
+
+@pytest.fixture
+def fake_source():
+    class FakeListingSource:
+        def __init__(self):
+            self.calls: list[str] = []
+            self._counter = 0
+
+        def capture(self, listing_type: str, max_pages: int = 10) -> CaptureBatch:
+            self.calls.append(listing_type)
+            self._counter += 1
+            return CaptureBatch(
+                batch_id=f"fake-{listing_type}-{self._counter:04d}",
+                source="591",
+                listing_type=listing_type,
+                started_at=datetime.now(UTC),
+            )
+
+    return FakeListingSource()
+
+
+class TestListingScrape:
+    def test_invalid_type_exits_nonzero(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        assert main(["listing-scrape", "--types", "INVALID"]) != 0
+
+    def test_max_pages_less_than_one_exits_nonzero(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        assert main(["listing-scrape", "--types", "sale", "--max-pages", "0"]) != 0
+
+    def test_delay_min_gt_delay_max_exits_nonzero(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        assert (
+            main(
+                ["listing-scrape", "--types", "sale", "--delay-min", "10", "--delay-max", "1"]
+            )
+            != 0
+        )
+
+
+class TestListingBuild:
+    def test_missing_doorplates_exits_nonzero(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        assert main(["listing-build"]) != 0
+
+
+class TestListingSync:
+    def test_runs_types_independently(self, tmp_path, monkeypatch, fake_source):
+        monkeypatch.chdir(tmp_path)
+        raw = tmp_path / "data" / "raw"
+        raw.mkdir(parents=True)
+        shutil.copy2(
+            Path(__file__).parent / "fixtures" / "doorplates.csv",
+            raw / "doorplates.csv",
+        )
+        monkeypatch.setattr(
+            "qingpu_insight.cli.create_listing_source", lambda *_: fake_source
+        )
+        assert (
+            main(
+                [
+                    "listing-sync",
+                    "--types",
+                    "sale",
+                    "newhouse",
+                    "rental",
+                    "--max-pages",
+                    "1",
+                ]
+            )
+            == 0
+        )
+        assert (tmp_path / "data/processed" / "listing_snapshots.parquet").exists()
+        assert set(fake_source.calls) == {"sale", "newhouse", "rental"}
+
+    def test_invalid_type_exits_nonzero(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        assert main(["listing-sync", "--types", "INVALID"]) != 0
+
+    def test_max_pages_less_than_one_exits_nonzero(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        assert main(["listing-sync", "--types", "sale", "--max-pages", "0"]) != 0
+
+    def test_delay_min_gt_delay_max_exits_nonzero(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        assert (
+            main(
+                [
+                    "listing-sync",
+                    "--types",
+                    "sale",
+                    "--delay-min",
+                    "10",
+                    "--delay-max",
+                    "1",
+                ]
+            )
+            != 0
+        )
