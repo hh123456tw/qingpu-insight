@@ -11,6 +11,13 @@ from flask import Flask, jsonify, render_template, request
 from werkzeug.datastructures import MultiDict
 from werkzeug.exceptions import HTTPException
 
+from qingpu_insight.listing_metrics import (
+    ListingFilters,
+    listing_summary,
+    public_events,
+    public_listings,
+)
+from qingpu_insight.listing_repository import ListingRepository, ParquetListingRepository
 from qingpu_insight.market_metrics import (
     MarketFilters,
     market_summary,
@@ -19,7 +26,7 @@ from qingpu_insight.market_metrics import (
 )
 from qingpu_insight.market_repository import MarketDataSource, repository_from_env
 from qingpu_insight.model_features import ValuationInput, build_model_frame
-from qingpu_insight.valuation import ModelRegistry, valuate
+from qingpu_insight.valuation import ModelRegistry, ValuationBundle, valuate
 from qingpu_insight.valuation_store import FileValuationStore
 
 
@@ -107,6 +114,7 @@ def create_app(
     root: Path | None = None,
     valuation_store: FileValuationStore | None = None,
     model_registry: ModelRegistry | None = None,
+    listing_repo: ListingRepository | None = None,
 ) -> Flask:
     app = Flask(__name__)
     app.json.default = _json_default
@@ -117,6 +125,7 @@ def create_app(
     ds = data_source
     store = valuation_store or FileValuationStore(Path.cwd() / "outputs" / "valuations")
     registry = model_registry or ModelRegistry(Path.cwd() / "artifacts")
+    lr = listing_repo
 
     @app.errorhandler(ApiInputError)
     def handle_api_input_error(error: ApiInputError):
@@ -183,6 +192,48 @@ def create_app(
                 "limit": limit,
             }
         )
+
+    # ------------------------------------------------------------------
+    # Listing intelligence (M3)
+    # ------------------------------------------------------------------
+
+    def _listing_filters_from_args() -> ListingFilters:
+        listing_type = request.args.get("listing_type", "")
+        if not listing_type:
+            raise ApiInputError("請選擇刊登類型。", {"listing_type": "required"})
+        stations = tuple(request.args.getlist("station")) or ("A17", "A18", "A19")
+        limit = min(max(int(request.args.get("limit", "100")), 1), 100)
+        return ListingFilters(
+            listing_type=listing_type,
+            station_codes=stations,
+            limit=limit,
+        )
+
+    @app.get("/api/listings/summary")
+    def listing_summary_api():
+        filters = _listing_filters_from_args()
+        if lr is None:
+            return jsonify({"error": {"code": "listing_data_unavailable", "message": "刊登資料未啟用。"}}), 503
+        df = lr.load_current(filters.listing_type)
+        return jsonify(listing_summary(df, filters))
+
+    @app.get("/api/listings")
+    def listings_api():
+        filters = _listing_filters_from_args()
+        if lr is None:
+            return jsonify({"error": {"code": "listing_data_unavailable", "message": "刊登資料未啟用。"}}), 503
+        df = lr.load_current(filters.listing_type)
+        items = public_listings(df, filters)
+        return jsonify({"items": items, "limit": filters.limit})
+
+    @app.get("/api/listing-events")
+    def listing_events_api():
+        filters = _listing_filters_from_args()
+        if lr is None:
+            return jsonify({"error": {"code": "listing_data_unavailable", "message": "刊登資料未啟用。"}}), 503
+        df = lr.load_current(filters.listing_type)
+        events = public_events(df, filters)
+        return jsonify({"items": events, "limit": filters.limit})
 
     @app.post("/api/valuations")
     def create_valuation():

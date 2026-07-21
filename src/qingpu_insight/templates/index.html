@@ -71,6 +71,42 @@
     <article><h2>價格與交易量趨勢</h2><canvas id="price-trend"></canvas></article>
   </section>
   <section><h2>近期成交</h2><div id="recent-transactions"></div></section>
+  <section class="listing-panel" aria-labelledby="listing-title">
+    <h2 id="listing-title">待售情報</h2>
+    <div class="listing-controls">
+      <label>類型
+        <select id="listing-type">
+          <option value="sale">出售</option>
+          <option value="newhouse">新屋</option>
+          <option value="rental">出租</option>
+        </select>
+      </label>
+      <fieldset id="listing-station-filter">
+        <legend>生活圈</legend>
+        <label><input type="checkbox" value="A17" checked>A17</label>
+        <label><input type="checkbox" value="A18" checked>A18</label>
+        <label><input type="checkbox" value="A19" checked>A19</label>
+      </fieldset>
+      <span id="listing-status" class="listing-status"></span>
+    </div>
+    <div class="listing-kpis" id="listing-kpis">
+      <article><span>刊登物件</span><strong id="listing-count">—</strong></article>
+      <article><span>中位價格</span><strong id="listing-median">—</strong></article>
+      <article><span>價格區間</span><strong id="listing-range">—</strong></article>
+      <article><span>快照時間</span><strong id="listing-snapshot">—</strong></article>
+    </div>
+    <div class="listing-grid">
+      <div class="listing-table-wrap">
+        <h3>最新刊登</h3>
+        <div id="listing-listings"></div>
+      </div>
+      <div class="listing-events-wrap">
+        <h3>價格異動</h3>
+        <div id="listing-events"></div>
+      </div>
+    </div>
+  </section>
+
   <aside class="method-note">成交來自官方實價登錄；座標為門牌比對結果。僅供市場研究，不構成估價、投資或購屋建議。</aside>
 
   <section class="valuation-panel" aria-labelledby="valuation-title">

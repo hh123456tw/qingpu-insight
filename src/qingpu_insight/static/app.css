@@ -380,6 +380,153 @@ section > h2 {
   color: var(--muted);
 }
 
+/* --- Listing Intelligence Panel (M3) --- */
+
+.listing-panel {
+  margin-top: 2rem;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1.25rem;
+}
+
+.listing-panel h2 {
+  margin: 0 0 1rem;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.listing-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 1.5rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.listing-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  min-height: 44px;
+}
+
+.listing-status {
+  font-size: 0.85rem;
+  color: var(--muted);
+  min-height: 1.5em;
+}
+
+.listing-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+}
+
+.listing-kpis article {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  text-align: center;
+}
+
+.listing-kpis article span {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-bottom: 0.2rem;
+}
+
+.listing-kpis article strong {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.listing-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: 1rem;
+}
+
+.listing-grid h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.listing-table-wrap {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.listing-table-wrap table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.listing-table-wrap th,
+.listing-table-wrap td {
+  text-align: left;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.listing-table-wrap th {
+  font-weight: 600;
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+}
+
+.listing-table-wrap tbody tr:hover {
+  background: rgba(20, 125, 111, 0.04);
+}
+
+.listing-events-wrap {
+  min-width: 0;
+}
+
+.event-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.event-item {
+  font-size: 0.85rem;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.event-item:last-child {
+  border-bottom: none;
+}
+
+.event-price_decrease {
+  color: #c0392b;
+}
+
+.event-price_increase {
+  color: var(--accent);
+}
+
+@media (max-width: 960px) {
+  .listing-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .listing-kpis {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
 @media (max-width: 960px) {
   .dashboard-grid {
     grid-template-columns: 1fr;

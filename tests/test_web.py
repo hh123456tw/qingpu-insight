@@ -134,6 +134,103 @@ class TestMarketApi:
             assert field not in raw
 
 
+# --- Listing API tests (M3) ---
+
+
+class InMemoryListingRepo:
+    def __init__(self, df: pd.DataFrame) -> None:
+        self._df = df
+
+    def load_current(self, listing_type: str | None = None) -> pd.DataFrame:
+        df = self._df
+        if listing_type is not None:
+            df = df[df["listing_type"] == listing_type]
+        return df
+
+    def load_snapshots(self, batch_id: str | None = None) -> pd.DataFrame:
+        return pd.DataFrame()
+
+    def save_batch(self, batch, rows) -> None:
+        pass
+
+    def append_events(self, events) -> None:
+        pass
+
+
+@pytest.fixture
+def listing_client(market_frame: pd.DataFrame) -> FlaskClient:
+    from qingpu_insight.web import create_app
+
+    listing_df = pd.DataFrame([
+        {
+            "source": "591", "source_listing_id": "L001", "listing_type": "sale",
+            "snapshot_at": pd.Timestamp("2026-07-20 10:00", tz="UTC"),
+            "source_url": "https://sale.591.com.tw/L001",
+            "title": "青埔三房", "asking_price_twd": 18_000_000,
+            "building_area_ping": 35.5, "station_code": "A18",
+            "latitude": 25.0123, "longitude": 121.2018,
+        },
+        {
+            "source": "591", "source_listing_id": "L002", "listing_type": "sale",
+            "snapshot_at": pd.Timestamp("2026-07-20 10:00", tz="UTC"),
+            "source_url": "https://sale.591.com.tw/L002",
+            "title": "A17大樓", "asking_price_twd": 22_000_000,
+            "building_area_ping": 48.0, "station_code": "A17",
+            "latitude": 25.0156, "longitude": 121.2078,
+        },
+    ])
+    ds = InMemoryMarketDataSource(market_frame)
+    app = create_app(data_source=ds, listing_repo=InMemoryListingRepo(listing_df))
+    with app.test_client() as client:
+        yield client
+
+
+class TestListingApi:
+    def test_listing_api_never_exposes_private_or_raw_fields(self, listing_client: FlaskClient) -> None:
+        raw = listing_client.get("/api/listings?listing_type=sale").get_data(as_text=True)
+        for field in ("raw_html", "payload", "phone", "contact_name", "full_address"):
+            assert field not in raw
+
+    def test_summary_requires_listing_type(self, listing_client: FlaskClient) -> None:
+        response = listing_client.get("/api/listings/summary")
+        assert response.status_code == 400
+
+    def test_summary_keeps_type_isolated(self, listing_client: FlaskClient) -> None:
+        response = listing_client.get("/api/listings/summary?listing_type=sale&station=A18")
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["listing_type"] == "sale"
+        assert data["active_count"] == 1
+        assert data["station_codes"] == ["A18"]
+
+    def test_listings_pagination_default_cap(self, listing_client: FlaskClient) -> None:
+        response = listing_client.get("/api/listings?listing_type=sale")
+        data = response.get_json()
+        assert data["limit"] == 100
+
+    def test_listings_returns_public_columns(self, listing_client: FlaskClient) -> None:
+        response = listing_client.get("/api/listings?listing_type=sale&station=A18")
+        data = response.get_json()
+        assert len(data["items"]) == 1
+        row = data["items"][0]
+        expected = {"listing_id", "type", "title", "source_url", "station", "area", "price", "event", "status", "latitude", "longitude", "model_evidence", "snapshot_time"}
+        assert set(row.keys()) == expected
+
+    def test_listing_events_returns_filtered(self, listing_client: FlaskClient) -> None:
+        response = listing_client.get("/api/listing-events?listing_type=sale")
+        assert response.status_code == 200
+        data = response.get_json()
+        assert "items" in data
+
+    def test_no_listing_repo_returns_503(self, client: FlaskClient) -> None:
+        response = client.get("/api/listings?listing_type=sale")
+        assert response.status_code == 503
+
+    def test_listings_with_missing_type_returns_400(self, listing_client: FlaskClient) -> None:
+        response = listing_client.get("/api/listings")
+        assert response.status_code == 400
+
+
 def test_unknown_route_preserves_http_404(client: FlaskClient) -> None:
     assert client.get("/does-not-exist").status_code == 404
 
