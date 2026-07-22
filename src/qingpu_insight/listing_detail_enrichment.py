@@ -1,7 +1,10 @@
 """Conservative address enrichment from public 591 new-house detail pages."""
 
 import json
+import os
 import re
+import stat
+import tempfile
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -12,12 +15,16 @@ from urllib.parse import urlsplit
 from bs4 import BeautifulSoup
 
 from qingpu_insight.listing_591 import SourceListing
-from qingpu_insight.listing_capture import is_verification_page
+from qingpu_insight.listing_capture import ChromeConfig, create_chrome, is_verification_page
 
 _NEW_HOUSE_HOST = "newhouse.591.com.tw"
-_SAFE_LISTING_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
-_ADDRESS_PREFIXES = ("桃園市中壢區", "桃園市大園區")
-_STREET_AND_NUMBER = re.compile(r"[路街].*?\d+\s*[號号]")
+# listing_591 accepts new-house records only when their final URL segment is numeric.
+_SAFE_LISTING_ID = re.compile(r"[0-9]{1,32}\Z")
+_ADDRESS = re.compile(
+    r"桃園市(?:中壢區|大園區)[一-龥A-Za-z0-9]+(?:路|街)"
+    r"(?:[一二三四五六七八九十0-9]+段)?(?:[0-9]+巷)?(?:[0-9]+弄)?"
+    r"[0-9]+(?:之[0-9]+)?號(?:[0-9]+樓)?\Z"
+)
 
 
 class DetailBrowser(Protocol):
@@ -58,6 +65,8 @@ def extract_detail_address(
 
     for selector in ('[itemprop="streetAddress"]', ".detail-address", ".house-address"):
         for element in soup.select(selector):
+            if element.find(True) is not None:
+                continue
             address = _normalize_address(element.get_text(" ", strip=True))
             if _is_accepted_address(address):
                 return DetailAddress(
@@ -70,14 +79,28 @@ def extract_detail_address(
 
 
 class ListingDetailEnricher:
-    """Fetch and preserve only safely attributable new-house detail evidence."""
+    """Fetch detail evidence through a visible, config-aware Chrome factory.
+
+    Pass a concrete browser for deterministic tests, or use a
+    ``create_chrome(config)``-compatible ``browser_factory`` with an explicit
+    ``ChromeConfig``. Headless configurations are rejected.
+    """
 
     def __init__(
         self,
-        browser_or_factory: DetailBrowser | Callable[[], DetailBrowser],
+        browser: DetailBrowser | None = None,
         clock: Callable[[], datetime] | None = None,
+        *,
+        browser_factory: Callable[[ChromeConfig], DetailBrowser] = create_chrome,
+        chrome_config: ChromeConfig | None = None,
     ) -> None:
-        self._browser_or_factory = browser_or_factory
+        if browser is not None and callable(browser):
+            raise TypeError("pass browser factories with browser_factory= and chrome_config=")
+        self._chrome_config = chrome_config or ChromeConfig()
+        if self._chrome_config.headless:
+            raise ValueError("detail enrichment requires a visible Chrome configuration")
+        self._browser = browser
+        self._browser_factory = browser_factory
         self._clock = clock or (lambda: datetime.now(UTC))
 
     def enrich(self, listing: SourceListing, batch_dir: Path) -> SourceListing:
@@ -102,10 +125,10 @@ class ListingDetailEnricher:
             observed_at = self._observed_at()
             address = extract_detail_address(html, final_url, observed_at)
             if address is None:
-                _atomic_write(batch_dir / "details-diagnostic" / safe_name, html)
+                _atomic_write(_evidence_path(batch_dir, "details-diagnostic", safe_name), html)
                 return listing
 
-            _atomic_write(batch_dir / "details" / safe_name, html)
+            _atomic_write(_evidence_path(batch_dir, "details", safe_name), html)
             payload = dict(listing.payload)
             payload.update(
                 {
@@ -124,8 +147,7 @@ class ListingDetailEnricher:
             browser.quit()
 
     def _new_browser(self) -> DetailBrowser:
-        candidate = self._browser_or_factory
-        return candidate() if callable(candidate) else candidate
+        return self._browser or self._browser_factory(self._chrome_config)
 
     def _observed_at(self) -> datetime:
         observed_at = self._clock()
@@ -196,20 +218,60 @@ def _postal_address_text(postal_address: dict[str, object]) -> str:
 
 
 def _normalize_address(address: str) -> str:
-    return re.sub(r"\s+", "", address).replace("台", "臺")
+    if any(ord(character) < 32 or ord(character) == 127 for character in address):
+        return ""
+    return address.replace(" ", "").replace("\u3000", "").replace("台", "臺")
 
 
 def _is_accepted_address(address: str) -> bool:
-    return bool(address) and address.startswith(_ADDRESS_PREFIXES) and bool(
-        _STREET_AND_NUMBER.search(address)
-    )
+    return bool(_ADDRESS.fullmatch(address))
+
+
+def _evidence_path(batch_dir: Path, directory_name: str, safe_name: str) -> Path:
+    batch_root = batch_dir.resolve(strict=False)
+    output_directory = batch_dir / directory_name
+    if _unsafe_output_directory(output_directory):
+        raise DetailEnrichmentBlocked("unsafe_output_directory")
+    try:
+        output_directory.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise DetailEnrichmentBlocked("unsafe_output_directory") from error
+    if _unsafe_output_directory(output_directory):
+        raise DetailEnrichmentBlocked("unsafe_output_directory")
+    try:
+        output_directory.resolve(strict=True).relative_to(batch_root)
+    except ValueError as error:
+        raise DetailEnrichmentBlocked("unsafe_output_directory") from error
+    return output_directory / safe_name
+
+
+def _unsafe_output_directory(path: Path) -> bool:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return False
+    reparse_attribute = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    is_reparse_point = bool(getattr(metadata, "st_file_attributes", 0) & reparse_attribute)
+    return stat.S_ISLNK(metadata.st_mode) or is_reparse_point or not stat.S_ISDIR(metadata.st_mode)
 
 
 def _atomic_write(path: Path, html: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f"{path.name}.tmp")
+    temporary: Path | None = None
     try:
-        temporary.write_text(html, encoding="utf-8")
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(html)
+            handle.flush()
+            os.fsync(handle.fileno())
         temporary.replace(path)
     finally:
-        temporary.unlink(missing_ok=True)
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)

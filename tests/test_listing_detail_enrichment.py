@@ -1,11 +1,15 @@
 """Tests for conservative 591 new-house detail address enrichment."""
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 
+import qingpu_insight.listing_detail_enrichment as detail_enrichment
 from qingpu_insight.listing_591 import SourceListing
+from qingpu_insight.listing_capture import ChromeConfig
 from qingpu_insight.listing_detail_enrichment import (
     DetailEnrichmentBlocked,
     ListingDetailEnricher,
@@ -112,6 +116,43 @@ def test_parser_does_not_guess_or_accept_invalid_addresses(html: str) -> None:
     ) is None
 
 
+@pytest.mark.parametrize(
+    "html",
+    [
+        "<div class='detail-address'>桃園市中壢區高鐵南路一段1號，鄰近公車</div>",
+        "<div class='detail-address'>桃園市中壢區高鐵南路一段1號<script>alert(1)</script></div>",
+        "<div class='detail-address'>桃園市中壢區高鐵南路一段1號\x00</div>",
+        """
+        <script type="application/ld+json">
+        {"@type":"PostalAddress","addressRegion":"桃園市","addressLocality":"中壢區",
+         "streetAddress":"高鐵南路一段1號，鄰近公車"}
+        </script>
+        """,
+        """
+        <script type="application/ld+json">
+        {"@type":"PostalAddress","addressRegion":"桃園市","addressLocality":"中壢區",
+         "streetAddress":"高鐵南路一段1號<img src=x onerror=alert(1)>"}
+        </script>
+        """,
+    ],
+)
+def test_parser_rejects_descriptive_or_markup_like_addresses(html: str) -> None:
+    assert extract_detail_address(
+        html, "https://newhouse.591.com.tw/home/housing/detail?hid=123", fixed_clock()
+    ) is None
+
+
+def test_parser_accepts_only_explicit_bounded_address_suffixes() -> None:
+    html = "<div class='detail-address'>桃園市大園區領航北路四段2之3號5樓</div>"
+
+    result = extract_detail_address(
+        html, "https://newhouse.591.com.tw/home/housing/detail?hid=123", fixed_clock()
+    )
+
+    assert result is not None
+    assert result.address == "桃園市大園區領航北路四段2之3號5樓"
+
+
 def test_enricher_rejects_verification_page_without_accepted_raw_evidence(tmp_path: Path) -> None:
     browser = FakeDetailBrowser("<html><title>驗證</title><body>captcha</body></html>")
     enricher = ListingDetailEnricher(browser, fixed_clock)
@@ -132,6 +173,35 @@ def test_non_newhouse_listing_is_returned_without_navigation(tmp_path: Path) -> 
 
     assert result is listing
     assert browser.calls == []
+
+
+def test_enricher_uses_existing_factory_with_explicit_visible_chrome_config(
+    tmp_path: Path, detail_html: str
+) -> None:
+    calls: list[ChromeConfig] = []
+    browser = FakeDetailBrowser(detail_html)
+
+    def factory(config: ChromeConfig) -> FakeDetailBrowser:
+        calls.append(config)
+        return browser
+
+    result = ListingDetailEnricher(
+        browser_factory=factory,
+        chrome_config=ChromeConfig(),
+        clock=fixed_clock,
+    ).enrich(newhouse_listing(), tmp_path)
+
+    assert result.payload["structured_address"] == "桃園市中壢區高鐵南路一段1號"
+    assert calls == [ChromeConfig()]
+    assert calls[0].headless is False
+
+
+def test_enricher_rejects_headless_factory_config() -> None:
+    with pytest.raises(ValueError, match="visible"):
+        ListingDetailEnricher(
+            browser_factory=lambda config: FakeDetailBrowser(""),
+            chrome_config=ChromeConfig(headless=True),
+        )
 
 
 @pytest.mark.parametrize(
@@ -216,6 +286,20 @@ def test_enricher_rejects_path_traversal_listing_id_before_creating_file(
     assert not (tmp_path / "escape.html").exists()
 
 
+@pytest.mark.parametrize("source_listing_id", ["CON", "con", "AUX", "NUL", "COM1", "123.html"])
+def test_enricher_rejects_noncanonical_or_windows_reserved_listing_id(
+    tmp_path: Path, detail_html: str, source_listing_id: str
+) -> None:
+    browser = FakeDetailBrowser(detail_html)
+
+    with pytest.raises(DetailEnrichmentBlocked, match="unsafe_listing_id"):
+        ListingDetailEnricher(browser, fixed_clock).enrich(
+            newhouse_listing(source_listing_id=source_listing_id), tmp_path
+        )
+
+    assert browser.calls == []
+
+
 def test_failed_atomic_evidence_write_leaves_no_partial_file(
     tmp_path: Path, detail_html: str, monkeypatch
 ) -> None:
@@ -231,3 +315,56 @@ def test_failed_atomic_evidence_write_leaves_no_partial_file(
 
     assert not list((tmp_path / "details").glob("*.html"))
     assert not list((tmp_path / "details").glob("*.tmp"))
+
+
+def test_concurrent_atomic_writes_do_not_share_a_fixed_temp_file(
+    tmp_path: Path, monkeypatch
+) -> None:
+    destination = tmp_path / "details" / "123.html"
+    barrier = Barrier(2)
+    created_temporaries: list[Path] = []
+    original_named_temporary_file = detail_enrichment.tempfile.NamedTemporaryFile
+
+    def synchronize_temp_creation(*args, **kwargs):
+        handle = original_named_temporary_file(*args, **kwargs)
+        created_temporaries.append(Path(handle.name))
+        barrier.wait(timeout=5)
+        return handle
+
+    monkeypatch.setattr(
+        detail_enrichment.tempfile, "NamedTemporaryFile", synchronize_temp_creation
+    )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(detail_enrichment._atomic_write, destination, f"<html>{value}</html>")
+            for value in ("first", "second")
+        ]
+        for future in futures:
+            future.result(timeout=5)
+
+    assert destination.read_text(encoding="utf-8") in {"<html>first</html>", "<html>second</html>"}
+    assert len(created_temporaries) == len(set(created_temporaries)) == 2
+    assert not list(destination.parent.glob("*.tmp"))
+
+
+@pytest.mark.parametrize(
+    "directory, html", [("details", "detail"), ("details-diagnostic", "missing")]
+)
+def test_enricher_refuses_symlinked_output_directories(
+    tmp_path: Path, detail_html: str, directory: str, html: str
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    output_directory = tmp_path / directory
+    try:
+        output_directory.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation is unavailable on this platform")
+
+    browser_html = detail_html if html == "detail" else "<html><body>no address</body></html>"
+    with pytest.raises(DetailEnrichmentBlocked, match="unsafe_output_directory"):
+        ListingDetailEnricher(FakeDetailBrowser(browser_html), fixed_clock).enrich(
+            newhouse_listing(), tmp_path
+        )
+
+    assert not list(outside.iterdir())
