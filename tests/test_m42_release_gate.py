@@ -1,111 +1,195 @@
 from __future__ import annotations
 
-from dataclasses import replace
+import inspect
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
 
 import pandas as pd
+import pymysql
 import pytest
-from test_publishing import FakeConnectionFactory, FakeDatabase
+from test_publishing import FakeConnection, FakeCursor, FakeDatabase
 
 from qingpu_insight.job_executor import LocalJobExecutor
-from qingpu_insight.jobs import ACTIVE_STATUSES, JobRun, JobService, JobStatus
 from qingpu_insight.listing_sources import CaptureBatch
 from qingpu_insight.listing_update import (
     AtomicParquetArtifactWriter,
-    ListingUpdateService,
     PreparedListingType,
 )
 from qingpu_insight.publishing import DatasetVersion, MySQLVersionPublisher
-from qingpu_insight.web import AdminServices, create_app
+from qingpu_insight.web import create_app
 
 
-class ReleaseJobRepository:
-    """Stateful external-boundary fake under the real Task-1 service."""
+def test_production_composer_exposes_only_external_boundary_seams() -> None:
+    import qingpu_insight.cli as cli
+    import qingpu_insight.web as web
+
+    cli_parameters = inspect.signature(cli._create_listing_update_service).parameters
+    web_parameters = inspect.signature(web._create_production_admin_services).parameters
+    assert "connection_factory" in cli_parameters
+    assert "preparation_runner_factory" in cli_parameters
+    assert "connection_factory" in web_parameters
+    assert "preparation_runner_factory" in web_parameters
+    assert "executor_factory" in web_parameters
+
+
+class ProductionFakeDatabase(FakeDatabase):
+    """Transactional external MySQL boundary for production composition."""
 
     def __init__(self) -> None:
-        self.runs: dict[str, JobRun] = {}
-        self.transitions: list[tuple[str, str]] = []
+        super().__init__()
+        self.job_runs: dict[str, dict[str, object]] = {}
+        self.job_sequence = 0
+        self.job_transitions: list[tuple[str, str]] = []
         self.terminal = Event()
 
-    def create_or_get(self, run: JobRun) -> tuple[JobRun, bool]:
-        active = self.find_active_by_key(run.idempotency_key)
-        if active is not None:
-            return active, False
-        self.runs[run.run_id] = run
-        return run, True
+    def snapshot(self) -> dict[str, object]:
+        snapshot = super().snapshot()
+        snapshot["job_runs"] = {
+            key: dict(value) for key, value in self.job_runs.items()
+        }
+        snapshot["job_sequence"] = self.job_sequence
+        snapshot["job_transitions"] = list(self.job_transitions)
+        return snapshot
 
-    def get(self, run_id: str) -> JobRun | None:
-        return self.runs.get(run_id)
+    def restore(self, snapshot: dict[str, object]) -> None:
+        super().restore(snapshot)
+        self.job_runs = {
+            key: dict(value)
+            for key, value in snapshot.get("job_runs", {}).items()
+        }
+        self.job_sequence = int(snapshot.get("job_sequence", 0))
+        self.job_transitions = list(snapshot.get("job_transitions", []))
 
-    def find_active_by_key(self, idempotency_key: str) -> JobRun | None:
-        return next(
+
+class ProductionCursor(FakeCursor):
+    def execute(self, sql: str, params=None) -> int:
+        normalized = " ".join(sql.lower().split())
+        database = self.connection.database
+        if "job_runs" not in normalized:
+            self.connection.kinds.add("publisher")
+            if (
+                normalized.startswith("insert into dataset_version_rows")
+                and database.fail_on == "dataset_version_rows"
+            ):
+                raise RuntimeError("injected dataset_version_rows failure")
+            return super().execute(sql, params)
+
+        self.connection.kinds.add("job")
+        self.result = []
+        self.rowcount = 0
+        if normalized.startswith(("create table", "alter table")):
+            return 0
+        if "information_schema" in normalized:
+            self.result = [{"present": 1}]
+            return 0
+        if normalized.startswith("insert into job_runs"):
             (
-                run
-                for run in self.runs.values()
-                if run.idempotency_key == idempotency_key
-                and run.status in ACTIVE_STATUSES
-            ),
-            None,
-        )
+                run_id, job_type, trigger, idempotency_key, status, attempt,
+                input_version, output_version, summary, error_code, error_message,
+                started_at, finished_at,
+            ) = params
+            duplicate = next(
+                (
+                    row for row in database.job_runs.values()
+                    if row["idempotency_key"] == idempotency_key
+                    and row["status"] in {"pending", "running", "retry_wait"}
+                ),
+                None,
+            )
+            if duplicate is not None:
+                raise pymysql.err.IntegrityError(
+                    1062, "Duplicate entry for key 'uq_job_runs_active_key'"
+                )
+            database.job_sequence += 1
+            database.job_runs[run_id] = {
+                "run_id": run_id,
+                "job_type": job_type,
+                "trigger": trigger,
+                "idempotency_key": idempotency_key,
+                "status": status,
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "attempt": attempt,
+                "input_version": input_version,
+                "output_version": output_version,
+                "summary": summary,
+                "error_code": error_code,
+                "error_message": error_message,
+                "created_at": database.job_sequence,
+            }
+            self.rowcount = 1
+            return 1
+        if normalized.startswith("select * from job_runs where run_id"):
+            row = database.job_runs.get(params[0])
+            self.result = [dict(row)] if row is not None else []
+            return len(self.result)
+        if normalized.startswith("select * from job_runs where idempotency_key"):
+            self.result = [
+                dict(row)
+                for row in database.job_runs.values()
+                if row["idempotency_key"] == params[0]
+                and row["status"] in {"pending", "running", "retry_wait"}
+            ][:1]
+            return len(self.result)
+        if normalized.startswith("select * from job_runs order by"):
+            limit = params[0]
+            ordered = sorted(
+                database.job_runs.values(),
+                key=lambda row: (row["created_at"], row["run_id"]),
+                reverse=True,
+            )
+            self.result = [dict(row) for row in ordered[:limit]]
+            return len(self.result)
+        if normalized.startswith("update job_runs set status"):
+            target_status = params[0]
+            current_status = params[13]
+            run_id = params[12]
+            row = database.job_runs.get(run_id)
+            if row is None or row["status"] != current_status:
+                return 0
+            row["status"] = target_status
+            if target_status == "running" and row["started_at"] is None:
+                row["started_at"] = params[2]
+            if target_status in {"succeeded", "failed", "skipped", "needs_attention"}:
+                row["finished_at"] = params[4]
+            if current_status == "retry_wait" and target_status == "running":
+                row["attempt"] = int(row["attempt"]) + 1
+            if params[7] is not None:
+                row["output_version"] = params[7]
+            if params[8] is not None:
+                row["summary"] = params[8]
+            if params[9] is not None:
+                row["error_code"] = params[9]
+            if params[10] is not None:
+                row["error_message"] = params[10]
+            database.job_transitions.append((current_status, target_status))
+            if target_status in {"succeeded", "failed", "skipped", "needs_attention"}:
+                database.terminal.set()
+            self.rowcount = 1
+            return 1
+        raise AssertionError(f"unhandled job SQL: {normalized}")
 
-    def list_recent(self, limit: int = 20) -> list[JobRun]:
-        return list(reversed(list(self.runs.values())))[:limit]
 
-    def transition(
-        self,
-        run_id: str,
-        current_status: JobStatus,
-        target_status: JobStatus,
-        *,
-        output_version: str | None = None,
-        summary: dict[str, object] | None = None,
-        error_code: str | None = None,
-        error_message: str | None = None,
-    ) -> bool:
-        run = self.runs.get(run_id)
-        if run is None or run.status != current_status:
-            return False
-        self.transitions.append((current_status, target_status))
-        self.runs[run_id] = replace(
-            run,
-            status=target_status,
-            started_at=(
-                datetime.now(UTC)
-                if target_status == "running" and run.started_at is None
-                else run.started_at
-            ),
-            finished_at=(
-                datetime.now(UTC)
-                if target_status in {"succeeded", "failed", "skipped"}
-                else run.finished_at
-            ),
-            output_version=output_version or run.output_version,
-            summary=summary if summary is not None else run.summary,
-            error_code=error_code or run.error_code,
-            error_message=error_message or run.error_message,
-        )
-        if target_status in {"succeeded", "failed", "skipped", "needs_attention"}:
-            self.terminal.set()
-        return True
+class ProductionConnection(FakeConnection):
+    def __init__(self, database: ProductionFakeDatabase) -> None:
+        self.kinds: set[str] = set()
+        super().__init__(database)
+
+    def cursor(self, cursor_class=None) -> ProductionCursor:
+        self.cursor_classes.append(cursor_class)
+        return ProductionCursor(self)
 
 
-class ReleaseLock:
-    def __init__(self) -> None:
-        self.owner: tuple[str, str] | None = None
+class ProductionConnectionFactory:
+    def __init__(self, database: ProductionFakeDatabase) -> None:
+        self.database = database
+        self.connections: list[ProductionConnection] = []
 
-    def try_acquire(self) -> bool:
-        return True
-
-    def set_owner(self, idempotency_key: str, run_id: str) -> None:
-        self.owner = (idempotency_key, run_id)
-
-    def read_owner(self) -> tuple[str, str] | None:
-        return self.owner
-
-    def release(self) -> None:
-        self.owner = None
+    def __call__(self) -> ProductionConnection:
+        connection = ProductionConnection(self.database)
+        self.connections.append(connection)
+        return connection
 
 
 def _listing_payload(listing_type: str, version: str) -> dict[str, object]:
@@ -173,25 +257,45 @@ class ReleasePreparationRunner:
         return result
 
 
-class FailingArtifactWriter:
-    def write(self, rows: pd.DataFrame, path: Path):
-        del rows, path
-        raise OSError("mysql://admin:password@localhost/db artifact write failed")
+class ConnectionOwningPreparationRunner:
+    def __init__(self, delegate: ReleasePreparationRunner, connection_factory) -> None:
+        self.delegate = delegate
+        self.connection_factory = connection_factory
+        self.connection_ids: list[int] = []
+
+    @property
+    def calls(self) -> list[str]:
+        return self.delegate.calls
+
+    @property
+    def prepared(self) -> list[PreparedListingType]:
+        return self.delegate.prepared
+
+    def prepare(self, listing_type: str, max_pages: int) -> PreparedListingType:
+        connection = self.connection_factory()
+        connection.kinds.add("preparation")
+        self.connection_ids.append(id(connection))
+        try:
+            return self.delegate.prepare(listing_type, max_pages)
+        finally:
+            connection.close()
 
 
-class StageFailPublisher:
-    def __init__(self, publisher: MySQLVersionPublisher) -> None:
-        self.publisher = publisher
+class ReleasePreparationFactory:
+    def __init__(self, version: str, **runner_kwargs) -> None:
+        self.version = version
+        self.runner_kwargs = runner_kwargs
+        self.calls = 0
+        self.runner: ConnectionOwningPreparationRunner | None = None
 
-    def current(self):
-        return self.publisher.current()
-
-    def stage(self, version, batches, rows, events) -> None:
-        del version, batches, rows, events
-        raise RuntimeError("mysql://admin:password@localhost/db staging failed")
-
-    def publish(self, version: str, expected_current_version: str | None):
-        return self.publisher.publish(version, expected_current_version)
+    def __call__(self, root: Path, connection_factory):
+        del root
+        self.calls += 1
+        self.runner = ConnectionOwningPreparationRunner(
+            ReleasePreparationRunner(self.version, **self.runner_kwargs),
+            connection_factory,
+        )
+        return self.runner
 
 
 class EmptyMarketSource:
@@ -245,6 +349,24 @@ def _post(client, payload: dict[str, object]):
     )
 
 
+def test_production_composer_rejects_missing_task3_preparation_runner(
+    tmp_path: Path,
+) -> None:
+    import qingpu_insight.web as web
+
+    database = ProductionFakeDatabase()
+    factory = ProductionConnectionFactory(database)
+    with pytest.raises(ValueError, match="preparation_runner"):
+        web._create_production_admin_services(
+            tmp_path,
+            connection_factory=factory,
+            preparation_runner_factory=lambda root, connections: None,
+            executor_factory=LocalJobExecutor,
+        )
+    assert factory.connections
+    assert all(connection.closed for connection in factory.connections)
+
+
 @pytest.mark.parametrize(
     ("boundary", "expected_code"),
     [
@@ -256,33 +378,34 @@ def _post(client, payload: dict[str, object]):
     ],
 )
 def test_m42_atomic_release_gate(
-    tmp_path: Path, boundary: str, expected_code: str,
+    tmp_path: Path, monkeypatch, boundary: str, expected_code: str,
 ) -> None:
-    database = FakeDatabase()
-    factory = FakeConnectionFactory(database)
+    import qingpu_insight.web as web
+
+    database = ProductionFakeDatabase()
+    factory = ProductionConnectionFactory(database)
     publisher = MySQLVersionPublisher(factory, dataset_key="listings")
     v1 = _seed_v1(tmp_path, publisher)
     assert v1.version == "v1"
     assert database.pointer["listings"] == "v1"
 
-    jobs_v2_repo = ReleaseJobRepository()
-    jobs_v2 = JobService(jobs_v2_repo)
     started = Event()
     release = Event()
-    preparation_v2 = ReleasePreparationRunner(
+    preparation_v2_factory = ReleasePreparationFactory(
         "v2", started=started, release=release
     )
-    service_v2 = ListingUpdateService(
-        jobs_v2,
-        publisher,
-        preparation_runner=preparation_v2,
-        root=tmp_path,
-        lock_factory=ReleaseLock,
+    services_v2 = web._create_production_admin_services(
+        tmp_path,
+        connection_factory=factory,
+        preparation_runner_factory=preparation_v2_factory,
+        executor_factory=LocalJobExecutor,
     )
-    executor_v2 = LocalJobExecutor(jobs_v2)
+    assert preparation_v2_factory.calls == 1
+    preparation_v2 = preparation_v2_factory.runner
+    assert preparation_v2 is not None
     app_v2 = create_app(
         data_source=EmptyMarketSource(),
-        admin_services=AdminServices(jobs_v2, service_v2, executor_v2),
+        admin_services=services_v2,
     )
     try:
         with app_v2.test_client() as client:
@@ -303,7 +426,7 @@ def test_m42_atomic_release_gate(
             assert duplicate.json["created"] is False
             assert preparation_v2.calls == ["sale"]
             release.set()
-            assert jobs_v2_repo.terminal.wait(5), "v2 did not finish"
+            assert database.terminal.wait(5), "v2 did not finish"
             detail = client.get(f"/api/jobs/{first.json['run_id']}")
             assert detail.status_code == 200
             assert detail.json["status"] == "succeeded"
@@ -313,7 +436,7 @@ def test_m42_atomic_release_gate(
         release.set()
         app_v2.extensions["qingpu_admin_shutdown"]()
 
-    assert jobs_v2_repo.transitions.count(("pending", "running")) == 1
+    assert database.job_transitions.count(("pending", "running")) == 1
     assert preparation_v2.calls == ["sale", "newhouse", "rental"]
     assert database.pointer["listings"] == v2_version
     assert publisher.current().version == v2_version
@@ -334,34 +457,34 @@ def test_m42_atomic_release_gate(
     assert set(database.runtime_events) == event_keys_before
 
     runtime_before = database.snapshot()
-    jobs_v3_repo = ReleaseJobRepository()
-    jobs_v3 = JobService(jobs_v3_repo)
-    preparation_v3 = ReleasePreparationRunner(
+    database.terminal.clear()
+    preparation_v3_factory = ReleasePreparationFactory(
         f"v3-{boundary}", fail=boundary == "preparation"
     )
-    candidate_publisher = (
-        StageFailPublisher(publisher) if boundary == "stage" else publisher
-    )
-    if boundary == "runtime_publish":
+    if boundary == "artifact":
+        monkeypatch.setattr(
+            AtomicParquetArtifactWriter,
+            "write",
+            lambda self, rows, path: (_ for _ in ()).throw(
+                OSError("mysql://admin:password@localhost/db artifact failed")
+            ),
+        )
+    elif boundary == "stage":
+        database.fail_on = "dataset_version_rows"
+    elif boundary == "runtime_publish":
         database.fail_on = "listing_current"
     elif boundary == "pointer_update":
         database.fail_on = "published_datasets"
-    service_v3 = ListingUpdateService(
-        jobs_v3,
-        candidate_publisher,
-        preparation_runner=preparation_v3,
-        root=tmp_path,
-        lock_factory=ReleaseLock,
-        artifact_writer=(
-            FailingArtifactWriter()
-            if boundary == "artifact"
-            else AtomicParquetArtifactWriter()
-        ),
+    services_v3 = web._create_production_admin_services(
+        tmp_path,
+        connection_factory=factory,
+        preparation_runner_factory=preparation_v3_factory,
+        executor_factory=LocalJobExecutor,
     )
-    executor_v3 = LocalJobExecutor(jobs_v3)
+    assert preparation_v3_factory.calls == 1
     app_v3 = create_app(
         data_source=EmptyMarketSource(),
-        admin_services=AdminServices(jobs_v3, service_v3, executor_v3),
+        admin_services=services_v3,
     )
     try:
         with app_v3.test_client() as client:
@@ -372,11 +495,11 @@ def test_m42_atomic_release_gate(
                 {
                     "types": ["sale", "newhouse", "rental"],
                     "max_pages": 1,
-                    "trigger": f"release-{boundary}",
+                    "trigger": "scheduled",
                 },
             )
             assert response.status_code == 202
-            assert jobs_v3_repo.terminal.wait(5), f"{boundary} did not terminalize"
+            assert database.terminal.wait(5), f"{boundary} did not terminalize"
             failed = client.get(f"/api/jobs/{response.json['run_id']}")
             assert failed.status_code == 200
             assert failed.json["status"] == "failed"
@@ -395,4 +518,20 @@ def test_m42_atomic_release_gate(
     assert database.runtime_current == runtime_before["runtime_current"]
     assert database.runtime_events == runtime_before["runtime_events"]
     assert all(connection.closed for connection in factory.connections)
-    assert len({id(connection) for connection in factory.connections}) > 5
+    job_connection_ids = {
+        id(connection) for connection in factory.connections
+        if "job" in connection.kinds
+    }
+    publisher_connection_ids = {
+        id(connection) for connection in factory.connections
+        if "publisher" in connection.kinds
+    }
+    preparation_connection_ids = {
+        id(connection) for connection in factory.connections
+        if "preparation" in connection.kinds
+    }
+    assert len(job_connection_ids) > 5
+    assert len(publisher_connection_ids) > 5
+    assert len(preparation_connection_ids) >= 3
+    assert job_connection_ids.isdisjoint(preparation_connection_ids)
+    assert publisher_connection_ids.isdisjoint(preparation_connection_ids)

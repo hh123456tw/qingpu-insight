@@ -67,18 +67,55 @@ class _UnavailableMarketDataSource:
 
 
 def _strong_admin_secret(secret: str | None) -> bool:
-    return bool(secret and len(secret) >= 32 and secret != "dev-secret-key")
+    if not secret or len(secret) < 32:
+        return False
+    lowered = secret.casefold()
+    if any(
+        marker in lowered
+        for marker in (
+            "dev-secret",
+            "change-me",
+            "changeme",
+            "placeholder",
+            "at-least-32",
+            "random-characters",
+        )
+    ) or "<" in secret or ">" in secret:
+        return False
+    if re.fullmatch(r"[0-9a-fA-F]{64,128}", secret):
+        return len(set(lowered)) >= 8
+    character_classes = sum(
+        (
+            any(char.islower() for char in secret),
+            any(char.isupper() for char in secret),
+            any(char.isdigit() for char in secret),
+            any(not char.isalnum() for char in secret),
+        )
+    )
+    return character_classes >= 3 and len(set(secret)) >= 12
 
 
-def _create_production_admin_services(root: Path) -> AdminServices:
+def _create_production_admin_services(
+    root: Path,
+    *,
+    connection_factory=None,
+    preparation_runner_factory=None,
+    executor_factory=None,
+) -> AdminServices:
     # Task 3 owns URL parsing and visible-Selenium dependency construction.
     from qingpu_insight.cli import _create_listing_update_service
 
-    service = _create_listing_update_service(root)
+    service_kwargs = {}
+    if connection_factory is not None:
+        service_kwargs["connection_factory"] = connection_factory
+    if preparation_runner_factory is not None:
+        service_kwargs["preparation_runner_factory"] = preparation_runner_factory
+    service = _create_listing_update_service(root, **service_kwargs)
+    build_executor = executor_factory or LocalJobExecutor
     return AdminServices(
         job_service=service.job_service,
         listing_update_service=service,
-        executor=LocalJobExecutor(service.job_service),
+        executor=build_executor(service.job_service),
     )
 
 
@@ -87,19 +124,41 @@ def parse_filters(args: MultiDict[str, str]) -> MarketFilters:
     if not transaction_type:
         raise ApiInputError("請選擇中古屋或預售屋。", {"transaction_type": "required"})
     stations = tuple(args.getlist("station")) or ("A17", "A18", "A19")
+    try:
+        date_from = (
+            pd.to_datetime(args.get("date_from"), errors="raise")
+            if args.get("date_from")
+            else None
+        )
+    except (TypeError, ValueError):
+        raise ApiInputError("日期格式不正確。", {"date_from": "invalid"}) from None
+    try:
+        date_to = (
+            pd.to_datetime(args.get("date_to"), errors="raise")
+            if args.get("date_to")
+            else None
+        )
+    except (TypeError, ValueError):
+        raise ApiInputError("日期格式不正確。", {"date_to": "invalid"}) from None
+    try:
+        area_ping_min = (
+            float(args["area_ping_min"]) if args.get("area_ping_min") else None
+        )
+        area_ping_max = (
+            float(args["area_ping_max"]) if args.get("area_ping_max") else None
+        )
+        bedrooms = tuple(int(value) for value in args.getlist("bedrooms"))
+    except (TypeError, ValueError):
+        raise ApiInputError("篩選條件格式不正確。", {"filters": "invalid"}) from None
     return MarketFilters(
         transaction_type=transaction_type,
         station_codes=stations,
-        date_from=pd.to_datetime(args.get("date_from"), errors="raise")
-        if args.get("date_from")
-        else None,
-        date_to=pd.to_datetime(args.get("date_to"), errors="raise")
-        if args.get("date_to")
-        else None,
-        area_ping_min=float(args["area_ping_min"]) if args.get("area_ping_min") else None,
-        area_ping_max=float(args["area_ping_max"]) if args.get("area_ping_max") else None,
+        date_from=date_from,
+        date_to=date_to,
+        area_ping_min=area_ping_min,
+        area_ping_max=area_ping_max,
         building_types=tuple(args.getlist("building_type")),
-        bedrooms=tuple(int(v) for v in args.getlist("bedrooms")),
+        bedrooms=bedrooms,
     )
 
 
@@ -134,26 +193,31 @@ def parse_valuation_payload(payload: dict[str, Any]) -> ValuationInput:
     missing = {name: "required" for name in required if payload.get(name) in (None, "")}
     if missing:
         raise ApiInputError("請完整填寫估價條件。", missing)
-    return ValuationInput(
-        transaction_type=str(payload["transaction_type"]),
-        station_code=str(payload["station_code"]),
-        building_area_ping=float(payload["building_area_ping"]),
-        station_distance_m=float(payload["station_distance_m"]),
-        building_type=str(payload["building_type"]),
-        bedrooms=int(payload["bedrooms"]),
-        living_rooms=int(payload["living_rooms"]),
-        bathrooms=int(payload["bathrooms"]),
-        building_age_years=float(payload["building_age_years"])
-        if payload.get("building_age_years") is not None
-        else None,
-        floor=int(payload["floor"]),
-        total_floors=int(payload["total_floors"]),
-        parking_type=payload.get("parking_type"),
-        parking_area_ping=float(payload.get("parking_area_ping", 0)),
-        asking_total_price_twd=int(payload["asking_total_price_twd"])
-        if payload.get("asking_total_price_twd")
-        else None,
-    )
+    try:
+        return ValuationInput(
+            transaction_type=str(payload["transaction_type"]),
+            station_code=str(payload["station_code"]),
+            building_area_ping=float(payload["building_area_ping"]),
+            station_distance_m=float(payload["station_distance_m"]),
+            building_type=str(payload["building_type"]),
+            bedrooms=int(payload["bedrooms"]),
+            living_rooms=int(payload["living_rooms"]),
+            bathrooms=int(payload["bathrooms"]),
+            building_age_years=float(payload["building_age_years"])
+            if payload.get("building_age_years") is not None
+            else None,
+            floor=int(payload["floor"]),
+            total_floors=int(payload["total_floors"]),
+            parking_type=payload.get("parking_type"),
+            parking_area_ping=float(payload.get("parking_area_ping", 0)),
+            asking_total_price_twd=int(payload["asking_total_price_twd"])
+            if payload.get("asking_total_price_twd")
+            else None,
+        )
+    except (KeyError, TypeError, ValueError):
+        raise ApiInputError(
+            "估價條件格式不正確。", {"valuation": "invalid"}
+        ) from None
 
 
 def _is_trusted_local_request() -> bool:
@@ -204,8 +268,13 @@ def _parse_listing_update_request() -> ListingUpdateRequest:
         fields["max_pages"] = "integer_1_to_100"
 
     trigger = payload.get("trigger", "manual")
-    if not isinstance(trigger, str) or not trigger.strip():
-        fields["trigger"] = "non_blank_string"
+    if (
+        not isinstance(trigger, str)
+        or not trigger.strip()
+        or len(trigger) > 32
+        or trigger.strip() not in {"manual", "scheduled", "web"}
+    ):
+        fields["trigger"] = "supported_value"
     if fields:
         raise ApiInputError("Request validation failed.", fields)
     return ListingUpdateRequest(
@@ -218,7 +287,12 @@ def _public_job(run: JobRun) -> dict[str, object]:
         "run_id": run.run_id,
         "job_type": run.job_type,
         "status": run.status,
-        "trigger": run.trigger,
+        "trigger": (
+            run.trigger
+            if run.trigger in {"manual", "scheduled", "web"}
+            and len(run.trigger) <= 32
+            else "redacted"
+        ),
         "attempt": run.attempt,
         "started_at": run.started_at,
         "finished_at": run.finished_at,
@@ -351,25 +425,11 @@ def create_app(
             }
         ), 400
 
-    @app.errorhandler(ValueError)
-    @app.errorhandler(KeyError)
-    @app.errorhandler(TypeError)
-    def handle_parse_error(error: Exception):
-        return jsonify(
-            {
-                "error": {
-                    "code": "invalid_request",
-                    "message": str(error),
-                    "fields": None,
-                }
-            }
-        ), 400
-
     @app.errorhandler(Exception)
     def handle_unhandled(error: Exception):
         if isinstance(error, HTTPException):
             return error
-        app.logger.exception("unhandled error serving request")
+        app.logger.error("unhandled error serving request")
         return jsonify(
             {
                 "error": {
@@ -397,7 +457,12 @@ def create_app(
     @app.get("/api/transactions")
     def transactions_api():
         filters = parse_filters(request.args)
-        limit = min(max(int(request.args.get("limit", "20")), 1), 100)
+        try:
+            limit = min(max(int(request.args.get("limit", "20")), 1), 100)
+        except (TypeError, ValueError):
+            raise ApiInputError(
+                "筆數格式不正確。", {"limit": "integer_1_to_100"}
+            ) from None
         return jsonify(
             {
                 "items": recent_transactions(ds.load(filters), filters, limit),
@@ -414,7 +479,12 @@ def create_app(
         if not listing_type:
             raise ApiInputError("請選擇刊登類型。", {"listing_type": "required"})
         stations = tuple(request.args.getlist("station")) or ("A17", "A18", "A19")
-        limit = min(max(int(request.args.get("limit", "100")), 1), 100)
+        try:
+            limit = min(max(int(request.args.get("limit", "100")), 1), 100)
+        except (TypeError, ValueError):
+            raise ApiInputError(
+                "筆數格式不正確。", {"limit": "integer_1_to_100"}
+            ) from None
         return ListingFilters(
             listing_type=listing_type,
             station_codes=stations,
@@ -459,7 +529,10 @@ def create_app(
     @app.post("/api/valuations")
     def create_valuation():
         try:
-            input_ = parse_valuation_payload(request.get_json(force=True))
+            payload = request.get_json(silent=True)
+            if not isinstance(payload, dict):
+                raise ApiInputError("Request body must be a JSON object.", {"body": "object"})
+            input_ = parse_valuation_payload(payload)
         except ApiInputError as error:
             return jsonify(
                 {
@@ -543,7 +616,12 @@ def create_app(
             uuid.UUID(run_id)
         except (ValueError, AttributeError):
             return _invalid_request({"run_id": "invalid_uuid"})
-        run = admin_services.job_service.get(run_id)
+        try:
+            run = admin_services.job_service.get(run_id)
+        except Exception:
+            return jsonify(
+                {"error": {"code": "job_unavailable", "message": "工作狀態暫時無法取得。"}}
+            ), 503
         if run is None:
             return jsonify({"error": {"code": "not_found", "message": "工作不存在。"}}), 404
         return jsonify(_public_job(run))
@@ -562,7 +640,12 @@ def create_app(
             return _invalid_request({"limit": "integer_1_to_100"})
         if str(limit) != raw_limit or not 1 <= limit <= 100:
             return _invalid_request({"limit": "integer_1_to_100"})
-        runs = admin_services.job_service.list_recent(limit)
+        try:
+            runs = admin_services.job_service.list_recent(limit)
+        except Exception:
+            return jsonify(
+                {"error": {"code": "job_unavailable", "message": "工作歷史暫時無法取得。"}}
+            ), 503
         return jsonify({"items": [_public_job(run) for run in runs], "limit": limit})
 
     return app

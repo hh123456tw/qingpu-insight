@@ -222,4 +222,3 @@ Run: `git diff --check 12fe7d5..HEAD`
 - [ ] **Step 8: Commit**
 
 Commit: `fix(m4): complete the local update job center`
-

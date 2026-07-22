@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from concurrent.futures import Future
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -794,6 +795,11 @@ def test_admin_update_rejects_wrong_csrf(admin_client: FlaskClient) -> None:
         ({"types": ["sale"], "max_pages": 0}, "max_pages"),
         ({"types": ["sale"], "max_pages": 101}, "max_pages"),
         ({"types": ["sale"], "trigger": ""}, "trigger"),
+        ({"types": ["sale"], "trigger": "x" * 33}, "trigger"),
+        ({"types": ["sale"], "trigger": "mysql://admin:password@db/x"}, "trigger"),
+        ({"types": ["sale"], "trigger": "<html>verify</html>"}, "trigger"),
+        ({"types": ["sale"], "trigger": "0912-345-678"}, "trigger"),
+        ({"types": ["sale"], "trigger": "unknown"}, "trigger"),
     ],
 )
 def test_admin_update_rejects_invalid_json_contract(
@@ -807,6 +813,8 @@ def test_admin_update_rejects_invalid_json_contract(
     assert response.status_code == 400
     assert response.json["error"]["code"] == "invalid_request"
     assert field in response.json["error"]["fields"]
+    if field == "trigger" and isinstance(payload, dict) and payload.get("trigger"):
+        assert str(payload["trigger"]) not in response.get_data(as_text=True)
 
 
 def test_admin_update_rejects_malformed_or_wrong_content_type(
@@ -828,6 +836,19 @@ def test_admin_update_rejects_malformed_or_wrong_content_type(
     assert wrong_type.status_code == 400
     assert malformed.json["error"]["code"] == "invalid_request"
     assert wrong_type.json["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.parametrize("trigger", ["manual", "scheduled", "web"])
+def test_admin_update_accepts_only_explicit_supported_triggers(
+    admin_client: FlaskClient, trigger: str,
+) -> None:
+    response = admin_client.post(
+        "/api/admin/listing-updates",
+        json={"types": ["sale"], "max_pages": 1, "trigger": trigger},
+        headers={"X-Qingpu-CSRF": "test-token"},
+    )
+    assert response.status_code == 202
+    assert response.json["trigger"] == trigger
 
 
 def test_synchronous_handoff_failure_returns_safe_503(
@@ -914,6 +935,90 @@ def test_job_detail_redacts_unsafe_nested_summary(
     assert "SELECT" not in serialized
 
 
+@pytest.mark.parametrize(
+    "unsafe_trigger",
+    [
+        "x" * 64,
+        "mysql://admin:password@localhost/db",
+        "<html>verification</html>",
+        "0912-345-678",
+    ],
+)
+def test_job_detail_and_history_do_not_echo_unsafe_persisted_trigger(
+    admin_app, admin_client: FlaskClient, unsafe_trigger: str,
+) -> None:
+    _, repo, _, _ = admin_app
+    from qingpu_insight.jobs import JobService
+
+    service = JobService(repo)
+    run = service.create("listing_update", f"unsafe-{len(repo._runs)}", "manual").run
+    repo._runs[run.run_id] = replace(run, trigger=unsafe_trigger)
+
+    detail = admin_client.get(f"/api/jobs/{run.run_id}")
+    history = admin_client.get("/api/jobs?limit=1")
+    assert detail.status_code == 200
+    assert detail.json["trigger"] == "redacted"
+    assert history.json["items"][0]["trigger"] == "redacted"
+    assert unsafe_trigger not in detail.get_data(as_text=True)
+
+
+def test_secret_bearing_job_repository_value_error_returns_fixed_503(
+    admin_app, admin_client: FlaskClient,
+) -> None:
+    _, repo, _, _ = admin_app
+    repo.get = lambda run_id: (_ for _ in ()).throw(
+        ValueError("mysql://admin:password@localhost/db SELECT * FROM job_runs")
+    )
+
+    response = admin_client.get(
+        "/api/jobs/00000000-0000-4000-8000-000000000000"
+    )
+    body = response.get_data(as_text=True)
+    assert response.status_code == 503
+    assert response.json["error"]["code"] == "job_unavailable"
+    assert "password" not in body
+    assert "SELECT" not in body
+
+
+def test_invalid_market_filter_is_curated_api_input_error(client: FlaskClient) -> None:
+    response = client.get(
+        "/api/market/summary",
+        query_string={"transaction_type": "resale", "date_from": "secret-date"},
+    )
+    body = response.get_data(as_text=True)
+    assert response.status_code == 400
+    assert response.json["error"]["code"] == "invalid_request"
+    assert response.json["error"]["fields"] == {"date_from": "invalid"}
+    assert "secret-date" not in body
+
+
+def test_secret_bearing_listing_repository_value_error_returns_fixed_503(
+    market_frame: pd.DataFrame,
+) -> None:
+    from qingpu_insight.web import create_app
+
+    class FailingListingRepository:
+        def load_current(self, listing_type):
+            del listing_type
+            raise ValueError(
+                "mysql://admin:password@localhost/db SELECT * FROM listing_current"
+            )
+
+    app = create_app(
+        data_source=InMemoryMarketDataSource(market_frame),
+        listing_repo=FailingListingRepository(),
+    )
+    with app.test_client() as client:
+        response = client.get(
+            "/api/listings/summary", query_string={"listing_type": "sale"}
+        )
+    body = response.get_data(as_text=True)
+    assert response.status_code == 503
+    assert response.json["error"]["code"] == "market_data_unavailable"
+    assert "password" not in body
+    assert "SELECT" not in body
+
+
 @pytest.mark.parametrize("limit", ["", "zero", "0", "101", "1.5"])
 def test_job_history_rejects_invalid_limit(
     admin_client: FlaskClient, limit: str,
@@ -947,7 +1052,8 @@ def test_production_admin_composition_requires_database_and_strong_secret(
         "QINGPU_DATABASE_URL",
         "mysql+pymysql://<user>:<password>@127.0.0.1:3306/<database>",
     )
-    monkeypatch.setenv("QINGPU_SECRET_KEY", "A7!" * 16)
+    strong_secret = "Ab3!xY7@qR9#tU2$vW5&zC8*mN4+eH6@K7"
+    monkeypatch.setenv("QINGPU_SECRET_KEY", strong_secret)
 
     app = web.create_app(
         root=tmp_path, data_source=InMemoryMarketDataSource(market_frame)
@@ -961,22 +1067,41 @@ def test_production_admin_composition_requires_database_and_strong_secret(
             headers={"X-Qingpu-CSRF": "test-token"},
         )
     assert response.status_code == 202
-    assert app.secret_key == "A7!" * 16
+    assert app.secret_key == strong_secret
     app.extensions["qingpu_admin_shutdown"]()
 
 
-@pytest.mark.parametrize("secret", [None, "short-secret", "dev-secret-key"])
+@pytest.mark.parametrize(
+    "secret",
+    [
+        None,
+        "short-secret",
+        "dev-secret-key",
+        "A" * 64,
+        "abcd" * 16,
+        "change-me-change-me-change-me-change-me",
+        "<at-least-32-cryptographically-random-characters>",
+    ],
+)
 def test_production_admin_fails_closed_without_strong_secret(
     monkeypatch, tmp_path: Path, market_frame: pd.DataFrame, secret: str | None,
 ) -> None:
-    from qingpu_insight.web import create_app
+    import qingpu_insight.web as web
 
+    composition_calls = []
+    monkeypatch.setattr(
+        web,
+        "_create_production_admin_services",
+        lambda root: composition_calls.append(root),
+    )
     monkeypatch.setenv("QINGPU_DATABASE_URL", "mysql://placeholder/db")
     if secret is None:
         monkeypatch.delenv("QINGPU_SECRET_KEY", raising=False)
     else:
         monkeypatch.setenv("QINGPU_SECRET_KEY", secret)
-    app = create_app(root=tmp_path, data_source=InMemoryMarketDataSource(market_frame))
+    app = web.create_app(
+        root=tmp_path, data_source=InMemoryMarketDataSource(market_frame)
+    )
     with app.test_client() as client:
         with client.session_transaction() as sess:
             sess["_csrf_token"] = "test-token"
@@ -987,6 +1112,7 @@ def test_production_admin_fails_closed_without_strong_secret(
         )
     assert response.status_code == 503
     assert response.json["error"]["code"] == "admin_unavailable"
+    assert composition_calls == []
 
 
 def test_market_composition_error_starts_with_fixed_safe_response(
@@ -1020,7 +1146,9 @@ def test_admin_composition_error_returns_fixed_safe_message(
     import qingpu_insight.web as web
 
     monkeypatch.setenv("QINGPU_DATABASE_URL", "mysql://<user>:<password>@local/<db>")
-    monkeypatch.setenv("QINGPU_SECRET_KEY", "B8!" * 16)
+    monkeypatch.setenv(
+        "QINGPU_SECRET_KEY", "Bc4!yZ8@rS1#uV3%wX6&dE9*fG2+hJ5@L6"
+    )
     monkeypatch.setattr(
         cli,
         "_create_listing_update_service",
@@ -1046,15 +1174,15 @@ def test_admin_composition_error_returns_fixed_safe_message(
     assert "SELECT" not in body
 
 
-def test_job_center_frontend_has_non_overlapping_bounded_polling_contract() -> None:
-    script = Path("src/qingpu_insight/static/app.js").read_text(encoding="utf-8")
-    job_center = script.split("// --- Job Center (M4.2) ---", maxsplit=1)[1]
-    assert "setInterval" not in job_center
-    assert "response.ok" in job_center
-    assert "setTimeout" in job_center
-    assert "Math.min" in job_center
-    assert "finally" in job_center
-    assert "submitBtn.disabled = false" in job_center
+def test_job_center_polling_state_machine_in_node() -> None:
+    result = subprocess.run(
+        ["node", "tests/js/job_polling_contract.cjs"],
+        cwd=Path.cwd(),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 class GatePreparationRunner:

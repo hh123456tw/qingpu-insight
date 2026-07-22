@@ -1151,12 +1151,26 @@ def listing_sync(root: Path, args) -> int:
     return exit_code
 
 
-def _create_listing_update_service(root: Path) -> ListingUpdateService:
-    connection_factory = create_mysql_connection_factory()
-    job_repo = MySQLJobRepository(connection_factory)
+def _create_listing_update_service(
+    root: Path,
+    *,
+    connection_factory=None,
+    preparation_runner_factory=None,
+) -> ListingUpdateService:
+    operation_connection_factory = (
+        connection_factory or create_mysql_connection_factory()
+    )
+    job_repo = MySQLJobRepository(operation_connection_factory)
     job_service = JobService(job_repo)
-    publisher = MySQLVersionPublisher(connection_factory, dataset_key="listings")
-    preparation_runner = M3ListingPreparationRunner(root, connection_factory)
+    publisher = MySQLVersionPublisher(
+        operation_connection_factory, dataset_key="listings"
+    )
+    build_preparation_runner = (
+        preparation_runner_factory or M3ListingPreparationRunner
+    )
+    preparation_runner = build_preparation_runner(
+        root, operation_connection_factory
+    )
     return ListingUpdateService(
         job_service=job_service,
         publisher=publisher,

@@ -244,8 +244,9 @@ job 與 handoff，成功時立即回 `202`，不等待 Chrome。Chrome 刻意維
 
 ### 必要設定與資料庫 migration
 
-管理端只在 `QINGPU_DATABASE_URL` 與至少 32 個隨機字元的 `QINGPU_SECRET_KEY` 同時存在時啟用。
-請勿使用 `dev-secret-key`、真實密碼範例或把 secret 提交到 Git。正式工作中心固定只綁
+管理端只在 `QINGPU_DATABASE_URL` 與至少 32 個字元的高熵 `QINGPU_SECRET_KEY` 同時存在時啟用。
+Secret 必須涵蓋至少三種字元類別且有足夠字元多樣性；64–128 位 hex 亂數 token 亦可。
+重複字串、`change-me`、placeholder 與 `dev-secret-key` 都會 fail closed。請勿使用真實密碼範例或把 secret 提交到 Git。正式工作中心固定只綁
 `127.0.0.1`；`QINGPU_PORT` 必須是可用的本機 TCP port。工作中心啟用時保持
 `QINGPU_DEBUG=0`，避免 Flask debug reloader 建立第二個 app/executor。以下全部是 placeholder：
 
