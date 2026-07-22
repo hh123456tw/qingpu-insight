@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -64,6 +65,21 @@ _METADATA_COLUMN_DEFINITIONS = {
     "acquisition_representation": "VARCHAR(24)",
     "acquisition_schema_version": "VARCHAR(64)",
 }
+_LOCATION_PROVENANCE_COLUMN_DEFINITIONS = {
+    "structured_address": "VARCHAR(512) NULL",
+    "address_source_url": "VARCHAR(512) NULL",
+    "address_observed_at": "DATETIME(6) NULL",
+    "location_method": "VARCHAR(32) NOT NULL DEFAULT 'unknown'",
+    "location_confidence": "VARCHAR(16) NOT NULL DEFAULT 'unknown'",
+    "location_reason": "VARCHAR(128) NOT NULL DEFAULT 'unknown'",
+    "geocoded_at": "DATETIME(6) NULL",
+    "geocoder_version": "VARCHAR(128) NULL",
+}
+_LOCATION_DEFAULT_COLUMNS = (
+    "location_method",
+    "location_confidence",
+    "location_reason",
+)
 _LISTING_STATE_TABLES = ("listing_snapshots", "listing_current")
 
 
@@ -269,6 +285,14 @@ CREATE TABLE IF NOT EXISTS listing_snapshots (
   parking_type VARCHAR(80) NULL,
   latitude DECIMAL(10,7) NULL,
   longitude DECIMAL(10,7) NULL,
+  structured_address VARCHAR(512) NULL,
+  address_source_url VARCHAR(512) NULL,
+  address_observed_at DATETIME(6) NULL,
+  location_method VARCHAR(32) NOT NULL DEFAULT 'unknown',
+  location_confidence VARCHAR(16) NOT NULL DEFAULT 'unknown',
+  location_reason VARCHAR(128) NOT NULL DEFAULT 'unknown',
+  geocoded_at DATETIME(6) NULL,
+  geocoder_version VARCHAR(128) NULL,
   station_code VARCHAR(16) NULL,
   station_distance_m DECIMAL(10,2) NULL,
   location_eligible BOOLEAN NOT NULL DEFAULT FALSE,
@@ -306,6 +330,14 @@ CREATE TABLE IF NOT EXISTS listing_current (
   parking_type VARCHAR(80) NULL,
   latitude DECIMAL(10,7) NULL,
   longitude DECIMAL(10,7) NULL,
+  structured_address VARCHAR(512) NULL,
+  address_source_url VARCHAR(512) NULL,
+  address_observed_at DATETIME(6) NULL,
+  location_method VARCHAR(32) NOT NULL DEFAULT 'unknown',
+  location_confidence VARCHAR(16) NOT NULL DEFAULT 'unknown',
+  location_reason VARCHAR(128) NOT NULL DEFAULT 'unknown',
+  geocoded_at DATETIME(6) NULL,
+  geocoder_version VARCHAR(128) NULL,
   station_code VARCHAR(16) NULL,
   station_distance_m DECIMAL(10,2) NULL,
   location_eligible BOOLEAN NOT NULL DEFAULT FALSE,
@@ -354,7 +386,9 @@ INSERT IGNORE INTO listing_snapshots
      acquisition_representation, acquisition_schema_version,
      building_type, bedrooms, living_rooms, bathrooms,
      building_age_years, floor, total_floors, parking_type,
-     latitude, longitude, station_code, station_distance_m,
+     latitude, longitude, structured_address, address_source_url, address_observed_at,
+     location_method, location_confidence, location_reason, geocoded_at, geocoder_version,
+     station_code, station_distance_m,
      location_eligible, model_evidence, raw_hash)
 VALUES
     (%(batch_id)s, %(source)s, %(listing_type)s, %(source_listing_id)s, %(snapshot_at)s,
@@ -365,7 +399,10 @@ VALUES
      %(acquisition_representation)s, %(acquisition_schema_version)s,
      %(building_type)s, %(bedrooms)s, %(living_rooms)s, %(bathrooms)s,
      %(building_age_years)s, %(floor)s, %(total_floors)s, %(parking_type)s,
-     %(latitude)s, %(longitude)s, %(station_code)s, %(station_distance_m)s,
+     %(latitude)s, %(longitude)s, %(structured_address)s, %(address_source_url)s,
+     %(address_observed_at)s, %(location_method)s, %(location_confidence)s,
+     %(location_reason)s, %(geocoded_at)s, %(geocoder_version)s,
+     %(station_code)s, %(station_distance_m)s,
      %(location_eligible)s, %(model_evidence)s, %(raw_hash)s)
 """
 
@@ -379,7 +416,9 @@ INSERT INTO listing_current
      acquisition_representation, acquisition_schema_version,
      building_type, bedrooms, living_rooms, bathrooms,
      building_age_years, floor, total_floors, parking_type,
-     latitude, longitude, station_code, station_distance_m,
+     latitude, longitude, structured_address, address_source_url, address_observed_at,
+     location_method, location_confidence, location_reason, geocoded_at, geocoder_version,
+     station_code, station_distance_m,
      location_eligible, model_evidence, raw_hash, active,
      consecutive_absences, last_seen_batch_id)
 VALUES
@@ -391,7 +430,10 @@ VALUES
      %(acquisition_representation)s, %(acquisition_schema_version)s,
      %(building_type)s, %(bedrooms)s, %(living_rooms)s, %(bathrooms)s,
      %(building_age_years)s, %(floor)s, %(total_floors)s, %(parking_type)s,
-     %(latitude)s, %(longitude)s, %(station_code)s, %(station_distance_m)s,
+     %(latitude)s, %(longitude)s, %(structured_address)s, %(address_source_url)s,
+     %(address_observed_at)s, %(location_method)s, %(location_confidence)s,
+     %(location_reason)s, %(geocoded_at)s, %(geocoder_version)s,
+     %(station_code)s, %(station_distance_m)s,
      %(location_eligible)s, %(model_evidence)s, %(raw_hash)s, %(active)s,
      %(consecutive_absences)s, %(last_seen_batch_id)s)
 ON DUPLICATE KEY UPDATE
@@ -417,6 +459,14 @@ ON DUPLICATE KEY UPDATE
     parking_type = VALUES(parking_type),
     latitude = VALUES(latitude),
     longitude = VALUES(longitude),
+    structured_address = VALUES(structured_address),
+    address_source_url = VALUES(address_source_url),
+    address_observed_at = VALUES(address_observed_at),
+    location_method = VALUES(location_method),
+    location_confidence = VALUES(location_confidence),
+    location_reason = VALUES(location_reason),
+    geocoded_at = VALUES(geocoded_at),
+    geocoder_version = VALUES(geocoder_version),
     station_code = VALUES(station_code),
     station_distance_m = VALUES(station_distance_m),
     location_eligible = VALUES(location_eligible),
@@ -487,6 +537,27 @@ def _upgrade_range_schema(cursor) -> None:
                 cursor.execute(
                     f"ALTER TABLE `{table}` MODIFY COLUMN `{column}` "
                     f"{definition} NOT NULL DEFAULT 'unknown'"
+                )
+
+        for column, definition in _LOCATION_PROVENANCE_COLUMN_DEFINITIONS.items():
+            if column not in columns:
+                cursor.execute(
+                    f"ALTER TABLE `{table}` ADD COLUMN `{column}` {definition}"
+                )
+                columns[column] = {
+                    "nullable": "NOT NULL" not in definition,
+                    "default": "unknown" if "DEFAULT 'unknown'" in definition else None,
+                }
+            if column not in _LOCATION_DEFAULT_COLUMNS:
+                continue
+            cursor.execute(
+                f"UPDATE `{table}` SET `{column}` = 'unknown' "
+                f"WHERE `{column}` IS NULL OR `{column}` = ''"
+            )
+            provenance = columns[column]
+            if provenance["nullable"] or provenance["default"] != "unknown":
+                cursor.execute(
+                    f"ALTER TABLE `{table}` MODIFY COLUMN `{column}` {definition}"
                 )
 
 
@@ -575,6 +646,14 @@ class MySQLListingRepository:
                         "parking_type": _safe_str(row, "parking_type"),
                         "latitude": _safe_float(row, "latitude"),
                         "longitude": _safe_float(row, "longitude"),
+                        "structured_address": _safe_str(row, "structured_address"),
+                        "address_source_url": _safe_str(row, "address_source_url"),
+                        "address_observed_at": _safe_datetime(row, "address_observed_at"),
+                        "location_method": _safe_str(row, "location_method") or "unknown",
+                        "location_confidence": _safe_str(row, "location_confidence") or "unknown",
+                        "location_reason": _safe_str(row, "location_reason") or "unknown",
+                        "geocoded_at": _safe_datetime(row, "geocoded_at"),
+                        "geocoder_version": _safe_str(row, "geocoder_version"),
                         "station_code": _safe_str(row, "station_code"),
                         "station_distance_m": _safe_float(row, "station_distance_m"),
                         "location_eligible": _safe_bool(row, "location_eligible"),
@@ -751,3 +830,15 @@ def _safe_str(row: pd.Series, col: str) -> str | None:
 def _safe_bool(row: pd.Series, col: str, default: bool = False) -> int:
     v = row.get(col)
     return int(default if v is None or pd.isna(v) else bool(v))
+
+
+def _safe_datetime(row: pd.Series, col: str) -> datetime | None:
+    value = row.get(col)
+    if value is None or pd.isna(value):
+        return None
+    parsed = value.to_pydatetime() if isinstance(value, pd.Timestamp) else value
+    if not isinstance(parsed, datetime):
+        return None
+    if parsed.tzinfo is None:
+        return parsed
+    return parsed.astimezone(UTC).replace(tzinfo=None)

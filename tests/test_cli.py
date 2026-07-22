@@ -11,8 +11,10 @@ from qingpu_insight import cli
 from qingpu_insight.cli import main
 from qingpu_insight.downloads import DownloadRecord, record_file
 from qingpu_insight.listing_591 import SourceListing
+from qingpu_insight.listing_detail_enrichment import DetailEnrichmentBlocked
 from qingpu_insight.listing_normalization import normalize_listing
 from qingpu_insight.listing_sources import CaptureBatch, CapturedPage
+from qingpu_insight.location_evidence import LocationEvidence
 from tests.test_market_cleaning import sample_rows
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -46,6 +48,14 @@ def test_listing_commands_accept_headless_and_profile_dir() -> None:
     assert sync_args.profile_dir == "C:/ChromeProfile"
 
 
+def test_listing_build_geocoder_is_opt_in() -> None:
+    default = cli.build_parser().parse_args(["listing-build"])
+    enabled = cli.build_parser().parse_args(["listing-build", "--geocoder-enabled"])
+
+    assert default.geocoder_enabled is False
+    assert enabled.geocoder_enabled is True
+
+
 def test_normalized_rows_preserve_ranges_and_acquisition_metadata() -> None:
     source = SourceListing(
         source_listing_id="newhouse-001",
@@ -72,6 +82,131 @@ def test_normalized_rows_preserve_ranges_and_acquisition_metadata() -> None:
     assert row["building_area_max_ping"] == 30.0
     assert row["acquisition_representation"] == "jsonld"
     assert row["acquisition_schema_version"] == "591-newhouse-jsonld-v1"
+
+
+def test_normalized_rows_preserve_all_location_evidence() -> None:
+    source = SourceListing(
+        source_listing_id="newhouse-location-001",
+        listing_type="newhouse",
+        source_url="https://newhouse.591.com.tw/home/123",
+        payload={
+            "title": "高鐵站前兩房",
+            "structured_address": "桃園市中壢區高鐵南路一段1號",
+            "address_source_url": "https://newhouse.591.com.tw/home/123",
+            "address_observed_at": datetime(2026, 7, 21, tzinfo=UTC),
+        },
+    )
+    row = cli._normalized_to_rows(
+        [normalize_listing(source, datetime(2026, 7, 21, tzinfo=UTC))]
+    )[0]
+
+    assert row["structured_address"] == "桃園市中壢區高鐵南路一段1號"
+    assert row["address_source_url"] == "https://newhouse.591.com.tw/home/123"
+    assert row["address_observed_at"] == datetime(2026, 7, 21, tzinfo=UTC)
+    assert row["location_method"] == "unknown"
+    assert row["location_confidence"] == "unknown"
+    assert row["location_reason"] == "missing_or_invalid_source_coordinates"
+    assert row["geocoded_at"] is None
+    assert row["geocoder_version"] is None
+
+
+def test_geocoder_only_enriches_unknown_rows_with_complete_structured_address() -> None:
+    calls = []
+
+    class Geocoder:
+        def enrich(self, record):
+            calls.append(record["source_listing_id"])
+            return LocationEvidence(
+                25.032,
+                121.225,
+                "structured_address",
+                "medium",
+                "address_resolved",
+                datetime(2026, 7, 21, tzinfo=UTC),
+                "fake-v1",
+            )
+
+    rows = pd.DataFrame(
+        [
+            {
+                "source_listing_id": "source",
+                "latitude": 25.0,
+                "longitude": 121.0,
+                "location_method": "source_coordinates",
+                "structured_address": "桃園市中壢區高鐵南路一段1號",
+            },
+            {
+                "source_listing_id": "unknown",
+                "latitude": None,
+                "longitude": None,
+                "location_method": "unknown",
+                "structured_address": "桃園市中壢區高鐵南路一段1號",
+            },
+            {
+                "source_listing_id": "missing-address",
+                "latitude": None,
+                "longitude": None,
+                "location_method": "unknown",
+                "structured_address": None,
+            },
+        ]
+    )
+
+    enriched = cli._enrich_rows_with_geocoder(rows, Geocoder())
+
+    assert calls == ["unknown"]
+    assert enriched.loc[0, "latitude"] == 25.0
+    assert enriched.loc[1, "latitude"] == 25.032
+    assert enriched.loc[1, "location_method"] == "structured_address"
+    assert pd.isna(enriched.loc[2, "latitude"])
+
+
+def test_location_quality_is_json_safe_and_deterministic() -> None:
+    quality = cli._listing_location_quality(
+        pd.DataFrame(
+            [
+                {
+                    "location_eligible": np.bool_(True),
+                    "location_method": "manual",
+                    "location_reason": "eligible_manual",
+                },
+                {"location_eligible": None, "location_method": None, "location_reason": np.nan},
+            ]
+        )
+    )
+
+    assert json.dumps(quality, ensure_ascii=False, sort_keys=True)
+    assert quality == {
+        "location": {
+            "eligible": 1,
+            "unknown": 0,
+            "by_method": {"manual": 1, "null": 1},
+            "by_reason": {"eligible_manual": 1, "null": 1},
+        }
+    }
+
+
+def test_detail_diagnostics_are_persisted_with_location_quality(tmp_path) -> None:
+    cli._write_listing_location_quality(
+        tmp_path,
+        pd.DataFrame(
+            [
+                {
+                    "location_eligible": False,
+                    "location_method": "unknown",
+                    "location_reason": "missing_coordinates",
+                }
+            ]
+        ),
+        diagnostics={"detail_address_missing": 1},
+    )
+
+    quality = json.loads(
+        (tmp_path / "outputs" / "reports" / "listing-quality.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert quality["detail"] == {"detail_address_missing": 1}
 
 
 _CHINESE_DIGITS = "零一二三四五六七八九十"
@@ -448,6 +583,80 @@ class TestListingScrape:
 
 
 class TestListingBuild:
+    def test_detail_without_address_records_specific_diagnostic(self, tmp_path):
+        listing = SourceListing(
+            source_listing_id="123",
+            listing_type="newhouse",
+            source_url="https://newhouse.591.com.tw/home/123",
+            payload={"lat": 0, "lng": 0},
+        )
+
+        class NoAddress:
+            def enrich(self, source, batch_dir):
+                return source
+
+        listings, diagnostics = cli._enrich_newhouse_details(
+            [listing], tmp_path, NoAddress()
+        )
+
+        assert listings == [listing]
+        assert diagnostics == {"detail_address_missing": 1}
+
+    def test_blocked_detail_marks_batch_incomplete_without_publishing(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        raw = tmp_path / "data" / "raw"
+        raw.mkdir(parents=True)
+        shutil.copy2(FIXTURES / "doorplates.csv", raw / "doorplates.csv")
+        batch_dir = raw / "listings" / "591" / "2026-07-22" / "blocked-detail"
+        batch_dir.mkdir(parents=True)
+        (batch_dir / "page-0001.html").write_text(
+            (FIXTURES / "listings" / "591_newhouse_page.html")
+            .read_text(encoding="utf-8")
+            .replace('data-lat="25.0120" data-lng="121.2180"', 'data-lat="0" data-lng="0"')
+            .replace('data-lat="25.0200" data-lng="121.2250"', 'data-lat="0" data-lng="0"'),
+            encoding="utf-8",
+        )
+        (batch_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "batch_id": "blocked-detail",
+                    "source": "591",
+                    "listing_type": "newhouse",
+                    "started_at": "2026-07-22T12:00:00+00:00",
+                    "reached_terminal_page": True,
+                    "is_complete": True,
+                    "errors": [],
+                    "pages": [{"page_number": 1}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        published = []
+
+        class Blocked:
+            def enrich(self, listing, batch_dir):
+                raise DetailEnrichmentBlocked("verification_required")
+
+        monkeypatch.setattr(
+            cli, "create_listing_repository", lambda root: published.append(root)
+        )
+
+        result = cli.listing_build(
+            tmp_path,
+            cli.build_parser().parse_args(
+                ["listing-build", "--batch-dir", str(batch_dir)]
+            ),
+            detail_enricher=Blocked(),
+        )
+
+        assert result == 1
+        assert published == []
+        manifest = json.loads((batch_dir / "manifest.json").read_text("utf-8"))
+        assert manifest["is_complete"] is False
+        assert manifest["errors"][-1]["code"] == "detail_enrichment_blocked"
+
     def test_missing_doorplates_exits_nonzero(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         assert main(["listing-build"]) != 0
@@ -532,6 +741,69 @@ class TestListingBuild:
         )
         assert len(snapshots) == 2
         assert set(snapshots["batch_id"]) == {"batch-002"}
+        quality = json.loads(
+            (tmp_path / "outputs" / "reports" / "listing-quality.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert set(quality["location"]) == {
+            "eligible",
+            "unknown",
+            "by_method",
+            "by_reason",
+        }
+
+    def test_geocoder_configuration_error_is_controlled(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.chdir(tmp_path)
+        raw = tmp_path / "data" / "raw"
+        raw.mkdir(parents=True)
+        shutil.copy2(FIXTURES / "doorplates.csv", raw / "doorplates.csv")
+        batch_dir = raw / "listings" / "591" / "2026-07-22" / "geocoder-error"
+        batch_dir.mkdir(parents=True)
+        shutil.copy2(
+            FIXTURES / "listings" / "591_sale_page.html",
+            batch_dir / "page-0001.html",
+        )
+        (batch_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "batch_id": "geocoder-error",
+                    "source": "591",
+                    "listing_type": "sale",
+                    "started_at": "2026-07-22T12:00:00+00:00",
+                    "reached_terminal_page": True,
+                    "is_complete": True,
+                    "errors": [],
+                    "pages": [{"page_number": 1}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        published = []
+
+        def unavailable(_doorplates):
+            raise RuntimeError("adapter unavailable")
+
+        monkeypatch.setattr(cli, "create_listing_geocoding_service", unavailable)
+        monkeypatch.setattr(
+            cli, "create_listing_repository", lambda root: published.append(root)
+        )
+
+        assert (
+            main(
+                [
+                    "listing-build",
+                    "--batch-dir",
+                    str(batch_dir),
+                    "--geocoder-enabled",
+                ]
+            )
+            == 1
+        )
+        assert published == []
+        assert "無法啟用官方門牌 geocoder" in capsys.readouterr().err
 
     def test_default_build_selects_cross_type_batch_by_manifest_started_at(
         self, tmp_path, monkeypatch

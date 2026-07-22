@@ -38,11 +38,27 @@ def assign_listing_life_circle(
 
     lats = pd.to_numeric(output["latitude"], errors="coerce").to_numpy(dtype=float)
     lons = pd.to_numeric(output["longitude"], errors="coerce").to_numpy(dtype=float)
-    has_coords = ~(np.isnan(lats) | np.isnan(lons))
+    # Listing evidence is only useful for this service when it is a finite
+    # Taiwan coordinate.  This also keeps malformed coordinates from gaining a
+    # misleading nearest station.
+    has_coords = (
+        np.isfinite(lats)
+        & np.isfinite(lons)
+        & (lats > 20.0)
+        & (lats < 30.0)
+        & (lons > 115.0)
+        & (lons < 125.0)
+    )
 
     station_code_col = pd.Series(pd.NA, index=output.index, dtype="string")
     station_dist_col = pd.Series(np.nan, index=output.index, dtype=float)
     location_eligible = np.zeros(len(output), dtype=bool)
+    location_reason = np.full(len(output), "missing_coordinates", dtype=object)
+    methods = (
+        output["location_method"].fillna("unknown").astype(str).to_numpy()
+        if "location_method" in output
+        else np.full(len(output), "source_coordinates", dtype=object)
+    )
 
     if has_coords.any():
         distances = _haversine_distance(
@@ -53,14 +69,31 @@ def assign_listing_life_circle(
         nearest_dist = distances[np.arange(len(nearest_idx)), nearest_idx]
         within = nearest_dist <= radius_m
 
-        valid_indices = np.where(has_coords)[0][within]
-        station_code_col.iloc[valid_indices] = (
-            stations.iloc[nearest_idx[within]]["station_code"].values
-        )
-        station_dist_col.iloc[valid_indices] = nearest_dist[within]
-        location_eligible[valid_indices] = True
+        valid_indices = np.where(has_coords)[0]
+        # Retain nearest-station evidence even if the listing is outside the
+        # service radius; the radius only controls eligibility.
+        station_code_col.iloc[valid_indices] = stations.iloc[nearest_idx][
+            "station_code"
+        ].values
+        station_dist_col.iloc[valid_indices] = nearest_dist
+
+        location_reason[valid_indices[~within]] = "outside_service_radius"
+        for method, reason in (
+            ("source_coordinates", "eligible_source_coordinates"),
+            ("structured_address", "eligible_structured_address"),
+            ("manual", "eligible_manual"),
+        ):
+            eligible_indices = valid_indices[within & (methods[valid_indices] == method)]
+            location_eligible[eligible_indices] = True
+            location_reason[eligible_indices] = reason
+
+        unknown_indices = valid_indices[within & ~np.isin(
+            methods[valid_indices], ["source_coordinates", "structured_address", "manual"]
+        )]
+        location_reason[unknown_indices] = "unknown_location_method"
 
     output["station_code"] = station_code_col
     output["station_distance_m"] = station_dist_col
     output["location_eligible"] = location_eligible
+    output["location_reason"] = location_reason
     return output

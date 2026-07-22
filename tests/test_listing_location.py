@@ -69,14 +69,17 @@ def test_outside_radius(station_frame):
     df = pd.DataFrame({"latitude": [25.037947], "longitude": [121.24785]})
     result = assign_listing_life_circle(df, station_frame, 2_000)
     assert not result.loc[0, "location_eligible"]
-    assert pd.isna(result.loc[0, "station_code"])
+    assert result.loc[0, "station_code"] == "A18"
+    assert result.loc[0, "station_distance_m"] > 2_000
+    assert result.loc[0, "location_reason"] == "outside_service_radius"
 
 
 def test_far_point_outside_radius(station_frame):
     df = pd.DataFrame({"latitude": [25.0], "longitude": [121.0]})
     result = assign_listing_life_circle(df, station_frame, 2_000)
     assert not result.loc[0, "location_eligible"]
-    assert pd.isna(result.loc[0, "station_code"])
+    assert result.loc[0, "station_code"] == "A17"
+    assert result.loc[0, "station_distance_m"] > 20_000
 
 
 def test_invalid_coordinates_are_not_eligible(station_frame):
@@ -95,7 +98,7 @@ def test_multiple_listings_mixed_eligibility(station_frame):
     assert result.loc[0, "location_eligible"]
     assert result.loc[0, "station_code"] == "A18"
     assert not result.loc[1, "location_eligible"]
-    assert pd.isna(result.loc[1, "station_code"])
+    assert result.loc[1, "station_code"] == "A17"
 
 
 def test_output_columns_preserve_input(station_frame):
@@ -116,3 +119,44 @@ def test_half_the_listings_eligible(station_frame):
     })
     result = assign_listing_life_circle(df, station_frame, 2_000)
     assert result["location_eligible"].sum() == 1
+
+
+@pytest.mark.parametrize(
+    ("method", "expected_reason"),
+    [
+        ("source_coordinates", "eligible_source_coordinates"),
+        ("structured_address", "eligible_structured_address"),
+        ("manual", "eligible_manual"),
+        ("unknown", "unknown_location_method"),
+    ],
+)
+def test_eligible_reason_depends_on_location_method(
+    station_frame, method, expected_reason
+):
+    result = assign_listing_life_circle(
+        pd.DataFrame(
+            [{"latitude": 25.032, "longitude": 121.225, "location_method": method}]
+        ),
+        station_frame,
+        2_000,
+    )
+    assert bool(result.loc[0, "location_eligible"]) is (method != "unknown")
+    assert result.loc[0, "location_reason"] == expected_reason
+
+
+def test_missing_or_invalid_coordinates_have_no_station_and_missing_reason(station_frame):
+    result = assign_listing_life_circle(
+        pd.DataFrame(
+            [
+                {"latitude": np.nan, "longitude": np.nan, "location_method": "unknown"},
+                {"latitude": 0, "longitude": 0, "location_method": "source_coordinates"},
+            ]
+        ),
+        station_frame,
+        2_000,
+    )
+    assert result["location_reason"].tolist() == [
+        "missing_coordinates",
+        "missing_coordinates",
+    ]
+    assert result["station_code"].isna().all()
