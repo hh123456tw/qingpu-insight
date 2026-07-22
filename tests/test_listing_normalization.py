@@ -1,6 +1,6 @@
 """Tests for listing normalization."""
 
-from datetime import datetime
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
@@ -145,6 +145,11 @@ def test_normalization_contract_fields_present(source_sale):
     assert row.total_floors == 15
     assert row.latitude == 25.002
     assert row.longitude == 121.215
+    assert row.location_method == "source_coordinates"
+    assert row.location_confidence == "high"
+    assert row.location_reason == "valid_source_coordinates"
+    assert row.geocoded_at is None
+    assert row.geocoder_version is None
     assert row.building_type is None
     assert row.building_age_years is None
     assert row.parking_type is None
@@ -161,6 +166,60 @@ def test_missing_coordinates_use_zero_default(source_sale):
     row = normalize_listing(no_coords, SNAPSHOT_AT)
     assert row.latitude is None
     assert row.longitude is None
+    assert row.location_method == "unknown"
+    assert row.location_confidence == "unknown"
+    assert row.location_reason == "missing_or_invalid_source_coordinates"
+
+
+def test_complete_structured_address_metadata_is_preserved_in_utc(source_sale):
+    observed_at = datetime(2026, 7, 21, 20, 0, tzinfo=timezone(timedelta(hours=8)))
+    source = SourceListing(
+        source_listing_id=source_sale.source_listing_id,
+        listing_type=source_sale.listing_type,
+        source_url=source_sale.source_url,
+        payload=dict(
+            source_sale.payload,
+            structured_address="桃園市中壢區青埔路 1 號",
+            address_source_url="https://newhouse.591.com.tw/home/ABC",
+            address_observed_at=observed_at,
+        ),
+    )
+
+    row = normalize_listing(source, SNAPSHOT_AT)
+
+    assert row.structured_address == "桃園市中壢區青埔路 1 號"
+    assert row.address_source_url == "https://newhouse.591.com.tw/home/ABC"
+    assert row.address_observed_at == datetime(2026, 7, 21, 12, 0, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("structured_address", 123),
+        ("address_source_url", 123),
+        ("address_observed_at", "2026-07-21T12:00:00Z"),
+    ],
+)
+def test_incomplete_or_invalid_address_metadata_is_discarded(source_sale, field, value):
+    payload = dict(
+        source_sale.payload,
+        structured_address="桃園市中壢區青埔路 1 號",
+        address_source_url="https://newhouse.591.com.tw/home/ABC",
+        address_observed_at=datetime(2026, 7, 21, 12, 0, tzinfo=UTC),
+    )
+    payload[field] = value
+    source = SourceListing(
+        source_listing_id=source_sale.source_listing_id,
+        listing_type=source_sale.listing_type,
+        source_url=source_sale.source_url,
+        payload=payload,
+    )
+
+    row = normalize_listing(source, SNAPSHOT_AT)
+
+    assert row.structured_address is None
+    assert row.address_source_url is None
+    assert row.address_observed_at is None
 
 
 def test_url_host_rejects_non_https(source_sale):
@@ -213,6 +272,31 @@ def test_raw_hash_changes_when_content_differs(source_sale, source_newhouse):
     row1 = normalize_listing(source_sale, SNAPSHOT_AT)
     row2 = normalize_listing(source_newhouse, SNAPSHOT_AT)
     assert row1.raw_hash != row2.raw_hash
+
+
+def test_raw_hash_changes_when_complete_address_provenance_differs(source_sale):
+    observed_at = datetime(2026, 7, 21, 12, 0, tzinfo=UTC)
+    first = SourceListing(
+        source_listing_id=source_sale.source_listing_id,
+        listing_type=source_sale.listing_type,
+        source_url=source_sale.source_url,
+        payload=dict(
+            source_sale.payload,
+            structured_address="桃園市中壢區青埔路 1 號",
+            address_source_url="https://newhouse.591.com.tw/home/ABC",
+            address_observed_at=observed_at,
+        ),
+    )
+    second = SourceListing(
+        source_listing_id=source_sale.source_listing_id,
+        listing_type=source_sale.listing_type,
+        source_url=source_sale.source_url,
+        payload=dict(first.payload, structured_address="桃園市中壢區青埔路 2 號"),
+    )
+
+    assert normalize_listing(first, SNAPSHOT_AT).raw_hash != normalize_listing(
+        second, SNAPSHOT_AT
+    ).raw_hash
 
 
 @pytest.mark.parametrize(

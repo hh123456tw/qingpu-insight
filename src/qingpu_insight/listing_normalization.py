@@ -4,11 +4,17 @@ import hashlib
 import json
 import math
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
 from qingpu_insight.listing_591 import SourceListing
 from qingpu_insight.listing_sources import ListingType
+from qingpu_insight.location_evidence import (
+    LocationConfidence,
+    LocationEvidence,
+    LocationMethod,
+    unknown_location,
+)
 
 
 @dataclass(frozen=True)
@@ -39,6 +45,14 @@ class NormalizedListing:
     building_area_max_ping: float | None = None
     acquisition_representation: str = "unknown"
     acquisition_schema_version: str = "unknown"
+    structured_address: str | None = None
+    address_source_url: str | None = None
+    address_observed_at: datetime | None = None
+    location_method: LocationMethod = "unknown"
+    location_confidence: LocationConfidence = "unknown"
+    location_reason: str = "unknown"
+    geocoded_at: datetime | None = None
+    geocoder_version: str | None = None
 
 
 def _validate_url(url: str) -> None:
@@ -79,6 +93,10 @@ def _stable_dict(
     parking_type: str | None,
     latitude: float | None,
     longitude: float | None,
+    structured_address: str | None,
+    address_source_url: str | None,
+    address_observed_at: datetime | None,
+    evidence: LocationEvidence,
 ) -> dict:
     return {
         "source": source,
@@ -105,12 +123,32 @@ def _stable_dict(
         "parking_type": parking_type,
         "latitude": latitude,
         "longitude": longitude,
+        "structured_address": structured_address,
+        "address_source_url": address_source_url,
+        "address_observed_at": address_observed_at,
+        "location_method": evidence.method,
+        "location_confidence": evidence.confidence,
+        "location_reason": evidence.reason,
+        "geocoded_at": evidence.geocoded_at,
+        "geocoder_version": evidence.geocoder_version,
     }
 
 
 def _compute_raw_hash(stable: dict) -> str:
-    canonical = json.dumps(stable, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    canonical = json.dumps(
+        stable,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=_json_default,
+    )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _json_default(value: object) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 def _positive_int(payload: dict[str, object], field: str) -> int | None:
@@ -141,6 +179,27 @@ def _metadata(payload: dict[str, object], field: str, legacy_field: str) -> str:
     return value if isinstance(value, str) and value else "unknown"
 
 
+def _address_metadata(
+    payload: dict[str, object],
+) -> tuple[str | None, str | None, datetime | None]:
+    address = payload.get("structured_address")
+    source_url = payload.get("address_source_url")
+    observed_at = payload.get("address_observed_at")
+    if not (
+        isinstance(address, str)
+        and address.strip()
+        and isinstance(source_url, str)
+        and source_url.strip()
+        and isinstance(observed_at, datetime)
+    ):
+        return None, None, None
+    if observed_at.tzinfo is None:
+        observed_at = observed_at.replace(tzinfo=UTC)
+    else:
+        observed_at = observed_at.astimezone(UTC)
+    return address, source_url, observed_at
+
+
 def _require_ordered_range(
     low: int | float | None,
     high: int | float | None,
@@ -161,12 +220,27 @@ def normalize_listing(source: SourceListing, snapshot_at: datetime) -> Normalize
         if _valid_taiwan_coordinate(float(lat_raw), float(lng_raw)):
             latitude = float(lat_raw)
             longitude = float(lng_raw)
+            evidence = LocationEvidence(
+                latitude,
+                longitude,
+                "source_coordinates",
+                "high",
+                "valid_source_coordinates",
+                None,
+                None,
+            )
         else:
             latitude = None
             longitude = None
+            evidence = unknown_location("missing_or_invalid_source_coordinates")
     else:
         latitude = None
         longitude = None
+        evidence = unknown_location("missing_or_invalid_source_coordinates")
+
+    structured_address, address_source_url, address_observed_at = _address_metadata(
+        payload
+    )
 
     asking_price = _positive_int(payload, "asking_price_twd")
     monthly_rent = _positive_int(payload, "monthly_rent_twd")
@@ -219,6 +293,10 @@ def normalize_listing(source: SourceListing, snapshot_at: datetime) -> Normalize
         parking_type=None,
         latitude=latitude,
         longitude=longitude,
+        structured_address=structured_address,
+        address_source_url=address_source_url,
+        address_observed_at=address_observed_at,
+        evidence=evidence,
     )
 
     if stable["listing_type"] in ("sale", "newhouse"):
