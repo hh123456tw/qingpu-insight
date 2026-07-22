@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Protocol
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from bs4 import BeautifulSoup
 
@@ -169,13 +169,33 @@ def _is_allowed_detail_url(url: str) -> bool:
         port = parsed.port
     except ValueError:
         return False
-    return (
+    origin_allowed = (
         parsed.scheme == "https"
         and parsed.hostname == _NEW_HOUSE_HOST
         and parsed.username is None
         and parsed.password is None
         and port in (None, 443)
         and not parsed.fragment
+    )
+    if not origin_allowed:
+        return False
+    if re.fullmatch(r"/[0-9]{1,32}/?", parsed.path) and not parsed.query:
+        return True
+    if (
+        re.fullmatch(r"/home/housing/detail/NH-[0-9]{1,32}\.html", parsed.path)
+        and not parsed.query
+    ):
+        return True
+    if parsed.path != "/home/housing/detail":
+        return False
+    try:
+        query = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+    except ValueError:
+        return False
+    return (
+        set(query) == {"hid"}
+        and len(query["hid"]) == 1
+        and re.fullmatch(r"[0-9]{1,32}", query["hid"][0]) is not None
     )
 
 

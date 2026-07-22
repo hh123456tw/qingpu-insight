@@ -248,6 +248,8 @@ def test_enricher_rejects_headless_factory_config() -> None:
         "https://newhouse.591.com.tw@evil.test/home/housing/detail?hid=123",
         "https://newhouse.591.com.tw:444/home/housing/detail?hid=123",
         "https://newhouse.591.com.tw/home/housing/detail?hid=123#untrusted-fragment",
+        "https://newhouse.591.com.tw/redirect?next=http://127.0.0.1/",
+        "https://newhouse.591.com.tw/home/housing/detail?hid=123&next=http://127.0.0.1/",
         "https://sale.591.com.tw/home/housing/detail?hid=123",
     ],
 )

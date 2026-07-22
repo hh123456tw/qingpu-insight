@@ -99,6 +99,26 @@ def test_listing_docs_describe_free_text_contact_risk() -> None:
         assert "contact-shaped text" in path.read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize(
+    "title",
+    [
+        "青埔兩房請洽0912-345-678",
+        "站前新案 sales@example.com",
+        "租屋聯絡 03-1234567",
+    ],
+)
+def test_contact_shaped_listing_titles_fail_publish_gate(title: str) -> None:
+    rows = pd.DataFrame([{"title": title}])
+
+    assert cli._contact_shaped_title_count(rows) == 1
+
+
+def test_normal_listing_title_passes_publish_gate() -> None:
+    rows = pd.DataFrame([{"title": "青埔高鐵站前兩房 138379"}])
+
+    assert cli._contact_shaped_title_count(rows) == 0
+
+
 def test_listing_build_detail_enrichment_is_explicit_and_visible() -> None:
     args = cli.build_parser().parse_args(
         [
@@ -964,6 +984,99 @@ class TestListingBuild:
             "by_method",
             "by_reason",
         }
+
+    def test_quality_preparation_failure_does_not_publish_repository(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("QINGPU_DATABASE_URL", raising=False)
+        raw = tmp_path / "data" / "raw"
+        raw.mkdir(parents=True)
+        shutil.copy2(FIXTURES / "doorplates.csv", raw / "doorplates.csv")
+        batch_dir = raw / "listings" / "591" / "2026-07-22" / "quality-fails"
+        batch_dir.mkdir(parents=True)
+        shutil.copy2(
+            FIXTURES / "listings" / "591_sale_page.html",
+            batch_dir / "page-0001.html",
+        )
+        (batch_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "batch_id": "quality-fails",
+                    "source": "591",
+                    "listing_type": "sale",
+                    "started_at": "2026-07-22T12:00:00+00:00",
+                    "reached_terminal_page": True,
+                    "is_complete": True,
+                    "errors": [],
+                    "pages": [{"page_number": 1}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        constructed = []
+        monkeypatch.setattr(
+            cli,
+            "create_listing_repository",
+            lambda root: constructed.append(root),
+        )
+        monkeypatch.setattr(
+            cli,
+            "_write_listing_location_quality",
+            lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")),
+        )
+
+        with pytest.raises(OSError, match="disk full"):
+            main(["listing-build", "--batch-dir", str(batch_dir)])
+
+        assert constructed == []
+
+    def test_privacy_gate_marks_manifest_incomplete_without_publishing(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("QINGPU_DATABASE_URL", raising=False)
+        raw = tmp_path / "data" / "raw"
+        raw.mkdir(parents=True)
+        shutil.copy2(FIXTURES / "doorplates.csv", raw / "doorplates.csv")
+        batch_dir = raw / "listings" / "591" / "2026-07-22" / "privacy-blocked"
+        batch_dir.mkdir(parents=True)
+        shutil.copy2(
+            FIXTURES / "listings" / "591_sale_page.html",
+            batch_dir / "page-0001.html",
+        )
+        manifest_path = batch_dir / "manifest.json"
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "batch_id": "privacy-blocked",
+                    "source": "591",
+                    "listing_type": "sale",
+                    "started_at": "2026-07-22T12:00:00+00:00",
+                    "reached_terminal_page": True,
+                    "is_complete": True,
+                    "errors": [],
+                    "pages": [{"page_number": 1}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        published = []
+        monkeypatch.setattr(cli, "_contact_shaped_title_count", lambda rows: 1)
+        monkeypatch.setattr(
+            cli,
+            "create_listing_repository",
+            lambda root: published.append(root),
+        )
+
+        assert main(["listing-build", "--batch-dir", str(batch_dir)]) == 1
+
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert manifest["is_complete"] is False
+        assert manifest["reached_terminal_page"] is False
+        assert manifest["errors"][-1]["code"] == "privacy_gate_failed"
+        assert published == []
+        assert not (tmp_path / "outputs/reports/listing-quality.json").exists()
 
     def test_geocoder_configuration_error_is_controlled(
         self, tmp_path, monkeypatch, capsys

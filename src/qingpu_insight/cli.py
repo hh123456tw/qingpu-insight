@@ -1,7 +1,9 @@
 import argparse
 import json
 import os
+import re
 import sys
+import tempfile
 import urllib.parse
 from collections import Counter
 from datetime import UTC, datetime
@@ -75,6 +77,12 @@ SOURCES = (
     "https://www.tymetro.com.tw/tymetro-new/tw/_pages/travel-guide/A17",
     "https://www.tymetro.com.tw/tymetro-new/tw/_pages/travel-guide/A18",
     "https://www.tymetro.com.tw/tymetro-new/tw/_pages/travel-guide/A19",
+)
+
+_CONTACT_PATTERNS = (
+    re.compile(r"(?<![\w.+-])[\w.+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?!\w)"),
+    re.compile(r"(?<!\d)09\d{2}(?:[-\s]?\d{3}){2}(?!\d)"),
+    re.compile(r"(?<!\d)0[2-8](?:[-\s]?\d){7,8}(?!\d)"),
 )
 
 
@@ -425,10 +433,46 @@ def _write_listing_location_quality(
         quality["detail"] = {
             str(reason): int(count) for reason, count in sorted(diagnostics.items())
         }
-    path.write_text(
-        json.dumps(quality, ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
+    payload = json.dumps(quality, ensure_ascii=False, indent=2, sort_keys=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+            temporary = Path(handle.name)
+        temporary.replace(path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def _contact_shaped_title_count(rows: pd.DataFrame) -> int:
+    """Count rows whose public free-text title resembles phone or email data."""
+    if "title" not in rows:
+        return 0
+    count = 0
+    for value in rows["title"]:
+        if not isinstance(value, str):
+            continue
+        if any(pattern.search(value) for pattern in _CONTACT_PATTERNS):
+            count += 1
+    return count
+
+
+def _restore_quality_artifact(path: Path, previous: bytes | None) -> None:
+    if previous is None:
+        path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(previous)
 
 
 def create_listing_geocoding_service(
@@ -650,6 +694,14 @@ def _enrich_newhouse_details(
 
 
 def _mark_detail_blocked(manifest_path: Path, reason: str) -> None:
+    _mark_listing_manifest_incomplete(
+        manifest_path, "detail_enrichment_blocked", reason
+    )
+
+
+def _mark_listing_manifest_incomplete(
+    manifest_path: Path, code: str, message: str
+) -> None:
     manifest = _load_listing_manifest(manifest_path)
     if not isinstance(manifest, dict):
         return
@@ -658,8 +710,8 @@ def _mark_detail_blocked(manifest_path: Path, reason: str) -> None:
     manifest["errors"].append(
         {
             "page_number": 0,
-            "code": "detail_enrichment_blocked",
-            "message": reason,
+            "code": code,
+            "message": message,
         }
     )
     manifest["is_complete"] = False
@@ -790,6 +842,19 @@ def listing_build(root: Path, args, *, detail_enricher=None) -> int:
         df = _enrich_rows_with_geocoder(df, geocoding_service)
     located = assign_listing_life_circle(df, stations, settings.radius_m)
 
+    privacy_violations = _contact_shaped_title_count(located)
+    if privacy_violations:
+        _mark_listing_manifest_incomplete(
+            manifest_path,
+            "privacy_gate_failed",
+            f"contact-shaped title count: {privacy_violations}",
+        )
+        print(
+            f"privacy gate blocked {privacy_violations} listing title(s)",
+            file=sys.stderr,
+        )
+        return 1
+
     batch = CaptureBatch(
         batch_id=batch_id,
         source=manifest.get("source", "591"),
@@ -799,14 +864,26 @@ def listing_build(root: Path, args, *, detail_enricher=None) -> int:
             manifest.get("reached_terminal_page", manifest["is_complete"])
         ),
     )
-    repo = create_listing_repository(root)
-    repo.save_batch(batch, located)
+    quality_path = root / "outputs" / "reports" / "listing-quality.json"
+    previous_quality = quality_path.read_bytes() if quality_path.exists() else None
     _write_listing_location_quality(root, located, diagnostics=detail_diagnostics)
-    all_snapshots = repo.load_snapshots()
-    if not all_snapshots.empty:
-        snapshots_path = root / "data" / "processed" / "listing_snapshots.parquet"
-        snapshots_path.parent.mkdir(parents=True, exist_ok=True)
-        all_snapshots.to_parquet(snapshots_path, index=False)
+    try:
+        repo = create_listing_repository(root)
+        repo.save_batch(batch, located)
+    except Exception:
+        _restore_quality_artifact(quality_path, previous_quality)
+        raise
+    try:
+        all_snapshots = repo.load_snapshots()
+        if not all_snapshots.empty:
+            snapshots_path = root / "data" / "processed" / "listing_snapshots.parquet"
+            snapshots_path.parent.mkdir(parents=True, exist_ok=True)
+            all_snapshots.to_parquet(snapshots_path, index=False)
+    except (OSError, ValueError, ImportError, pymysql.MySQLError) as exc:
+        print(
+            f"listing compatibility export failed after repository publish: {exc}",
+            file=sys.stderr,
+        )
     print(f"已儲存 {len(located)} 筆 listing 資料至批次 {batch_id}")
     return 0
 
@@ -967,6 +1044,16 @@ def listing_sync(root: Path, args) -> int:
                         f"  valuation failed for {sid}: {exc}",
                         file=sys.stderr,
                     )
+
+        privacy_violations = _contact_shaped_title_count(located)
+        if privacy_violations:
+            print(
+                f"[{listing_type}] privacy gate blocked "
+                f"{privacy_violations} listing title(s)",
+                file=sys.stderr,
+            )
+            exit_code = 1
+            continue
 
         repo.save_batch(batch, located)
 

@@ -151,7 +151,7 @@ mysql -u root -p < database/001_market_schema.sql
 - Chrome 瀏覽器（最新穩定版）
 - 預設開啟可見 Chrome；`--headless` 僅為 best-effort，591 頁面或驗證流程可能不支援
 - `--profile-dir <path>` 會把本機 Chrome user-data 目錄傳給 Selenium；請使用專用且未被其他 Chrome 程序占用的目錄
-- 系統不刻意抽取 591 帳號、密碼、Cookie 或專用聯絡欄位；不要把密碼放在命令列。title 等 free text 與 raw HTML 仍可能含 contact-shaped text，發布 snapshot 或 API 前必須經偵測／清理 gate；原始 HTML 必須留在本機忽略路徑並依資料保留政策刪除
+- 系統不刻意抽取 591 帳號、密碼、Cookie 或專用聯絡欄位；不要把密碼放在命令列。build/sync 會阻擋 title 中可辨識的電話或 email 形狀，但無法辨識所有人名或混淆文字；raw HTML 必須留在本機忽略路徑並依資料保留政策刪除
 
 三種公開桃園路由分別為：
 
@@ -227,7 +227,7 @@ newhouse 的 JSON-LD 提供每坪單價 `lowPrice` / `highPrice` 與坪數範圍
 - 原始 HTML **不提交 Git**（`data/raw/listings/` 已排除）
 - 公開 API 回傳已過濾欄位，不包含 `raw_hash`、`batch_id` 等內部欄位
 - 座標經四捨五入至小數四位
-- 結構化 schema 沒有專用聯絡欄位，也不刻意抽取聯絡資訊；但 title 等 free text 與本機 raw HTML 仍可能含 contact-shaped text，發布 snapshot 或 API 前必須通過偵測／清理 gate
+- 結構化 schema 沒有專用聯絡欄位，也不刻意抽取聯絡資訊；build/sync 會阻擋 title 中可辨識的電話或 email 形狀，但 title 與本機 raw HTML 仍須抽樣稽核，不能宣稱已涵蓋所有人名或刻意混淆的 contact-shaped text
 - 不儲存帳號密碼；Chrome profile 與 raw HTML 視為敏感本機資料
 
 ### 方法論文件

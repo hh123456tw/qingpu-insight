@@ -77,7 +77,9 @@ M4 runtime／jobs 設定 `QINGPU_DATABASE_URL` 時，MySQL listing tables 與 `g
 
 ## 隱私、保留與存取
 
-raw detail HTML 可能含公開但像聯絡資料的文字。它只可留在本機、被 Git ignore 的 raw evidence 路徑，依資料保留期限刪除，且只授權必要操作者讀取。現有 structured schema 沒有專用 contact fields，且流程不刻意抽取聯絡資訊；但 title 等 free text 目前仍可能含 contact-shaped text。因此在發布 snapshot 或 API 前，必須有 contact-shaped text 偵測／清理 gate；在完成該 gate 前，不能保證姓名、電話或 email 不會出現在結構化輸出。Chrome profile 與 raw HTML 更敏感：profile 使用專用本機目錄，放在 repository 外或明確加入本機 ignore 規則，確認不受 Git 追蹤；不得分享或放入 artifact。原始 HTML 不得直接渲染給使用者。
+raw detail HTML 可能含公開的 contact-shaped text。它只可留在本機、被 Git ignore 的 raw evidence 路徑，依資料保留期限刪除，且只授權必要操作者讀取。現有 structured schema 沒有專用 contact fields，且流程不刻意抽取聯絡資訊。build/sync 的發布 gate 會掃描公開 `title` 中的台灣手機、市話與 email 形狀；命中時只記錄筆數、將 build manifest 標為 incomplete，且不建立 repository snapshot 或 quality artifact。它不能可靠辨識所有人名或刻意混淆的聯絡方式，因此 raw evidence 仍須受控，對外發布前仍應抽樣稽核。Chrome profile 與 raw HTML 更敏感：profile 使用專用本機目錄，放在 repository 外或明確加入本機 ignore 規則，確認不受 Git 追蹤；不得分享或放入 artifact。原始 HTML 不得直接渲染給使用者。
+
+Detail navigation 在開啟 Chrome 前只接受已知的 591 新建案詳細頁 URL 形狀，完成後也會再次驗證 final URL，非 allowlist 頁面不保存 evidence。Selenium/Chrome 仍可能在 final URL 檢查前跟隨由 591 發出的 HTTP redirect；因此此功能限本機可見瀏覽器與受信任網路環境，不得直接搬到可存取雲端 metadata 或內網管理面的伺服器。未來若要伺服器化，必須先加入瀏覽器層 request interception／egress allowlist。
 
 ## 失敗矩陣、驗收與 rollback
 
@@ -91,8 +93,11 @@ raw detail HTML 可能含公開但像聯絡資料的文字。它只可留在本�
 | 官方門牌無精確唯一命中 | `address_not_resolved` | 列 unknown；不做 fuzzy／外部 fallback |
 | station 無有效座標 | controlled failure | 不發布；修正官方門牌／station input |
 | 超過 2 km | 保存最近站與距離、標記不合格 | 不進入生活圈指標；無需改寫座標 |
+| title 命中電話／email 形狀 | 將 manifest 標為不完整，只記錄命中筆數 | 不發布 snapshot／quality；清理來源或規則確認後重建 |
 
 本 task 的 release evidence 只包含本機 test gate，沒有宣稱已進行真實 591 live acceptance。驗收時保存命令輸出與產生的 artifact 路徑，並以實際批次的 `eligible`、`unknown`、`by_method`、`by_reason` 與（如有）`detail.detail_address_missing` 檢查；不要在文件硬編造資料筆數。若 M4 runtime acceptance 失敗，停止發布並保留上一個已發布 MySQL 版本；既有 Parquet snapshot 只可作 M3 本機相容／重現記錄，不可作 runtime fallback。修正 input／設定後以新完整 batch 重跑。
+
+Build 會先完成 quality artifact 的原子寫入，再提交 repository；repository 建立或提交失敗時會復原先前的 quality artifact。MySQL 成功提交後，`listing_snapshots.parquet` 相容匯出若失敗只會輸出明確 warning，不會把已提交的 MySQL runtime 誤報為未發布；修正匯出環境後再重建相容檔。
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/test_cli.py tests/test_listing_location.py tests/test_listing_repository.py -q
