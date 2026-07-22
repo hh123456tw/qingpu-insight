@@ -52,8 +52,14 @@ from qingpu_insight.listing_repository import (
     ParquetListingRepository,
     valid_listing_batch_id,
 )
-from qingpu_insight.listing_sources import CaptureBatch, ListingSource
-from qingpu_insight.listing_update import ListingUpdateRequest, ListingUpdateService
+from qingpu_insight.listing_sources import CaptureBatch, ListingSource, ListingType
+from qingpu_insight.listing_update import (
+    ListingUpdateAlreadyRunning,
+    ListingUpdateError,
+    ListingUpdateRequest,
+    ListingUpdateService,
+    PreparedListingType,
+)
 from qingpu_insight.listing_valuation import compare_listing_to_model
 from qingpu_insight.location_evidence import LocationEvidence
 from qingpu_insight.market_cleaning import build_market_dataset
@@ -892,10 +898,184 @@ def listing_build(root: Path, args, *, detail_enricher=None) -> int:
     return 0
 
 
+def _prepare_listing_type(
+    listing_type: ListingType,
+    max_pages: int,
+    *,
+    source: ListingSource,
+    repository: ListingRepository,
+    stations: pd.DataFrame,
+    radius_m: float,
+    market_frame: pd.DataFrame,
+    model_registry: ModelRegistry,
+    verbose: bool = False,
+    require_complete: bool = True,
+) -> PreparedListingType:
+    """Run the M3 transformation without writing repository state."""
+    batch = source.capture(listing_type, max_pages=max_pages)
+    if verbose:
+        print(f"[{listing_type}] {_capture_summary(batch)}")
+    if require_complete and not batch.is_complete:
+        raise ListingUpdateError(
+            "capture_incomplete", f"[{listing_type}] capture incomplete"
+        )
+
+    all_listings: list[SourceListing] = []
+    rejection_reasons: Counter[str] = Counter()
+    for page in batch.pages:
+        try:
+            extraction = extract_rendered_page(page.html, listing_type)
+        except ListingSchemaError:
+            raise ListingUpdateError(
+                "schema_error",
+                f"[{listing_type}] 頁面 {page.page_number}: 解析失敗",
+            ) from None
+        rejection_reasons.update(
+            rejected.reason_code for rejected in extraction.rejected
+        )
+        all_listings.extend(
+            _source_listings_from_extraction(
+                extraction, page.representation, page.schema_version
+            )
+        )
+
+    if verbose and rejection_reasons:
+        print(
+            f"[{listing_type}] rejection_reasons="
+            f"{_rejection_summary(rejection_reasons)}"
+        )
+    if not all_listings:
+        raise ListingUpdateError(
+            "empty_prepared_rows", f"[{listing_type}] no accepted listings"
+        )
+
+    normalized = [normalize_listing(item, batch.started_at) for item in all_listings]
+    located = assign_listing_life_circle(
+        pd.DataFrame(_normalized_to_rows(normalized)), stations, radius_m
+    )
+    located["active"] = True
+    located["consecutive_absences"] = 0
+    located["last_seen_batch_id"] = batch.batch_id
+    located["model_evidence"] = None
+
+    previous = repository.load_current(listing_type)
+    event_result = detect_listing_events(previous, located, batch)
+    if not event_result.state.empty:
+        merge_cols = ["source", "listing_type", "source_listing_id"]
+        state_subset = event_result.state[
+            merge_cols + ["active", "consecutive_absences", "last_seen_batch_id"]
+        ].drop_duplicates(subset=merge_cols)
+        located = located.drop(
+            columns=["active", "consecutive_absences", "last_seen_batch_id"],
+            errors="ignore",
+        ).merge(state_subset, on=merge_cols, how="left")
+        located["active"] = located["active"].fillna(True)
+        located["consecutive_absences"] = (
+            located["consecutive_absences"].fillna(0).astype(int)
+        )
+        located["last_seen_batch_id"] = located["last_seen_batch_id"].fillna(
+            batch.batch_id
+        )
+        absent = event_result.state[
+            ~event_result.state["source_listing_id"].isin(
+                located["source_listing_id"]
+            )
+        ].copy()
+        if not absent.empty:
+            located = pd.concat([located, absent], ignore_index=True)
+
+    if listing_type in ("sale", "newhouse") and not market_frame.empty:
+        listing_map = {item.source_listing_id: item for item in normalized}
+        for index, row in located.iterrows():
+            normalized_listing = listing_map.get(row.get("source_listing_id"))
+            station_code = row.get("station_code")
+            if normalized_listing is None or station_code is None or pd.isna(station_code):
+                continue
+            station_distance = row.get("station_distance_m")
+            try:
+                valuation = compare_listing_to_model(
+                    normalized_listing,
+                    model_registry,
+                    market_frame,
+                    station_code=str(station_code),
+                    station_distance_m=(
+                        float(station_distance) if pd.notna(station_distance) else None
+                    ),
+                    location_eligible=bool(row.get("location_eligible", False)),
+                )
+                located.at[index, "model_evidence"] = json.dumps(
+                    valuation, ensure_ascii=False
+                )
+            except Exception:
+                if verbose:
+                    print("  valuation failed for one listing", file=sys.stderr)
+
+    privacy_violations = _contact_shaped_title_count(located)
+    if privacy_violations:
+        raise ListingUpdateError(
+            "privacy_gate_failed",
+            f"[{listing_type}] privacy gate blocked {privacy_violations} title(s)",
+        )
+
+    return PreparedListingType(
+        batch=batch,
+        rows=located,
+        events=event_result.events,
+        summary={
+            "pages": len(batch.pages),
+            "accepted": len(all_listings),
+            "rejected": sum(rejection_reasons.values()),
+            "rows": len(located),
+            "events": len(event_result.events),
+        },
+    )
+
+
+class M3ListingPreparationRunner:
+    """Visible-Selenium production adapter for the shared M3 transformation."""
+
+    def __init__(self, root: Path, connection_factory) -> None:
+        doorplates_path = root / "data" / "raw" / "doorplates.csv"
+        if not doorplates_path.is_file():
+            raise FileNotFoundError("data/raw/doorplates.csv is required")
+        self._root = root
+        self._connection_factory = connection_factory
+        self._settings = get_settings(root)
+        doorplates = build_doorplate_frame(doorplates_path)
+        self._stations = station_points(self._settings.stations, doorplates)
+        try:
+            self._market_frame = pd.read_parquet(
+                self._settings.processed_dir / "market_transactions.parquet"
+            )
+        except (FileNotFoundError, ValueError):
+            self._market_frame = pd.DataFrame()
+        self._model_registry = ModelRegistry(root / "artifacts")
+
+    def prepare(
+        self, listing_type: ListingType, max_pages: int
+    ) -> PreparedListingType:
+        connection = self._connection_factory()
+        try:
+            repository = MySQLListingRepository(connection)
+            source = create_listing_source(self._root, ChromeConfig(headless=False))
+            return _prepare_listing_type(
+                listing_type,
+                max_pages,
+                source=source,
+                repository=repository,
+                stations=self._stations,
+                radius_m=self._settings.radius_m,
+                market_frame=self._market_frame,
+                model_registry=self._model_registry,
+            )
+        finally:
+            connection.close()
+
+
 def listing_sync(root: Path, args) -> int:
-    for lt in args.types:
-        if lt not in listing_type_choices:
-            print(f"未知的 listing 類型: {lt}", file=sys.stderr)
+    for listing_type in args.types:
+        if listing_type not in listing_type_choices:
+            print(f"未知的 listing 類型: {listing_type}", file=sys.stderr)
             return 1
     if args.max_pages < 1:
         print("max-pages 必須 >= 1", file=sys.stderr)
@@ -911,218 +1091,129 @@ def listing_sync(root: Path, args) -> int:
             file=sys.stderr,
         )
         return 1
-
     settings = get_settings(root)
     doorplates = build_doorplate_frame(doorplates_path)
     stations = station_points(settings.stations, doorplates)
-    repo = create_listing_repository(root)
-
-    market_path = settings.processed_dir / "market_transactions.parquet"
+    repository = create_listing_repository(root)
     try:
-        market_frame = pd.read_parquet(market_path)
+        market_frame = pd.read_parquet(
+            settings.processed_dir / "market_transactions.parquet"
+        )
     except (FileNotFoundError, ValueError):
         market_frame = pd.DataFrame()
     model_registry = ModelRegistry(root / "artifacts")
 
     exit_code = 0
     for listing_type in args.types:
-        config = ChromeConfig(
-            headless=args.headless,
-            profile_dir=args.profile_dir,
-            page_timeout_seconds=args.page_timeout,
-            delay_seconds=(args.delay_min, args.delay_max),
+        source = create_listing_source(
+            root,
+            ChromeConfig(
+                headless=args.headless,
+                profile_dir=args.profile_dir,
+                page_timeout_seconds=args.page_timeout,
+                delay_seconds=(args.delay_min, args.delay_max),
+            ),
         )
-        source = create_listing_source(root, config)
-        batch = source.capture(listing_type, max_pages=args.max_pages)
-        print(f"[{listing_type}] {_capture_summary(batch)}")
-
-        if sum(page.accepted_count for page in batch.pages) == 0:
+        try:
+            prepared = _prepare_listing_type(
+                listing_type,
+                args.max_pages,
+                source=source,
+                repository=repository,
+                stations=stations,
+                radius_m=settings.radius_m,
+                market_frame=market_frame,
+                model_registry=model_registry,
+                verbose=True,
+                require_complete=False,
+            )
+        except ListingUpdateError as error:
+            print(error.safe_message, file=sys.stderr)
             exit_code = 1
-        if batch.errors:
+            continue
+        repository.save_batch(prepared.batch, prepared.rows)
+        if not prepared.events.empty:
+            repository.append_events(prepared.events)
+        if prepared.batch.errors:
             exit_code = 1
-            for err in batch.errors:
+            for error in prepared.batch.errors:
                 print(
-                    f"[{listing_type}] 頁面 {err.page_number}: {err.message}",
+                    f"[{listing_type}] 頁面 {error.page_number}: {error.message}",
                     file=sys.stderr,
                 )
 
-        all_listings: list[SourceListing] = []
-        rejection_reasons: Counter[str] = Counter()
-        schema_failed = False
-        for page in batch.pages:
-            try:
-                extraction = extract_rendered_page(page.html, listing_type)
-                rejection_reasons.update(
-                    rejected.reason_code for rejected in extraction.rejected
-                )
-                all_listings.extend(
-                    _source_listings_from_extraction(
-                        extraction, page.representation, page.schema_version
-                    )
-                )
-            except ListingSchemaError as e:
-                exit_code = 1
-                schema_failed = True
-                print(
-                    f"[{listing_type}] 頁面 {page.page_number}: 解析失敗: {e}",
-                    file=sys.stderr,
-                )
-
-        if rejection_reasons:
-            print(
-                f"[{listing_type}] rejection_reasons="
-                f"{_rejection_summary(rejection_reasons)}"
-            )
-
-        if schema_failed:
-            continue
-
-        if not all_listings:
-            continue
-
-        normalized = [
-            normalize_listing(sl, batch.started_at) for sl in all_listings
-        ]
-        rows = _normalized_to_rows(normalized)
-        df = pd.DataFrame(rows)
-        located = assign_listing_life_circle(df, stations, settings.radius_m)
-
-        # Add default state columns before event detection
-        located["active"] = True
-        located["consecutive_absences"] = 0
-        located["last_seen_batch_id"] = batch.batch_id
-        located["model_evidence"] = None
-
-        previous = repo.load_current(listing_type)
-        event_result = detect_listing_events(previous, located, batch)
-
-        # Merge state from event detection into located
-        if not event_result.state.empty:
-            merge_cols = ["source", "listing_type", "source_listing_id"]
-            state_subset = event_result.state[
-                merge_cols + ["active", "consecutive_absences", "last_seen_batch_id"]
-            ].drop_duplicates(subset=merge_cols)
-            for col in ("active", "consecutive_absences", "last_seen_batch_id"):
-                if col in located.columns:
-                    located = located.drop(columns=[col])
-            located = located.merge(state_subset, on=merge_cols, how="left")
-            located["active"] = located["active"].fillna(True)
-            located["consecutive_absences"] = located["consecutive_absences"].fillna(0).astype(int)
-            located["last_seen_batch_id"] = located["last_seen_batch_id"].fillna(batch.batch_id)
-
-            # Also write absent-listing state rows into current
-            absent = event_result.state[
-                ~event_result.state["source_listing_id"].isin(
-                    located["source_listing_id"]
-                )
-            ].copy()
-            if not absent.empty:
-                located = pd.concat([located, absent], ignore_index=True)
-
-        if not event_result.events.empty:
-            repo.append_events(event_result.events)
-
-        # ---- Valuation integration (IMPORTANT-7) ----
-        if listing_type in ("sale", "newhouse") and not market_frame.empty:
-            listing_map = {n.source_listing_id: n for n in normalized}
-            for idx, row in located.iterrows():
-                sid = row.get("source_listing_id")
-                nl = listing_map.get(sid)
-                if nl is None:
-                    continue
-                station_code = row.get("station_code")
-                station_dist = row.get("station_distance_m")
-                location_eligible = bool(row.get("location_eligible", False))
-                if pd.isna(station_code) or station_code is None:
-                    continue
-                try:
-                    result = compare_listing_to_model(
-                        nl, model_registry, market_frame,
-                        station_code=str(station_code),
-                        station_distance_m=float(station_dist) if pd.notna(station_dist) else None,
-                        location_eligible=location_eligible,
-                    )
-                    located.at[idx, "model_evidence"] = json.dumps(result, ensure_ascii=False)
-                except Exception as exc:
-                    print(
-                        f"  valuation failed for {sid}: {exc}",
-                        file=sys.stderr,
-                    )
-
-        privacy_violations = _contact_shaped_title_count(located)
-        if privacy_violations:
-            print(
-                f"[{listing_type}] privacy gate blocked "
-                f"{privacy_violations} listing title(s)",
-                file=sys.stderr,
-            )
-            exit_code = 1
-            continue
-
-        repo.save_batch(batch, located)
-
-    all_snapshots = repo.load_snapshots()
-    if all_snapshots.empty:
-        return exit_code
-    snapshots_path = root / "data" / "processed" / "listing_snapshots.parquet"
-    snapshots_path.parent.mkdir(parents=True, exist_ok=True)
-    all_snapshots.to_parquet(snapshots_path, index=False)
-
+    all_snapshots = repository.load_snapshots()
+    if not all_snapshots.empty:
+        snapshots_path = root / "data" / "processed" / "listing_snapshots.parquet"
+        snapshots_path.parent.mkdir(parents=True, exist_ok=True)
+        all_snapshots.to_parquet(snapshots_path, index=False)
     return exit_code
 
 
 def _create_listing_update_service(root: Path) -> ListingUpdateService:
-    database_url = os.environ.get("QINGPU_DATABASE_URL")
-    if not database_url:
-        raise RuntimeError("QINGPU_DATABASE_URL is required")
-    parsed = urllib.parse.urlparse(database_url)
-    connection = pymysql.connect(
-        host=parsed.hostname or "localhost",
-        port=parsed.port or 3306,
-        user=parsed.username or "",
-        password=parsed.password or "",
-        database=parsed.path.lstrip("/"),
-        charset="utf8mb4",
-    )
-    job_repo = MySQLJobRepository(connection)
+    connection_factory = create_mysql_connection_factory()
+    job_repo = MySQLJobRepository(connection_factory)
     job_service = JobService(job_repo)
-    publisher = MySQLVersionPublisher(connection, dataset_key="listings")
+    publisher = MySQLVersionPublisher(connection_factory, dataset_key="listings")
+    preparation_runner = M3ListingPreparationRunner(root, connection_factory)
     return ListingUpdateService(
         job_service=job_service,
         publisher=publisher,
+        preparation_runner=preparation_runner,
         root=root,
     )
 
 
 def listing_update(root: Path, args) -> int:
-    for lt in args.types:
-        if lt not in listing_type_choices:
-            print(f"未知的 listing 類型: {lt}", file=sys.stderr)
-            return 1
+    try:
+        request = ListingUpdateRequest(
+            types=tuple(args.types), max_pages=args.max_pages, trigger="manual",
+        )
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 1
     try:
         service = _create_listing_update_service(root)
-    except (RuntimeError, OSError, pymysql.MySQLError) as exc:
+    except (RuntimeError, ValueError, OSError, pymysql.MySQLError) as exc:
         print(f"無法建立 listing-update 服務: {exc}", file=sys.stderr)
         return 1
-    request = ListingUpdateRequest(
-        types=tuple(args.types), max_pages=args.max_pages, trigger="manual",
-    )
     try:
-        run = service.submit(request)
-        result = service.execute(run.run_id, request)
-    except RuntimeError:
+        submission = service.submit(request)
+        if not submission.created:
+            print(json.dumps(_safe_job_payload(submission.run), ensure_ascii=False))
+            return 2
+        service.job_service.start(submission.run.run_id)
+        result = service.execute_running(submission.run.run_id, request)
+    except ListingUpdateAlreadyRunning:
         print(json.dumps({"status": "already_running"}, ensure_ascii=False))
         return 2
-    except Exception as exc:
-        print(json.dumps({"status": "failed", "error": str(exc)}, ensure_ascii=False))
+    except ListingUpdateError as error:
+        print(
+            json.dumps(
+                {"status": "failed", "error_code": error.error_code},
+                ensure_ascii=False,
+            )
+        )
         return 1
-    summary = {
-        "status": result.status,
-        "run_id": result.run_id,
-        "summary": result.summary,
-    }
-    print(json.dumps(summary, ensure_ascii=False))
+    except Exception:
+        print(
+            json.dumps(
+                {"status": "failed", "error_code": "runtime_failed"},
+                ensure_ascii=False,
+            )
+        )
+        return 1
+    print(json.dumps(_safe_job_payload(result), ensure_ascii=False))
     return 0 if result.status == "succeeded" else 1
+
+
+def _safe_job_payload(run) -> dict[str, object]:
+    return {
+        "run_id": run.run_id,
+        "status": run.status,
+        "output_version": run.output_version,
+        "summary": run.summary,
+    }
 
 
 def job_status(root: Path, args) -> int:
@@ -1131,7 +1222,7 @@ def job_status(root: Path, args) -> int:
     except (RuntimeError, OSError, pymysql.MySQLError) as exc:
         print(f"無法查詢工作狀態: {exc}", file=sys.stderr)
         return 1
-    run = service._job_service._repository.get(args.run_id)
+    run = service.job_service.get(args.run_id)
     if run is None:
         print(json.dumps({"error": "run not found"}, ensure_ascii=False))
         return 1

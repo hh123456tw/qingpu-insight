@@ -1,7 +1,9 @@
 import json
 import shutil
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -10,11 +12,13 @@ import pytest
 from qingpu_insight import cli
 from qingpu_insight.cli import main
 from qingpu_insight.downloads import DownloadRecord, record_file
+from qingpu_insight.jobs import JobRun, JobSubmission
 from qingpu_insight.listing_591 import SourceListing
 from qingpu_insight.listing_detail_enrichment import DetailEnrichmentBlocked
 from qingpu_insight.listing_location import assign_listing_life_circle
 from qingpu_insight.listing_normalization import normalize_listing
 from qingpu_insight.listing_sources import CaptureBatch, CapturedPage
+from qingpu_insight.listing_update import ListingUpdateError
 from qingpu_insight.location_evidence import LocationEvidence, unknown_location
 from tests.test_market_cleaning import sample_rows
 
@@ -1835,3 +1839,136 @@ class TestListingSync:
             )
             != 0
         )
+
+
+def _pending_update_run() -> JobRun:
+    return JobRun(
+        run_id="00000000-0000-0000-0000-000000000042",
+        job_type="listing_update",
+        trigger="manual",
+        idempotency_key="update-key",
+        status="pending",
+        started_at=None,
+        finished_at=None,
+        attempt=1,
+        input_version=None,
+        output_version=None,
+        summary={},
+        error_code=None,
+        error_message=None,
+    )
+
+
+def test_listing_update_validates_pages_before_service_creation(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        cli,
+        "_create_listing_update_service",
+        lambda root: pytest.fail("service factory must not run"),
+    )
+
+    assert main(["listing-update", "--max-pages", "0"]) == 1
+
+
+def test_listing_update_active_duplicate_reports_existing_without_execution(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    run = _pending_update_run()
+
+    class Service:
+        def submit(self, request):
+            return JobSubmission(run=run, created=False)
+
+        def execute_running(self, run_id, request):
+            pytest.fail("active duplicate must not execute")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "_create_listing_update_service", lambda root: Service())
+
+    assert main(["listing-update", "--types", "sale", "--max-pages", "1"]) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "run_id": run.run_id,
+        "status": "pending",
+        "output_version": None,
+        "summary": {},
+    }
+
+
+def test_listing_update_runtime_failure_is_exit_one(tmp_path, monkeypatch, capsys) -> None:
+    pending = _pending_update_run()
+    running = replace(pending, status="running", started_at=datetime.now(UTC))
+    starts = []
+
+    class JobService:
+        def start(self, run_id):
+            starts.append(run_id)
+            return running
+
+    class Service:
+        job_service = JobService()
+
+        def submit(self, request):
+            return JobSubmission(run=pending, created=True)
+
+        def execute_running(self, run_id, request):
+            raise ListingUpdateError("preparation_failed", "listing preparation failed")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "_create_listing_update_service", lambda root: Service())
+
+    assert main(["listing-update", "--types", "sale", "--max-pages", "1"]) == 1
+    assert starts == [pending.run_id]
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {"status": "failed", "error_code": "preparation_failed"}
+
+
+def test_listing_update_factory_uses_connection_factories_and_real_runner(
+    tmp_path, monkeypatch
+) -> None:
+    def factory():
+        return object()
+
+    captured = {}
+    job_repo = object()
+    publisher = object()
+    runner = object()
+
+    monkeypatch.setattr(cli, "create_mysql_connection_factory", lambda: factory)
+    monkeypatch.setattr(
+        cli,
+        "MySQLJobRepository",
+        lambda value: captured.setdefault("job_factory", value) or job_repo,
+    )
+    monkeypatch.setattr(
+        cli,
+        "MySQLVersionPublisher",
+        lambda value, dataset_key: (
+            captured.update(publisher_factory=value, dataset_key=dataset_key) or publisher
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "M3ListingPreparationRunner",
+        lambda root, connection_factory: (
+            captured.update(preparation_factory=connection_factory) or runner
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "ListingUpdateService",
+        lambda **kwargs: SimpleNamespace(**kwargs),
+    )
+
+    service = cli._create_listing_update_service(tmp_path)
+
+    assert captured == {
+        "job_factory": factory,
+        "publisher_factory": factory,
+        "dataset_key": "listings",
+        "preparation_factory": factory,
+    }
+    assert service.preparation_runner is runner
