@@ -6,6 +6,7 @@ import sys
 import tempfile
 import urllib.parse
 from collections import Counter
+from concurrent.futures import Future
 from datetime import UTC, datetime
 from math import isfinite
 from numbers import Real
@@ -1164,6 +1165,24 @@ def _create_listing_update_service(root: Path) -> ListingUpdateService:
     )
 
 
+class _ForegroundJobExecutor:
+    """Synchronous CLI executor that owns the pending-to-running transition."""
+
+    def __init__(self, job_service: JobService) -> None:
+        self._job_service = job_service
+
+    def submit(self, run_id: str, callable) -> Future:
+        future: Future[None] = Future()
+        try:
+            self._job_service.start(run_id)
+            callable()
+        except Exception as error:
+            future.set_exception(error)
+        else:
+            future.set_result(None)
+        return future
+
+
 def listing_update(root: Path, args) -> int:
     try:
         request = ListingUpdateRequest(
@@ -1174,16 +1193,32 @@ def listing_update(root: Path, args) -> int:
         return 1
     try:
         service = _create_listing_update_service(root)
-    except (RuntimeError, ValueError, OSError, pymysql.MySQLError) as exc:
-        print(f"無法建立 listing-update 服務: {exc}", file=sys.stderr)
+    except (RuntimeError, ValueError, OSError, pymysql.MySQLError):
+        print(
+            json.dumps(
+                {
+                    "status": "failed",
+                    "error_code": "service_unavailable",
+                    "message": "listing update service unavailable",
+                },
+                ensure_ascii=False,
+            )
+        )
         return 1
     try:
         submission = service.submit(request)
         if not submission.created:
             print(json.dumps(_safe_job_payload(submission.run), ensure_ascii=False))
             return 2
-        service.job_service.start(submission.run.run_id)
-        result = service.execute_running(submission.run.run_id, request)
+        future = service.handoff(
+            submission,
+            request,
+            _ForegroundJobExecutor(service.job_service),
+        )
+        future.result()
+        result = service.job_service.get(submission.run.run_id)
+        if result is None:
+            raise ListingUpdateError("job_state_failed", "listing update job not found")
     except ListingUpdateAlreadyRunning:
         print(json.dumps({"status": "already_running"}, ensure_ascii=False))
         return 2

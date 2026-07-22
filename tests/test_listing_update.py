@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from concurrent.futures import Future
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Event, Thread
 from types import SimpleNamespace
 
 import pandas as pd
@@ -88,6 +90,7 @@ class FakeLock:
         self.available = available
         self.owner: tuple[str, str] | None = None
         self.released = False
+        self.release_calls = 0
 
     def try_acquire(self) -> bool:
         return self.available
@@ -100,6 +103,7 @@ class FakeLock:
 
     def release(self) -> None:
         self.released = True
+        self.release_calls += 1
 
 
 class FakePreparationRunner:
@@ -255,6 +259,22 @@ def test_submit_preserves_created_semantics_and_duplicate_is_not_executed(
     assert lock.released is False
 
 
+def test_trigger_is_part_of_active_idempotency_identity(tmp_path: Path) -> None:
+    service, _, repository, _, _, _ = make_service(tmp_path)
+
+    manual = service.submit(
+        listing_update.ListingUpdateRequest(types=("sale",), trigger="manual")
+    )
+    scheduled = service.submit(
+        listing_update.ListingUpdateRequest(types=("sale",), trigger="scheduled")
+    )
+
+    assert manual.created is True
+    assert scheduled.created is True
+    assert manual.run.idempotency_key != scheduled.run.idempotency_key
+    assert repository.create_calls == 2
+
+
 def test_execute_running_requires_executor_owned_running_state(tmp_path: Path) -> None:
     service, _, repository, _, _, _ = make_service(tmp_path)
     request = listing_update.ListingUpdateRequest(types=("sale",), max_pages=1)
@@ -264,6 +284,146 @@ def test_execute_running_requires_executor_owned_running_state(tmp_path: Path) -
         service.execute_running(submission.run.run_id, request)
 
     assert repository.transitions == []
+
+
+def test_pending_invocation_releases_reservation_exactly_once(tmp_path: Path) -> None:
+    service, _, _, _, _, lock = make_service(tmp_path)
+    request = listing_update.ListingUpdateRequest(types=("sale",), max_pages=1)
+    submission = service.submit(request)
+
+    with pytest.raises(listing_update.ListingUpdateError) as caught:
+        service.execute_running(submission.run.run_id, request)
+
+    assert caught.value.error_code == "invalid_job_state"
+    assert lock.release_calls == 1
+    with pytest.raises(listing_update.ListingUpdateError) as second:
+        service.execute_running(submission.run.run_id, request)
+    assert second.value.error_code == "execution_not_owned"
+    assert lock.release_calls == 1
+
+
+def test_initial_job_lookup_failure_releases_reservation(tmp_path: Path) -> None:
+    service, job_service, repository, _, _, lock = make_service(tmp_path)
+    request = listing_update.ListingUpdateRequest(types=("sale",), max_pages=1)
+    submission = service.submit(request)
+    job_service.start(submission.run.run_id)
+    original_get = repository.get
+    failures_remaining = 1
+
+    def failing_get(run_id: str):
+        nonlocal failures_remaining
+        if failures_remaining:
+            failures_remaining -= 1
+            raise RuntimeError("mysql://root:password@db/private")
+        return original_get(run_id)
+
+    repository.get = failing_get  # type: ignore[method-assign]
+    with pytest.raises(listing_update.ListingUpdateError) as caught:
+        service.execute_running(submission.run.run_id, request)
+    repository.get = original_get  # type: ignore[method-assign]
+
+    assert caught.value.error_code == "job_state_failed"
+    assert "password" not in str(caught.value)
+    failed = job_service.get(submission.run.run_id)
+    assert failed is not None and failed.status == "failed"
+    assert failed.error_code == "job_state_failed"
+    assert lock.release_calls == 1
+
+
+def test_handoff_start_failure_releases_reservation_and_terminalizes_running(
+    tmp_path: Path,
+) -> None:
+    service, job_service, _, _, _, lock = make_service(tmp_path)
+    request = listing_update.ListingUpdateRequest(types=("sale",), max_pages=1)
+    submission = service.submit(request)
+
+    class StartFailingExecutor:
+        def submit(self, run_id, callable):
+            future: Future[None] = Future()
+            job_service.start(run_id)
+            future.set_exception(RuntimeError("executor startup failed"))
+            return future
+
+    future = service.handoff(submission, request, StartFailingExecutor())
+
+    assert isinstance(future.exception(), RuntimeError)
+    failed = job_service.get(submission.run.run_id)
+    assert failed is not None and failed.status == "failed"
+    assert failed.error_code == "startup_failed"
+    assert lock.release_calls == 1
+
+
+def test_handoff_failed_start_releases_pending_reservation(tmp_path: Path) -> None:
+    service, job_service, _, _, _, lock = make_service(tmp_path)
+    request = listing_update.ListingUpdateRequest(types=("sale",), max_pages=1)
+    submission = service.submit(request)
+
+    class FailedStartExecutor:
+        def submit(self, run_id, callable):
+            future: Future[None] = Future()
+            future.set_exception(RuntimeError("start transition failed"))
+            return future
+
+    future = service.handoff(submission, request, FailedStartExecutor())
+
+    assert isinstance(future.exception(), RuntimeError)
+    pending = job_service.get(submission.run.run_id)
+    assert pending is not None and pending.status == "pending"
+    assert lock.release_calls == 1
+
+
+def test_execute_running_claim_is_exclusive_between_threads(tmp_path: Path) -> None:
+    service, job_service, _, preparation, _, lock = make_service(tmp_path)
+    request = listing_update.ListingUpdateRequest(types=("sale",), max_pages=1)
+    submission = start_submission(service, job_service, request)
+    entered = Event()
+    release = Event()
+    original_prepare = preparation.prepare
+
+    def blocking_prepare(listing_type, max_pages):
+        entered.set()
+        assert release.wait(timeout=5)
+        return original_prepare(listing_type, max_pages)
+
+    preparation.prepare = blocking_prepare
+    outcomes: list[object] = []
+
+    def execute_first() -> None:
+        outcomes.append(service.execute_running(submission.run.run_id, request))
+
+    first = Thread(target=execute_first)
+    first.start()
+    assert entered.wait(timeout=5)
+    with pytest.raises(listing_update.ListingUpdateError) as caught:
+        service.execute_running(submission.run.run_id, request)
+    assert caught.value.error_code == "execution_not_owned"
+    release.set()
+    first.join(timeout=5)
+
+    assert len(outcomes) == 1
+    assert lock.release_calls == 1
+
+
+def test_cross_service_running_job_cannot_execute_without_reservation(
+    tmp_path: Path,
+) -> None:
+    owner, job_service, repository, _, publisher, _ = make_service(tmp_path)
+    request = listing_update.ListingUpdateRequest(types=("sale",), max_pages=1)
+    submission = owner.submit(request)
+    job_service.start(submission.run.run_id)
+    outsider = listing_update.ListingUpdateService(
+        job_service,
+        publisher,
+        preparation_runner=FakePreparationRunner(),
+        root=tmp_path,
+        lock_factory=lambda: FakeLock(),
+    )
+
+    with pytest.raises(listing_update.ListingUpdateError) as caught:
+        outsider.execute_running(submission.run.run_id, request)
+
+    assert caught.value.error_code == "execution_not_owned"
+    assert repository.get(submission.run.run_id).status == "running"  # type: ignore[union-attr]
 
 
 def test_complete_three_type_pipeline_stages_and_publishes_once(tmp_path: Path) -> None:

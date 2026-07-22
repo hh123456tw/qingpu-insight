@@ -5,8 +5,10 @@ import msvcrt
 import os
 import threading
 from collections.abc import Callable
+from concurrent.futures import Future
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -64,6 +66,10 @@ class ListingUpdateLock(Protocol):
     def set_owner(self, idempotency_key: str, run_id: str) -> None: ...
     def read_owner(self) -> tuple[str, str] | None: ...
     def release(self) -> None: ...
+
+
+class ListingUpdateExecutor(Protocol):
+    def submit(self, run_id: str, callable: Callable[[], object]) -> Future: ...
 
 
 class ListingUpdateError(RuntimeError):
@@ -194,6 +200,13 @@ class _RunState:
     version: DatasetVersion | None = None
 
 
+@dataclass
+class _Reservation:
+    idempotency_key: str
+    lock: ListingUpdateLock
+    claimed: bool = False
+
+
 class _ActionStep:
     required = True
     max_attempts = 1
@@ -238,7 +251,7 @@ class ListingUpdateService:
         self._artifact_writer = artifact_writer or AtomicParquetArtifactWriter()
         self._clock = clock
         self._reservation_guard = threading.Lock()
-        self._locks: dict[str, ListingUpdateLock] = {}
+        self._reservations: dict[str, _Reservation] = {}
         self._reserved_by_key: dict[str, str] = {}
 
     @property
@@ -249,7 +262,11 @@ class ListingUpdateService:
     def _build_idempotency_key(self, request: ListingUpdateRequest) -> str:
         today = datetime.now(UTC).strftime("%Y-%m-%d")
         types_str = "-".join(sorted(request.types))
-        return f"listing-update-{today}-{types_str}-p{request.max_pages}"
+        trigger_identity = sha256(request.trigger.encode("utf-8")).hexdigest()
+        return (
+            f"listing-update-{today}-{types_str}-p{request.max_pages}"
+            f"-t{trigger_identity}"
+        )
 
     @staticmethod
     def _version_for_run(run_id: str) -> str:
@@ -288,23 +305,103 @@ class ListingUpdateService:
                     lock.release()
                     return submission
                 lock.set_owner(idempotency_key, submission.run.run_id)
-                self._locks[submission.run.run_id] = lock
+                self._reservations[submission.run.run_id] = _Reservation(
+                    idempotency_key=idempotency_key,
+                    lock=lock,
+                )
                 self._reserved_by_key[idempotency_key] = submission.run.run_id
                 return submission
             except Exception:
                 lock.release()
                 raise
 
+    def handoff(
+        self,
+        submission: JobSubmission,
+        request: ListingUpdateRequest,
+        executor: ListingUpdateExecutor,
+    ) -> Future:
+        """Hand a reserved new run to the lifecycle-owning executor safely."""
+        if not submission.created:
+            raise ListingUpdateError(
+                "invalid_submission", "only a newly created run can be handed off"
+            )
+        run_id = submission.run.run_id
+        with self._reservation_guard:
+            reservation = self._reservations.get(run_id)
+            if reservation is None or reservation.claimed:
+                raise ListingUpdateError(
+                    "execution_not_owned", "listing update execution is not owned"
+                )
+        try:
+            future = executor.submit(
+                run_id, lambda: self.execute_running(run_id, request)
+            )
+        except Exception:
+            self._reconcile_handoff_failure(run_id)
+            raise ListingUpdateError(
+                "startup_failed", "listing update executor startup failed"
+            ) from None
+        future.add_done_callback(
+            lambda completed, reserved_run_id=run_id: self._reconcile_handoff_failure(
+                reserved_run_id
+            )
+        )
+        return future
+
+    def _claim_execution(self, run_id: str) -> None:
+        with self._reservation_guard:
+            reservation = self._reservations.get(run_id)
+            if reservation is None or reservation.claimed:
+                raise ListingUpdateError(
+                    "execution_not_owned", "listing update execution is not owned"
+                )
+            reservation.claimed = True
+
+    def _reconcile_handoff_failure(self, run_id: str) -> None:
+        with self._reservation_guard:
+            reservation = self._reservations.get(run_id)
+            if reservation is None or reservation.claimed:
+                return
+        try:
+            run = self._job_service.get(run_id)
+            if run is not None and run.status == "running":
+                self._job_service.fail(
+                    run_id,
+                    "startup_failed",
+                    "listing update executor startup failed",
+                )
+        except Exception:
+            pass
+        finally:
+            self._release_reservation(run_id)
+
+    def _fail_running_if_possible(
+        self, run_id: str, error: ListingUpdateError
+    ) -> None:
+        try:
+            current = self._job_service.get(run_id)
+            if current is not None and current.status == "running":
+                self._job_service.fail(run_id, error.error_code, error.safe_message)
+        except Exception:
+            pass
+
     def execute_running(
         self, run_id: str, request: ListingUpdateRequest
     ) -> JobRun:
-        run = self._job_service.get(run_id)
-        if run is None or run.status != "running":
-            raise ListingUpdateError(
-                "invalid_job_state", "job must already be running before execution"
-            )
-
+        self._claim_execution(run_id)
+        run: JobRun | None = None
         try:
+            try:
+                run = self._job_service.get(run_id)
+            except Exception:
+                raise ListingUpdateError(
+                    "job_state_failed", "listing update job state lookup failed"
+                ) from None
+            if run is None or run.status != "running":
+                raise ListingUpdateError(
+                    "invalid_job_state", "job must already be running before execution"
+                )
             try:
                 expected = self._publisher.current()
             except Exception:
@@ -357,20 +454,22 @@ class ListingUpdateService:
                 run_id, output_version=state.version.version, summary=summary
             )
         except ListingUpdateError as error:
-            current = self._job_service.get(run_id)
-            if current is not None and current.status == "running":
+            if run is not None and run.status == "running":
                 self._job_service.fail(run_id, error.error_code, error.safe_message)
+            elif run is None:
+                self._fail_running_if_possible(run_id, error)
             raise
         except Exception:
             error = ListingUpdateError(
                 "listing_update_failed", "listing update failed safely"
             )
-            current = self._job_service.get(run_id)
-            if current is not None and current.status == "running":
+            if run is not None and run.status == "running":
                 self._job_service.fail(run_id, error.error_code, error.safe_message)
+            elif run is None:
+                self._fail_running_if_possible(run_id, error)
             raise error from None
         finally:
-            self._release_reservation(run)
+            self._release_reservation(run_id)
 
     def _prepare(
         self, state: _RunState, listing_type: ListingType, max_pages: int
@@ -484,10 +583,11 @@ class ListingUpdateService:
             ) from None
         return {"version": state.version.version}
 
-    def _release_reservation(self, run: JobRun) -> None:
+    def _release_reservation(self, run_id: str) -> None:
         with self._reservation_guard:
-            lock = self._locks.pop(run.run_id, None)
-            if self._reserved_by_key.get(run.idempotency_key) == run.run_id:
-                self._reserved_by_key.pop(run.idempotency_key, None)
-        if lock is not None:
-            lock.release()
+            reservation = self._reservations.pop(run_id, None)
+            if reservation is None:
+                return
+            if self._reserved_by_key.get(reservation.idempotency_key) == run_id:
+                self._reserved_by_key.pop(reservation.idempotency_key, None)
+        reservation.lock.release()

@@ -1,6 +1,5 @@
 import json
 import shutil
-from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -1878,6 +1877,8 @@ def test_listing_update_active_duplicate_reports_existing_without_execution(
     run = _pending_update_run()
 
     class Service:
+        job_service = object()
+
         def submit(self, request):
             return JobSubmission(run=run, created=False)
 
@@ -1899,30 +1900,50 @@ def test_listing_update_active_duplicate_reports_existing_without_execution(
 
 def test_listing_update_runtime_failure_is_exit_one(tmp_path, monkeypatch, capsys) -> None:
     pending = _pending_update_run()
-    running = replace(pending, status="running", started_at=datetime.now(UTC))
-    starts = []
-
-    class JobService:
-        def start(self, run_id):
-            starts.append(run_id)
-            return running
+    handoffs = []
 
     class Service:
-        job_service = JobService()
+        job_service = object()
 
         def submit(self, request):
             return JobSubmission(run=pending, created=True)
 
-        def execute_running(self, run_id, request):
+        def handoff(self, submission, request, executor):
+            handoffs.append((submission, request, executor))
             raise ListingUpdateError("preparation_failed", "listing preparation failed")
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli, "_create_listing_update_service", lambda root: Service())
 
     assert main(["listing-update", "--types", "sale", "--max-pages", "1"]) == 1
-    assert starts == [pending.run_id]
+    assert len(handoffs) == 1
     payload = json.loads(capsys.readouterr().out)
     assert payload == {"status": "failed", "error_code": "preparation_failed"}
+
+
+def test_listing_update_service_construction_failure_redacts_secrets(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    def failing_factory(root):
+        raise RuntimeError(
+            "mysql://admin:password@localhost/private SQL phone 0912-345-678"
+        )
+
+    monkeypatch.setattr(cli, "_create_listing_update_service", failing_factory)
+
+    assert main(["listing-update", "--types", "sale", "--max-pages", "1"]) == 1
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+    assert "password" not in combined
+    assert "0912" not in combined
+    assert "SQL" not in combined
+    assert json.loads(captured.out) == {
+        "status": "failed",
+        "error_code": "service_unavailable",
+        "message": "listing update service unavailable",
+    }
 
 
 def test_listing_update_factory_uses_connection_factories_and_real_runner(
