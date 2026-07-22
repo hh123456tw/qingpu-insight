@@ -26,6 +26,8 @@ from qingpu_insight.downloads import (
 )
 from qingpu_insight.feasibility import evaluate_feasibility
 from qingpu_insight.geo import assign_life_circle, station_points
+from qingpu_insight.job_repository import MySQLJobRepository
+from qingpu_insight.jobs import JobService
 from qingpu_insight.listing_591 import (
     ListingSchemaError,
     SourceListing,
@@ -51,6 +53,7 @@ from qingpu_insight.listing_repository import (
     valid_listing_batch_id,
 )
 from qingpu_insight.listing_sources import CaptureBatch, ListingSource
+from qingpu_insight.listing_update import ListingUpdateRequest, ListingUpdateService
 from qingpu_insight.listing_valuation import compare_listing_to_model
 from qingpu_insight.location_evidence import LocationEvidence
 from qingpu_insight.market_cleaning import build_market_dataset
@@ -67,6 +70,7 @@ from qingpu_insight.model_training import (
 )
 from qingpu_insight.moi import read_moi_csv
 from qingpu_insight.mysql_loader import load_market_rows
+from qingpu_insight.publishing import MySQLVersionPublisher
 from qingpu_insight.reporting import write_report
 from qingpu_insight.valuation import ModelRegistry, ValuationBundle, train_artifact
 from qingpu_insight.valuation_reporting import write_evaluation, write_model_card
@@ -1067,6 +1071,85 @@ def listing_sync(root: Path, args) -> int:
     return exit_code
 
 
+def _create_listing_update_service(root: Path) -> ListingUpdateService:
+    database_url = os.environ.get("QINGPU_DATABASE_URL")
+    if not database_url:
+        raise RuntimeError("QINGPU_DATABASE_URL is required")
+    parsed = urllib.parse.urlparse(database_url)
+    connection = pymysql.connect(
+        host=parsed.hostname or "localhost",
+        port=parsed.port or 3306,
+        user=parsed.username or "",
+        password=parsed.password or "",
+        database=parsed.path.lstrip("/"),
+        charset="utf8mb4",
+    )
+    job_repo = MySQLJobRepository(connection)
+    job_service = JobService(job_repo)
+    publisher = MySQLVersionPublisher(connection, dataset_key="listings")
+    return ListingUpdateService(
+        job_service=job_service,
+        publisher=publisher,
+        root=root,
+    )
+
+
+def listing_update(root: Path, args) -> int:
+    for lt in args.types:
+        if lt not in listing_type_choices:
+            print(f"未知的 listing 類型: {lt}", file=sys.stderr)
+            return 1
+    try:
+        service = _create_listing_update_service(root)
+    except (RuntimeError, OSError, pymysql.MySQLError) as exc:
+        print(f"無法建立 listing-update 服務: {exc}", file=sys.stderr)
+        return 1
+    request = ListingUpdateRequest(
+        types=tuple(args.types), max_pages=args.max_pages, trigger="manual",
+    )
+    try:
+        run = service.submit(request)
+        result = service.execute(run.run_id, request)
+    except RuntimeError:
+        print(json.dumps({"status": "already_running"}, ensure_ascii=False))
+        return 2
+    except Exception as exc:
+        print(json.dumps({"status": "failed", "error": str(exc)}, ensure_ascii=False))
+        return 1
+    summary = {
+        "status": result.status,
+        "run_id": result.run_id,
+        "summary": result.summary,
+    }
+    print(json.dumps(summary, ensure_ascii=False))
+    return 0 if result.status == "succeeded" else 1
+
+
+def job_status(root: Path, args) -> int:
+    try:
+        service = _create_listing_update_service(root)
+    except (RuntimeError, OSError, pymysql.MySQLError) as exc:
+        print(f"無法查詢工作狀態: {exc}", file=sys.stderr)
+        return 1
+    run = service._job_service._repository.get(args.run_id)
+    if run is None:
+        print(json.dumps({"error": "run not found"}, ensure_ascii=False))
+        return 1
+    print(json.dumps(
+        {
+            "run_id": run.run_id,
+            "job_type": run.job_type,
+            "status": run.status,
+            "trigger": run.trigger,
+            "attempt": run.attempt,
+            "error_code": run.error_code,
+            "error_message": run.error_message,
+        },
+        ensure_ascii=False,
+    ))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="qingpu-data")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1147,6 +1230,22 @@ def build_parser() -> argparse.ArgumentParser:
     sync_parser.add_argument("--headless", action="store_true")
     sync_parser.add_argument("--profile-dir", default=None)
 
+    listing_update_parser = subparsers.add_parser(
+        "listing-update",
+        help="capture, build, and publish all 591 listing types",
+    )
+    listing_update_parser.add_argument(
+        "--types", nargs="+", default=["sale", "newhouse", "rental"],
+        choices=listing_type_choices,
+    )
+    listing_update_parser.add_argument("--max-pages", type=int, default=10)
+
+    job_status_parser = subparsers.add_parser(
+        "job-status",
+        help="query a job run status",
+    )
+    job_status_parser.add_argument("--run-id", required=True)
+
     return parser
 
 
@@ -1176,6 +1275,10 @@ def main(argv: list[str] | None = None) -> int:
         return listing_build(root, args, detail_enricher=detail_enricher)
     if args.command == "listing-sync":
         return listing_sync(root, args)
+    if args.command == "listing-update":
+        return listing_update(root, args)
+    if args.command == "job-status":
+        return job_status(root, args)
     return 0
 
 
