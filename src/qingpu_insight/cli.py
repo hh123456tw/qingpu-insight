@@ -1014,12 +1014,39 @@ def build_parser() -> argparse.ArgumentParser:
     build_parser = subparsers.add_parser(
         "listing-build",
         help="normalize and persist an existing raw batch",
+        description=(
+            "default offline build: normalize and persist an existing raw batch; "
+            "detail enrichment and geocoding are opt-in."
+        ),
     )
     build_parser.add_argument("--batch-dir", default=None)
-    build_parser.add_argument("--geocoder-enabled", action="store_true")
-    build_parser.add_argument("--detail-enrichment-enabled", action="store_true")
-    build_parser.add_argument("--profile-dir", default=None)
-    build_parser.add_argument("--page-timeout", type=int, default=30)
+    build_parser.add_argument(
+        "--geocoder-enabled",
+        action="store_true",
+        help=(
+            "opt in to the official doorplate geocoder; requires "
+            "QINGPU_DATABASE_URL for its persistent MySQL cache"
+        ),
+    )
+    build_parser.add_argument(
+        "--detail-enrichment-enabled",
+        action="store_true",
+        help=(
+            "opt in to visible Chrome newhouse detail enrichment; requires "
+            "--profile-dir"
+        ),
+    )
+    build_parser.add_argument(
+        "--profile-dir",
+        default=None,
+        help="dedicated Chrome user-data directory required by detail enrichment",
+    )
+    build_parser.add_argument(
+        "--page-timeout",
+        type=int,
+        default=30,
+        help="visible Chrome detail-page timeout in seconds (default: 30)",
+    )
 
     sync_parser = subparsers.add_parser(
         "listing-sync",

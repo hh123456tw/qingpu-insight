@@ -234,6 +234,46 @@ newhouse 的 JSON-LD 提供每坪單價 `lowPrice` / `highPrice` 與坪數範圍
 
 請參閱 [docs/m3-listing-methodology.md](docs/m3-listing-methodology.md)。
 
+## M4.1 刊登定位品質 smoke
+
+`listing-build` 預設保留 M3 的本機／Parquet 相容流程：不開 Chrome、不啟用 geocoder，且需要一個已完成（`is_complete=true`）的 raw batch。下列 `$batchDir` 請改成實際完整批次；不要把真實密碼放進指令、文件或 Git。
+
+```powershell
+$batchDir = "data/raw/listings/591/<YYYY-MM-DD>/<complete-batch-id>"
+
+# 預設離線 build（未設定 QINGPU_DATABASE_URL）
+Remove-Item Env:QINGPU_DATABASE_URL -ErrorAction SilentlyContinue
+.\.venv\Scripts\qingpu-data.exe listing-build --batch-dir $batchDir
+
+# 選用：官方門牌精確 geocoder；需 MySQL 作 persistent cache
+$env:QINGPU_DATABASE_URL = "mysql+pymysql://<user>:<password>@127.0.0.1:3306/<database>"
+.\.venv\Scripts\qingpu-data.exe listing-build --batch-dir $batchDir --geocoder-enabled
+
+# 選用：授權的可見 Chrome 預售屋 detail enrichment；可與 geocoder 同次執行
+.\.venv\Scripts\qingpu-data.exe listing-build --batch-dir $batchDir `
+  --detail-enrichment-enabled `
+  --profile-dir "C:\path\to\dedicated-visible-profile" `
+  --page-timeout 30 `
+  --geocoder-enabled
+```
+
+detail enrichment 被 591 驗證頁阻擋時會把 input manifest 標為不完整，本次不會產生 processed／quality 輸出；請先取得新的完整且獲授權 batch 再重試。正常 detail page 沒有精確地址只會留下診斷，不能猜測地址或座標。
+
+在 M4 runtime／jobs 設定 `QINGPU_DATABASE_URL` 時，MySQL 是正式的 runtime source of truth；`listing_snapshots.parquet` 是匯出／重現相容快照，不是 runtime fallback。無 DB 的預設離線命令僅用於保留的本機 M3／Parquet 相容流程。
+
+### Release evidence（本機 gate）
+
+本 task 沒有宣稱已執行真實 591 live acceptance。提交前執行：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_cli.py tests/test_listing_location.py tests/test_listing_repository.py -q
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m ruff check .
+git diff --check
+```
+
+成功 build 的 evidence 為 `outputs/reports/listing-quality.json` 及對應的 processed snapshot；以實際輸出的 `location.eligible`、`location.unknown`、`location.by_method`、`location.by_reason` 和（如有）`detail.detail_address_missing` 驗收，不硬編造資料筆數。完整規則與 rollback 見 [docs/m4-location-methodology.md](docs/m4-location-methodology.md)。
+
 ## 開發
 
 ```powershell

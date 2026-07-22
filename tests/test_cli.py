@@ -57,6 +57,24 @@ def test_listing_build_geocoder_is_opt_in() -> None:
     assert enabled.geocoder_enabled is True
 
 
+def test_listing_build_help_documents_location_quality_controls(capsys) -> None:
+    with pytest.raises(SystemExit) as exc:
+        main(["listing-build", "--help"])
+
+    assert exc.value.code == 0
+    output = capsys.readouterr().out
+    assert "default offline" in output
+    assert "--geocoder-enabled" in output
+    assert "official doorplate geocoder" in output
+    assert "QINGPU_DATABASE_URL" in output
+    assert "--detail-enrichment-enabled" in output
+    assert "visible Chrome" in output
+    assert "--profile-dir" in output
+    assert "dedicated Chrome user-data directory" in output
+    assert "--page-timeout" in output
+    assert "default: 30" in output
+
+
 def test_listing_build_detail_enrichment_is_explicit_and_visible() -> None:
     args = cli.build_parser().parse_args(
         [
