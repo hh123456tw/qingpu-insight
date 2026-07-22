@@ -78,7 +78,8 @@ class MySQLGeocodeCache:
 
     _schema_sql = """
         CREATE TABLE IF NOT EXISTS geocode_cache (
-            normalized_address VARCHAR(512) NOT NULL PRIMARY KEY,
+            normalized_address VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin
+                NOT NULL PRIMARY KEY,
             latitude DOUBLE NOT NULL,
             longitude DOUBLE NOT NULL,
             method VARCHAR(32) NOT NULL,
@@ -194,6 +195,8 @@ class GeocodingService:
             return unknown_location("geocoder_unavailable")
         if coordinates is None:
             return unknown_location("address_not_resolved")
+        if not isinstance(coordinates, tuple) or len(coordinates) != 2:
+            return unknown_location("invalid_geocoder_coordinates")
         latitude, longitude = coordinates
         if not _is_taiwan_coordinate(latitude, longitude):
             return unknown_location("invalid_geocoder_coordinates")
@@ -211,8 +214,13 @@ class GeocodingService:
         self._cache.put(key, evidence)
         return evidence
 
-    def enrich(self, record: dict[str, object]) -> LocationEvidence:
-        return self.resolve(record.get("address", ""))
+    def enrich(self, record: Mapping[str, object] | object) -> LocationEvidence:
+        if not isinstance(record, Mapping):
+            return unknown_location("missing_structured_address")
+        structured_address = record.get("structured_address")
+        if not isinstance(structured_address, str) or not structured_address.strip():
+            return unknown_location("missing_structured_address")
+        return self.resolve(structured_address)
 
 
 def _is_taiwan_coordinate(latitude: object, longitude: object) -> bool:

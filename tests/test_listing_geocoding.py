@@ -18,11 +18,11 @@ from qingpu_insight.location_evidence import LocationEvidence
 
 @dataclass
 class FakeGeocoder:
-    result: tuple[float, float] | None = (25.014, 121.211)
+    result: object = (25.014, 121.211)
     version: str = "fake-v1"
     calls: int = 0
 
-    def resolve(self, normalized_address: str) -> tuple[float, float] | None:
+    def resolve(self, normalized_address: str) -> object:
         self.calls += 1
         return self.result
 
@@ -32,6 +32,13 @@ class FailingGeocoder:
 
     def resolve(self, normalized_address: str) -> tuple[float, float] | None:
         raise GeocoderUnavailable("provider is down")
+
+
+class BrokenGeocoder:
+    version = "fake-v1"
+
+    def resolve(self, normalized_address: str) -> tuple[float, float] | None:
+        raise ValueError("adapter programming error")
 
 
 class MemoryCache:
@@ -91,6 +98,15 @@ def test_provider_error_returns_unknown_without_cache_poison(
     assert mysql_cache.values == {}
 
 
+def test_provider_programming_errors_are_not_hidden(mysql_cache: MemoryCache) -> None:
+    service = GeocodingService(BrokenGeocoder(), mysql_cache)
+
+    with pytest.raises(ValueError, match="adapter programming error"):
+        service.resolve("桃園市中壢區高鐵南路一段1號")
+
+    assert mysql_cache.values == {}
+
+
 def test_unresolved_or_invalid_provider_results_are_unknown_and_not_cached(
     mysql_cache: MemoryCache,
 ) -> None:
@@ -102,6 +118,60 @@ def test_unresolved_or_invalid_provider_results_are_unknown_and_not_cached(
     assert unresolved.reason == "address_not_resolved"
     assert invalid.reason == "invalid_geocoder_coordinates"
     assert mysql_cache.values == {}
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        "25.014,121.211",
+        25.014,
+        (25.014,),
+        (25.014, 121.211, 1.0),
+        ("25.014", 121.211),
+        (True, 121.211),
+        (float("nan"), 121.211),
+        (25.014, float("inf")),
+    ],
+)
+def test_invalid_provider_result_shapes_are_unknown_without_cache_poison(
+    mysql_cache: MemoryCache, result: object
+) -> None:
+    service = GeocodingService(FakeGeocoder(result=result), mysql_cache)
+
+    evidence = service.resolve("高鐵南路一段1號")
+
+    assert evidence.reason == "invalid_geocoder_coordinates"
+    assert mysql_cache.values == {}
+
+
+def test_enrich_uses_task1_structured_address_and_rejects_legacy_address_field(
+    mysql_cache: MemoryCache, fake_geocoder: FakeGeocoder
+) -> None:
+    service = GeocodingService(fake_geocoder, mysql_cache)
+
+    resolved = service.enrich({"structured_address": "桃園市中壢區高鐵南路一段1號"})
+    legacy = service.enrich({"address": "桃園市中壢區高鐵南路一段2號"})
+    missing = service.enrich(None)
+
+    assert resolved.method == "structured_address"
+    assert fake_geocoder.calls == 1
+    assert legacy.reason == "missing_structured_address"
+    assert missing.reason == "missing_structured_address"
+
+
+@pytest.mark.parametrize(
+    "record",
+    [{}, {"structured_address": None}, {"structured_address": 1}, {"structured_address": "  "}],
+)
+def test_enrich_rejects_missing_or_invalid_structured_address(
+    mysql_cache: MemoryCache, record: object
+) -> None:
+    geocoder = FakeGeocoder()
+
+    evidence = GeocodingService(geocoder, mysql_cache).enrich(record)
+
+    assert evidence.reason == "missing_structured_address"
+    assert geocoder.calls == 0
 
 
 def test_doorplate_geocoder_resolves_only_an_unambiguous_exact_address() -> None:
@@ -120,8 +190,30 @@ def test_doorplate_geocoder_resolves_only_an_unambiguous_exact_address() -> None
     assert geocoder.resolve("高鐵南路一段2號") is None
 
 
+def test_doorplate_geocoder_handles_twd97_duplicates_conservatively() -> None:
+    geocoder = DoorplateListingGeocoder(
+        pd.DataFrame(
+            {
+                "normalized_address": [
+                    "高鐵南路一段1號",
+                    "高鐵南路一段1號",
+                    "高鐵南路一段2號",
+                    "高鐵南路一段2號",
+                    "高鐵南路一段3號",
+                ],
+                "twd97_x": [276000.0, 276000.0, 276000.0, 276100.0, float("nan")],
+                "twd97_y": [2767000.0, 2767000.0, 2767000.0, 2767000.0, 2767000.0],
+            }
+        )
+    )
+
+    assert geocoder.resolve("高鐵南路一段1號") is not None
+    assert geocoder.resolve("高鐵南路一段2號") is None
+    assert geocoder.resolve("高鐵南路一段3號") is None
+
+
 class FakeCursor:
-    def __init__(self, row: dict[str, Any] | None = None, fail_insert: bool = False) -> None:
+    def __init__(self, row: object = None, fail_insert: bool = False) -> None:
         self.row = row
         self.fail_insert = fail_insert
         self.executions: list[tuple[str, dict[str, Any] | None]] = []
@@ -133,7 +225,7 @@ class FakeCursor:
             raise RuntimeError("database write failed")
         return 1
 
-    def fetchone(self) -> dict[str, Any] | None:
+    def fetchone(self) -> object:
         return self.row
 
     def close(self) -> None:
@@ -189,6 +281,7 @@ def test_mysql_cache_schema_and_upsert_use_one_committed_transaction() -> None:
     schema_sql = schema_connection.cursor_instance.executions[0][0]
     upsert_sql, upsert_params = put_connection.cursor_instance.executions[0]
     assert "CREATE TABLE IF NOT EXISTS geocode_cache" in schema_sql
+    assert "VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin" in schema_sql
     assert "DATETIME(6)" in schema_sql
     assert "ON DUPLICATE KEY UPDATE" in upsert_sql
     assert upsert_params is not None
@@ -229,6 +322,25 @@ def test_mysql_cache_roundtrip_restores_aware_utc_and_rejects_untrusted_rows() -
     assert untrusted == [None, None, None]
     assert valid_connection.closed
     assert all(connection.closed for connection in invalid_connections)
+
+
+def test_mysql_cache_reads_tuple_rows() -> None:
+    tuple_row = (
+        25.014,
+        121.211,
+        "structured_address",
+        "medium",
+        "address_resolved",
+        datetime(2026, 7, 22, 8, 30),
+        "doorplate-v1",
+    )
+    connection = FakeConnection(FakeCursor(tuple_row))
+
+    evidence = MySQLGeocodeCache(lambda: connection).get("高鐵南路一段1號")
+
+    assert evidence is not None
+    assert evidence.method == "structured_address"
+    assert evidence.geocoded_at == datetime(2026, 7, 22, 8, 30, tzinfo=UTC)
 
 
 def test_mysql_cache_rolls_back_and_propagates_write_errors() -> None:
