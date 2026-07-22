@@ -491,6 +491,36 @@ class TestParquetRepositorySpecific:
         expected = snapshots_dir / f"{complete_batch.batch_id}.parquet"
         assert expected.exists()
 
+    @pytest.mark.parametrize(
+        "batch_id",
+        ["../../escaped", r"C:\\escaped", r"\\\\server\\share", "a/b", "a\\b", "", "x" * 65],
+    )
+    def test_unsafe_batch_id_cannot_escape_snapshot_directory(
+        self, parquet_repository, complete_batch, normalized_rows, batch_id
+    ):
+        batch = CaptureBatch(
+            batch_id=batch_id,
+            source=complete_batch.source,
+            listing_type=complete_batch.listing_type,
+            started_at=complete_batch.started_at,
+        )
+        with pytest.raises(ValueError, match="batch_id"):
+            parquet_repository.save_batch(batch, normalized_rows.iloc[[0]])
+        assert not list(parquet_repository.base_path.parent.glob("escaped*.parquet"))
+
+    def test_parquet_canonicalizes_invalid_location_method(
+        self, parquet_repository, complete_batch, normalized_rows
+    ):
+        rows = normalized_rows.iloc[[0]].copy()
+        rows["location_method"] = "forged"
+        rows["location_confidence"] = "high"
+        rows["location_reason"] = "eligible_source_coordinates"
+        parquet_repository.save_batch(complete_batch, rows)
+        stored = parquet_repository.load_current().iloc[0]
+        assert stored["location_method"] == "unknown"
+        assert stored["location_confidence"] == "unknown"
+        assert stored["location_reason"] == "invalid_location_method"
+
     def test_no_tmp_file_left_behind(
         self, parquet_repository, complete_batch, normalized_rows,
     ):
@@ -524,6 +554,28 @@ class TestParquetRepositorySpecific:
     def test_empty_load_snapshots(self, parquet_repository):
         df = parquet_repository.load_snapshots(batch_id="nonexistent")
         assert len(df) == 0
+
+    def test_location_provenance_round_trips_through_parquet(
+        self, parquet_repository, complete_batch, normalized_rows
+    ):
+        rows = normalized_rows.iloc[[0]].copy()
+        rows["structured_address"] = "桃園市中壢區高鐵南路一段1號"
+        rows["address_source_url"] = "https://newhouse.591.com.tw/home/1"
+        rows["address_observed_at"] = pd.Timestamp("2026-07-21T12:00:00Z")
+        rows["location_method"] = "structured_address"
+        rows["location_confidence"] = "medium"
+        rows["location_reason"] = "eligible_structured_address"
+        rows["geocoded_at"] = pd.Timestamp("2026-07-21T12:01:00Z")
+        rows["geocoder_version"] = "doorplate-v1"
+
+        parquet_repository.save_batch(complete_batch, rows)
+        loaded = parquet_repository.load_current().iloc[0]
+
+        assert loaded["structured_address"] == "桃園市中壢區高鐵南路一段1號"
+        assert loaded["location_method"] == "structured_address"
+        assert loaded["location_confidence"] == "medium"
+        assert loaded["location_reason"] == "eligible_structured_address"
+        assert loaded["geocoder_version"] == "doorplate-v1"
 
     def test_mixed_legacy_and_new_schema_normalizes_absent_metadata(
         self, parquet_repository, complete_batch, normalized_rows,
@@ -711,6 +763,14 @@ class TestMySQLRepositoryActualAdapter:
             "building_area_max_ping",
             "acquisition_representation",
             "acquisition_schema_version",
+            "structured_address",
+            "address_source_url",
+            "address_observed_at",
+            "location_method",
+            "location_confidence",
+            "location_reason",
+            "geocoded_at",
+            "geocoder_version",
         }
         for table in ("listing_snapshots", "listing_current"):
             assert expected_columns <= connection.schemas[table].keys()
@@ -721,8 +781,17 @@ class TestMySQLRepositoryActualAdapter:
                 definition = connection.schemas[table][metadata_column]
                 assert definition["nullable"] is False
                 assert definition["default"] == "unknown"
-                assert connection.rows[table][0][metadata_column] == "unknown"
-        assert first_add_count == 12
+            assert connection.rows[table][0][metadata_column] == "unknown"
+            for provenance_column in (
+                "location_method",
+                "location_confidence",
+                "location_reason",
+            ):
+                definition = connection.schemas[table][provenance_column]
+                assert definition["nullable"] is False
+                assert definition["default"] == "unknown"
+                assert connection.rows[table][0][provenance_column] == "unknown"
+        assert first_add_count == 28
         assert second_add_count == first_add_count
 
     def test_additive_range_migration_exists_and_backfills_metadata(self):
@@ -748,6 +817,14 @@ class TestMySQLRepositoryActualAdapter:
         rows["consecutive_absences"] = [0, 2]
         rows["last_seen_batch_id"] = [complete_batch.batch_id, "batch-previous"]
         rows["model_evidence"] = [None, '{"model_version":"v1"}']
+        rows["structured_address"] = ["桃園市中壢區高鐵南路一段1號", None]
+        rows["address_source_url"] = ["https://newhouse.591.com.tw/home/1", None]
+        rows["address_observed_at"] = [pd.Timestamp("2026-07-21T12:00:00Z"), pd.NaT]
+        rows["location_method"] = ["structured_address", "unknown"]
+        rows["location_confidence"] = ["medium", "unknown"]
+        rows["location_reason"] = ["eligible_structured_address", "missing_coordinates"]
+        rows["geocoded_at"] = [pd.Timestamp("2026-07-21T12:01:00Z"), pd.NaT]
+        rows["geocoder_version"] = ["fake-v1", None]
 
         repository.save_batch(complete_batch, rows)
 
@@ -771,6 +848,14 @@ class TestMySQLRepositoryActualAdapter:
             "building_area_max_ping",
             "acquisition_representation",
             "acquisition_schema_version",
+            "structured_address",
+            "address_source_url",
+            "address_observed_at",
+            "location_method",
+            "location_confidence",
+            "location_reason",
+            "geocoded_at",
+            "geocoder_version",
         ):
             assert column in sql
             assert column in params
@@ -793,6 +878,14 @@ class TestMySQLRepositoryActualAdapter:
             "building_area_max_ping",
             "acquisition_representation",
             "acquisition_schema_version",
+            "structured_address",
+            "address_source_url",
+            "address_observed_at",
+            "location_method",
+            "location_confidence",
+            "location_reason",
+            "geocoded_at",
+            "geocoder_version",
         ):
             assert column in snapshot_sql
             assert column in snapshot_params
@@ -804,6 +897,27 @@ class TestMySQLRepositoryActualAdapter:
         assert range_params["building_area_max_ping"] == 30.0
         assert range_params["acquisition_representation"] == "jsonld"
         assert range_params["acquisition_schema_version"] == "591-newhouse-jsonld-v1"
+
+    def test_mysql_canonicalizes_invalid_location_method(
+        self, complete_batch, normalized_rows
+    ):
+        connection = RecordingConnection()
+        repository = MySQLListingRepository(connection)
+        rows = normalized_rows.iloc[[0]].copy()
+        rows["location_method"] = "forged"
+        rows["location_confidence"] = "high"
+        rows["location_reason"] = "eligible_source_coordinates"
+
+        repository.save_batch(complete_batch, rows)
+
+        inserts = [
+            params
+            for sql, params in connection.executions
+            if sql.lstrip().startswith("INSERT INTO listing_current")
+        ]
+        assert inserts[0]["location_method"] == "unknown"
+        assert inserts[0]["location_confidence"] == "unknown"
+        assert inserts[0]["location_reason"] == "invalid_location_method"
 
     def test_runtime_and_migration_schemas_define_range_and_acquisition_columns(self):
         migration_sql = (

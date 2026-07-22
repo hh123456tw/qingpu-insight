@@ -1,10 +1,14 @@
 import argparse
 import json
 import os
+import re
 import sys
+import tempfile
 import urllib.parse
 from collections import Counter
 from datetime import UTC, datetime
+from math import isfinite
+from numbers import Real
 from pathlib import Path
 
 import joblib
@@ -27,17 +31,28 @@ from qingpu_insight.listing_591 import (
     SourceListing,
     extract_rendered_page,
 )
-from qingpu_insight.listing_capture import ChromeConfig, Selenium591Source
+from qingpu_insight.listing_capture import ChromeConfig, Selenium591Source, create_chrome
+from qingpu_insight.listing_detail_enrichment import (
+    DetailEnrichmentBlocked,
+    ListingDetailEnricher,
+)
 from qingpu_insight.listing_events import detect_listing_events
+from qingpu_insight.listing_geocoding import (
+    DoorplateListingGeocoder,
+    GeocodingService,
+    MySQLGeocodeCache,
+)
 from qingpu_insight.listing_location import assign_listing_life_circle
 from qingpu_insight.listing_normalization import NormalizedListing, normalize_listing
 from qingpu_insight.listing_repository import (
     ListingRepository,
     MySQLListingRepository,
     ParquetListingRepository,
+    valid_listing_batch_id,
 )
 from qingpu_insight.listing_sources import CaptureBatch, ListingSource
 from qingpu_insight.listing_valuation import compare_listing_to_model
+from qingpu_insight.location_evidence import LocationEvidence
 from qingpu_insight.market_cleaning import build_market_dataset
 from qingpu_insight.model_features import build_model_frame
 from qingpu_insight.model_training import (
@@ -62,6 +77,12 @@ SOURCES = (
     "https://www.tymetro.com.tw/tymetro-new/tw/_pages/travel-guide/A17",
     "https://www.tymetro.com.tw/tymetro-new/tw/_pages/travel-guide/A18",
     "https://www.tymetro.com.tw/tymetro-new/tw/_pages/travel-guide/A19",
+)
+
+_CONTACT_PATTERNS = (
+    re.compile(r"(?<![\w.+-])[\w.+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?!\w)"),
+    re.compile(r"(?<!\d)09\d{2}(?:[-\s]?\d{3}){2}(?!\d)"),
+    re.compile(r"(?<!\d)0[2-8](?:[-\s]?\d){7,8}(?!\d)"),
 )
 
 
@@ -258,27 +279,37 @@ def create_listing_source(
     return Selenium591Source(base_dir=root, config=config or ChromeConfig())
 
 
-def create_listing_repository(root: Path) -> ListingRepository:
+def create_mysql_connection_factory():
     database_url = os.environ.get("QINGPU_DATABASE_URL")
-    if database_url:
-        parsed = urllib.parse.urlparse(database_url)
-        if parsed.scheme not in ("mysql", "mysql+pymysql"):
-            raise ValueError(
-                f"Unsupported scheme: {parsed.scheme!r}; "
-                "expected 'mysql' or 'mysql+pymysql'"
-            )
-        database = parsed.path.lstrip("/")
-        if not database:
-            raise ValueError("QINGPU_DATABASE_URL must include a database name")
-        connection = pymysql.connect(
-            host=parsed.hostname or "localhost",
-            port=parsed.port or 3306,
-            user=urllib.parse.unquote(parsed.username or ""),
-            password=urllib.parse.unquote(parsed.password or ""),
-            database=database,
-            charset="utf8mb4",
+    if not database_url:
+        raise ValueError("QINGPU_DATABASE_URL is required for persistent geocoding")
+    parsed = urllib.parse.urlparse(database_url)
+    if parsed.scheme not in ("mysql", "mysql+pymysql"):
+        raise ValueError(
+            f"Unsupported scheme: {parsed.scheme!r}; "
+            "expected 'mysql' or 'mysql+pymysql'"
         )
-        return MySQLListingRepository(connection)
+    if parsed.query:
+        raise ValueError("unsupported database URL query parameters")
+    if parsed.fragment:
+        raise ValueError("database URL fragment is not supported")
+    database = parsed.path.lstrip("/")
+    if not database:
+        raise ValueError("QINGPU_DATABASE_URL must include a database name")
+    kwargs = {
+        "host": parsed.hostname or "localhost",
+        "port": parsed.port or 3306,
+        "user": urllib.parse.unquote(parsed.username or ""),
+        "password": urllib.parse.unquote(parsed.password or ""),
+        "database": database,
+        "charset": "utf8mb4",
+    }
+    return lambda: pymysql.connect(**kwargs)
+
+
+def create_listing_repository(root: Path) -> ListingRepository:
+    if os.environ.get("QINGPU_DATABASE_URL"):
+        return MySQLListingRepository(create_mysql_connection_factory()())
     return ParquetListingRepository(root / "data" / "processed")
 
 
@@ -310,10 +341,169 @@ def _normalized_to_rows(normalized: list[NormalizedListing]) -> list[dict]:
             "parking_type": n.parking_type,
             "latitude": n.latitude,
             "longitude": n.longitude,
+            "structured_address": n.structured_address,
+            "address_source_url": n.address_source_url,
+            "address_observed_at": n.address_observed_at,
+            "location_method": n.location_method,
+            "location_confidence": n.location_confidence,
+            "location_reason": n.location_reason,
+            "geocoded_at": n.geocoded_at,
+            "geocoder_version": n.geocoder_version,
             "raw_hash": n.raw_hash,
         }
         for n in normalized
     ]
+
+
+def _enrich_rows_with_geocoder(rows: pd.DataFrame, geocoder) -> pd.DataFrame:
+    """Apply structured-address evidence only to unresolved rows.
+
+    Source coordinates are immutable provenance: they are intentionally not
+    passed to the geocoder even when an address is also available.
+    """
+    enriched = rows.copy()
+    required = {"location_method", "structured_address"}
+    if enriched.empty or not required.issubset(enriched.columns):
+        return enriched
+    candidates = enriched.index[
+        enriched["location_method"].eq("unknown")
+        & enriched["structured_address"].map(
+            lambda address: isinstance(address, str) and bool(address.strip())
+        )
+    ]
+    for index in candidates:
+        evidence: LocationEvidence = geocoder.enrich(enriched.loc[index].to_dict())
+        enriched.at[index, "latitude"] = evidence.latitude
+        enriched.at[index, "longitude"] = evidence.longitude
+        enriched.at[index, "location_method"] = evidence.method
+        enriched.at[index, "location_confidence"] = evidence.confidence
+        enriched.at[index, "location_reason"] = evidence.reason
+        enriched.at[index, "geocoded_at"] = evidence.geocoded_at
+        enriched.at[index, "geocoder_version"] = evidence.geocoder_version
+    return enriched
+
+
+def _json_safe_location_value(value: object) -> str:
+    if value is None or (not isinstance(value, (list, dict)) and pd.isna(value)):
+        return "null"
+    if isinstance(value, (str, int, float, bool)):
+        return str(value)
+    return str(value)
+
+
+def _listing_location_quality(rows: pd.DataFrame) -> dict[str, object]:
+    def counts(column: str) -> dict[str, int]:
+        if column not in rows:
+            return {}
+        values = rows[column].value_counts(dropna=False)
+        return {
+            _json_safe_location_value(key): int(value)
+            for key, value in sorted(
+                values.items(), key=lambda item: _json_safe_location_value(item[0])
+            )
+        }
+
+    eligible = (
+        int(rows["location_eligible"].eq(True).sum())
+        if "location_eligible" in rows
+        else 0
+    )
+    unknown = (
+        int(rows["location_method"].eq("unknown").sum())
+        if "location_method" in rows
+        else 0
+    )
+    return {
+        "location": {
+            "eligible": eligible,
+            "unknown": unknown,
+            "by_method": counts("location_method"),
+            "by_reason": counts("location_reason"),
+        }
+    }
+
+
+def _write_listing_location_quality(
+    root: Path, rows: pd.DataFrame, *, diagnostics: dict[str, int] | None = None
+) -> None:
+    path = root / "outputs" / "reports" / "listing-quality.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    quality = _listing_location_quality(rows)
+    if diagnostics:
+        quality["detail"] = {
+            str(reason): int(count) for reason, count in sorted(diagnostics.items())
+        }
+    payload = json.dumps(quality, ensure_ascii=False, indent=2, sort_keys=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+            temporary = Path(handle.name)
+        temporary.replace(path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def _contact_shaped_title_count(rows: pd.DataFrame) -> int:
+    """Count rows whose public free-text title resembles phone or email data."""
+    if "title" not in rows:
+        return 0
+    count = 0
+    for value in rows["title"]:
+        if not isinstance(value, str):
+            continue
+        if any(pattern.search(value) for pattern in _CONTACT_PATTERNS):
+            count += 1
+    return count
+
+
+def _restore_quality_artifact(path: Path, previous: bytes | None) -> None:
+    if previous is None:
+        path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(previous)
+
+
+def create_listing_geocoding_service(
+    doorplates: pd.DataFrame, connection_factory=None
+) -> GeocodingService:
+    """Create the only default geocoder: local official doorplate evidence.
+
+    It is deliberately local and must be called explicitly by
+    ``listing-build --geocoder-enabled``; no browser, secret, or network is
+    implicitly configured for offline builds.
+    """
+    if connection_factory is None:
+        raise ValueError("QINGPU_DATABASE_URL is required for persistent geocoding")
+    cache = MySQLGeocodeCache(connection_factory)
+    cache.ensure_schema()
+    return GeocodingService(DoorplateListingGeocoder(doorplates), cache)
+
+
+def create_listing_detail_enricher(args) -> ListingDetailEnricher:
+    if args.page_timeout < 1:
+        raise ValueError("page-timeout 必須 >= 1")
+    if not args.profile_dir:
+        raise ValueError("detail enrichment requires --profile-dir")
+    return ListingDetailEnricher(
+        browser_factory=create_chrome,
+        chrome_config=ChromeConfig(
+            headless=False,
+            profile_dir=args.profile_dir,
+            page_timeout_seconds=args.page_timeout,
+        ),
+    )
 
 
 def _source_listings_from_extraction(
@@ -433,8 +623,7 @@ def _valid_listing_build_manifest(manifest: object) -> bool:
     if not isinstance(manifest, dict):
         return False
     if (
-        not isinstance(manifest.get("batch_id"), str)
-        or not manifest["batch_id"]
+        not valid_listing_batch_id(manifest.get("batch_id"))
         or manifest.get("listing_type") not in listing_type_choices
         or not isinstance(manifest.get("started_at"), str)
         or not manifest["started_at"]
@@ -467,7 +656,74 @@ def _valid_listing_build_manifest(manifest: object) -> bool:
     return True
 
 
-def listing_build(root: Path, args) -> int:
+def _has_valid_source_coordinates(listing: SourceListing) -> bool:
+    latitude = listing.payload.get("lat")
+    longitude = listing.payload.get("lng")
+    return (
+        isinstance(latitude, Real)
+        and not isinstance(latitude, bool)
+        and isinstance(longitude, Real)
+        and not isinstance(longitude, bool)
+        and isfinite(float(latitude))
+        and isfinite(float(longitude))
+        and 20.0 < float(latitude) < 30.0
+        and 115.0 < float(longitude) < 125.0
+    )
+
+
+def _enrich_newhouse_details(
+    listings: list[SourceListing], batch_root: Path, detail_enricher
+) -> tuple[list[SourceListing], dict[str, int]]:
+    """Use an explicitly injected visible-browser enricher before normalize.
+
+    Offline builds call this only when their caller has supplied the concrete
+    browser-backed component.  It never constructs Chrome on its own.
+    """
+    enriched: list[SourceListing] = []
+    diagnostics: Counter[str] = Counter()
+    for listing in listings:
+        if listing.listing_type != "newhouse" or _has_valid_source_coordinates(listing):
+            enriched.append(listing)
+            continue
+        result = detail_enricher.enrich(listing, batch_root)
+        address = result.payload.get("structured_address")
+        if not isinstance(address, str) or not address.strip():
+            diagnostics["detail_address_missing"] += 1
+        enriched.append(result)
+    return enriched, dict(diagnostics)
+
+
+def _mark_detail_blocked(manifest_path: Path, reason: str) -> None:
+    _mark_listing_manifest_incomplete(
+        manifest_path, "detail_enrichment_blocked", reason
+    )
+
+
+def _mark_listing_manifest_incomplete(
+    manifest_path: Path, code: str, message: str
+) -> None:
+    manifest = _load_listing_manifest(manifest_path)
+    if not isinstance(manifest, dict):
+        return
+    errors = manifest.get("errors")
+    manifest["errors"] = errors if isinstance(errors, list) else []
+    manifest["errors"].append(
+        {
+            "page_number": 0,
+            "code": code,
+            "message": message,
+        }
+    )
+    manifest["is_complete"] = False
+    manifest["reached_terminal_page"] = False
+    temporary = manifest_path.with_suffix(".json.tmp")
+    temporary.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    temporary.replace(manifest_path)
+
+
+def listing_build(root: Path, args, *, detail_enricher=None) -> int:
     doorplates_path = root / "data" / "raw" / "doorplates.csv"
     if not doorplates_path.exists():
         print(
@@ -551,12 +807,53 @@ def listing_build(root: Path, args) -> int:
         print("批次中無有效 listing 資料。", file=sys.stderr)
         return 1
 
+    source_listings = list(listings_map.values())
+    detail_diagnostics: dict[str, int] = {}
+    if detail_enricher is not None:
+        try:
+            source_listings, detail_diagnostics = _enrich_newhouse_details(
+                source_listings, batch_root, detail_enricher
+            )
+        except DetailEnrichmentBlocked as exc:
+            _mark_detail_blocked(manifest_path, str(exc))
+            print(f"detail enrichment blocked: {exc}", file=sys.stderr)
+            return 1
+        if detail_diagnostics:
+            print(
+                " ".join(
+                    f"{reason}={count}"
+                    for reason, count in sorted(detail_diagnostics.items())
+                )
+            )
+
     normalized = [
-        normalize_listing(sl, started_at) for sl in listings_map.values()
+        normalize_listing(sl, started_at) for sl in source_listings
     ]
     rows = _normalized_to_rows(normalized)
     df = pd.DataFrame(rows)
+    if args.geocoder_enabled:
+        try:
+            geocoding_service = create_listing_geocoding_service(
+                doorplates, create_mysql_connection_factory()
+            )
+        except (OSError, ValueError, pymysql.MySQLError) as exc:
+            print(f"無法啟用官方門牌 geocoder: {exc}", file=sys.stderr)
+            return 1
+        df = _enrich_rows_with_geocoder(df, geocoding_service)
     located = assign_listing_life_circle(df, stations, settings.radius_m)
+
+    privacy_violations = _contact_shaped_title_count(located)
+    if privacy_violations:
+        _mark_listing_manifest_incomplete(
+            manifest_path,
+            "privacy_gate_failed",
+            f"contact-shaped title count: {privacy_violations}",
+        )
+        print(
+            f"privacy gate blocked {privacy_violations} listing title(s)",
+            file=sys.stderr,
+        )
+        return 1
 
     batch = CaptureBatch(
         batch_id=batch_id,
@@ -567,13 +864,26 @@ def listing_build(root: Path, args) -> int:
             manifest.get("reached_terminal_page", manifest["is_complete"])
         ),
     )
-    repo = create_listing_repository(root)
-    repo.save_batch(batch, located)
-    all_snapshots = repo.load_snapshots()
-    if not all_snapshots.empty:
-        snapshots_path = root / "data" / "processed" / "listing_snapshots.parquet"
-        snapshots_path.parent.mkdir(parents=True, exist_ok=True)
-        all_snapshots.to_parquet(snapshots_path, index=False)
+    quality_path = root / "outputs" / "reports" / "listing-quality.json"
+    previous_quality = quality_path.read_bytes() if quality_path.exists() else None
+    _write_listing_location_quality(root, located, diagnostics=detail_diagnostics)
+    try:
+        repo = create_listing_repository(root)
+        repo.save_batch(batch, located)
+    except Exception:
+        _restore_quality_artifact(quality_path, previous_quality)
+        raise
+    try:
+        all_snapshots = repo.load_snapshots()
+        if not all_snapshots.empty:
+            snapshots_path = root / "data" / "processed" / "listing_snapshots.parquet"
+            snapshots_path.parent.mkdir(parents=True, exist_ok=True)
+            all_snapshots.to_parquet(snapshots_path, index=False)
+    except (OSError, ValueError, ImportError, pymysql.MySQLError) as exc:
+        print(
+            f"listing compatibility export failed after repository publish: {exc}",
+            file=sys.stderr,
+        )
     print(f"已儲存 {len(located)} 筆 listing 資料至批次 {batch_id}")
     return 0
 
@@ -735,6 +1045,16 @@ def listing_sync(root: Path, args) -> int:
                         file=sys.stderr,
                     )
 
+        privacy_violations = _contact_shaped_title_count(located)
+        if privacy_violations:
+            print(
+                f"[{listing_type}] privacy gate blocked "
+                f"{privacy_violations} listing title(s)",
+                file=sys.stderr,
+            )
+            exit_code = 1
+            continue
+
         repo.save_batch(batch, located)
 
     all_snapshots = repo.load_snapshots()
@@ -781,8 +1101,39 @@ def build_parser() -> argparse.ArgumentParser:
     build_parser = subparsers.add_parser(
         "listing-build",
         help="normalize and persist an existing raw batch",
+        description=(
+            "default offline build: normalize and persist an existing raw batch; "
+            "detail enrichment and geocoding are opt-in."
+        ),
     )
     build_parser.add_argument("--batch-dir", default=None)
+    build_parser.add_argument(
+        "--geocoder-enabled",
+        action="store_true",
+        help=(
+            "opt in to the official doorplate geocoder; requires "
+            "QINGPU_DATABASE_URL for its persistent MySQL cache"
+        ),
+    )
+    build_parser.add_argument(
+        "--detail-enrichment-enabled",
+        action="store_true",
+        help=(
+            "opt in to visible Chrome newhouse detail enrichment; requires "
+            "--profile-dir"
+        ),
+    )
+    build_parser.add_argument(
+        "--profile-dir",
+        default=None,
+        help="dedicated Chrome user-data directory required by detail enrichment",
+    )
+    build_parser.add_argument(
+        "--page-timeout",
+        type=int,
+        default=30,
+        help="visible Chrome detail-page timeout in seconds (default: 30)",
+    )
 
     sync_parser = subparsers.add_parser(
         "listing-sync",
@@ -815,7 +1166,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "listing-scrape":
         return listing_scrape(root, args)
     if args.command == "listing-build":
-        return listing_build(root, args)
+        detail_enricher = None
+        if args.detail_enrichment_enabled:
+            try:
+                detail_enricher = create_listing_detail_enricher(args)
+            except ValueError as exc:
+                print(f"無法啟用 detail enrichment: {exc}", file=sys.stderr)
+                return 1
+        return listing_build(root, args, detail_enricher=detail_enricher)
     if args.command == "listing-sync":
         return listing_sync(root, args)
     return 0

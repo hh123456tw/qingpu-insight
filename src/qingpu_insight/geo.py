@@ -16,10 +16,22 @@ def station_points(stations: tuple[Station, ...], doorplates: pd.DataFrame) -> p
         }
     )
     located = match_addresses(source, doorplates)
-    assignable = located["twd97_x"].notna()
+    station_x = pd.to_numeric(located["twd97_x"], errors="coerce")
+    station_y = pd.to_numeric(located["twd97_y"], errors="coerce")
+    finite_coordinates = pd.Series(
+        np.isfinite(station_x.to_numpy(dtype=float))
+        & np.isfinite(station_y.to_numpy(dtype=float)),
+        index=located.index,
+    )
+    assignable = (
+        located["match_quality"].eq("exact")
+        & finite_coordinates
+    )
     if not assignable.all():
-        missing = located.loc[~assignable, "station_code"].tolist()
-        raise ValueError(f"station addresses could not be located at all: {missing}")
+        invalid = located.loc[~assignable, "station_code"].tolist()
+        raise ValueError(
+            f"station addresses require exact official doorplate matches: {invalid}"
+        )
     return located[["station_code", "station_name", "twd97_x", "twd97_y"]]
 
 

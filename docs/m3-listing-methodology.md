@@ -20,7 +20,7 @@ M3 刊登資訊（Listing Intelligence）模組為青埔智價新增即時房源
 
 ### 授權假設
 
-M3 只瀏覽使用者獲准存取的 591 公開頁面，不呼叫私人端點，也不繞過驗證。可見 Chrome 是預設值；`--headless` 僅為 best-effort。若獲准頁面需要既有瀏覽器狀態，可用 `--profile-dir <path>` 將本機 Chrome user-data 目錄交給 Selenium；請使用專用且未被其他 Chrome 程序占用的目錄。帳號、密碼、Cookie 或聯絡欄位不進入 manifest、結構化快照或 API，密碼也不得出現在命令列；本機 raw HTML 可能重現公開頁面文字，必須留在忽略路徑並依資料保留政策刪除。
+M3 只瀏覽使用者獲准存取的 591 公開頁面，不呼叫私人端點，也不繞過驗證。可見 Chrome 是預設值；`--headless` 僅為 best-effort。若獲准頁面需要既有瀏覽器狀態，可用 `--profile-dir <path>` 將本機 Chrome user-data 目錄交給 Selenium；請使用專用且未被其他 Chrome 程序占用的目錄。流程不刻意抽取帳號、密碼、Cookie 或專用聯絡欄位，密碼也不得出現在命令列；但 title 等 free text 與本機 raw HTML 仍可能含 contact-shaped text。發布 snapshot 或 API 前必須經偵測／清理 gate；raw HTML 與 profile 必須留在本機忽略路徑並依資料保留政策刪除／保護。
 
 公開桃園路由：
 
@@ -188,9 +188,9 @@ Listing valuation（`listing_valuation.py`）在 M2 模型可用時，可為 sal
 
 ## 9. 隱私規範
 
-1. **不儲存** 591 帳號、密碼、Cookie、Session Token
-2. manifest、結構化快照與 API **不保留** 聯絡人姓名、電話、Email 欄位；本機 raw HTML 仍可能包含公開頁面文字
-3. **不儲存** 原始 HTML 在 Git 追蹤路徑內（`data/raw/listings/` 已排除）
+1. **不刻意抽取** 591 帳號、密碼、Cookie、Session Token 或專用聯絡欄位；結構化 schema 沒有專用 contact fields
+2. title 等 free text 與本機 raw HTML 仍可能含 contact-shaped text；發布 snapshot 或 API 前必須通過偵測／清理 gate，否則不得保證姓名、電話或 Email 不會出現在結構化輸出
+3. **不儲存** 原始 HTML 在 Git 追蹤路徑內（`data/raw/listings/` 已排除）；Chrome profile 也必須留在本機忽略位置
 4. **公開 API** 只回傳 `public_listings()` 定義的欄位，不包含內部 `raw_hash`、`batch_id` 等
 5. `listing_metrics.py` 中的 `public_listings()` 已過濾掉所有非公開欄位
 6. 座標經 `_round_coord()` 四捨五入至小數四位
