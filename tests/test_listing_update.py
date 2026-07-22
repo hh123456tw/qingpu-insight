@@ -86,8 +86,11 @@ class MemoryJobRepository:
 
 
 class FakeLock:
-    def __init__(self, *, available: bool = True) -> None:
+    def __init__(
+        self, *, available: bool = True, set_owner_error: Exception | None = None
+    ) -> None:
         self.available = available
+        self.set_owner_error = set_owner_error
         self.owner: tuple[str, str] | None = None
         self.released = False
         self.release_calls = 0
@@ -96,6 +99,8 @@ class FakeLock:
         return self.available
 
     def set_owner(self, idempotency_key: str, run_id: str) -> None:
+        if self.set_owner_error is not None:
+            raise self.set_owner_error
         self.owner = (idempotency_key, run_id)
 
     def read_owner(self) -> tuple[str, str] | None:
@@ -239,8 +244,20 @@ def make_service(tmp_path: Path, *, lock: FakeLock | None = None):
 def start_submission(service, job_service, request):
     submission = service.submit(request)
     assert submission.created is True
+    executor = DeferredExecutor()
+    service.handoff(submission, request, executor)
     job_service.start(submission.run.run_id)
     return submission
+
+
+class DeferredExecutor:
+    def __init__(self) -> None:
+        self.future: Future[None] = Future()
+        self.callable = None
+
+    def submit(self, run_id, callable):
+        self.callable = callable
+        return self.future
 
 
 def test_submit_preserves_created_semantics_and_duplicate_is_not_executed(
@@ -275,26 +292,31 @@ def test_trigger_is_part_of_active_idempotency_identity(tmp_path: Path) -> None:
     assert repository.create_calls == 2
 
 
-def test_execute_running_requires_executor_owned_running_state(tmp_path: Path) -> None:
+def test_execute_running_requires_handed_off_reservation(tmp_path: Path) -> None:
     service, _, repository, _, _, _ = make_service(tmp_path)
-    request = listing_update.ListingUpdateRequest(types=("sale",), max_pages=1)
-    submission = service.submit(request)
-
-    with pytest.raises(listing_update.ListingUpdateError, match="must already be running"):
-        service.execute_running(submission.run.run_id, request)
-
-    assert repository.transitions == []
-
-
-def test_pending_invocation_releases_reservation_exactly_once(tmp_path: Path) -> None:
-    service, _, _, _, _, lock = make_service(tmp_path)
     request = listing_update.ListingUpdateRequest(types=("sale",), max_pages=1)
     submission = service.submit(request)
 
     with pytest.raises(listing_update.ListingUpdateError) as caught:
         service.execute_running(submission.run.run_id, request)
 
+    assert caught.value.error_code == "execution_not_owned"
+    assert repository.transitions == []
+
+
+def test_pending_invocation_releases_reservation_exactly_once(tmp_path: Path) -> None:
+    service, job_service, _, _, _, lock = make_service(tmp_path)
+    request = listing_update.ListingUpdateRequest(types=("sale",), max_pages=1)
+    submission = service.submit(request)
+    service.handoff(submission, request, DeferredExecutor())
+
+    with pytest.raises(listing_update.ListingUpdateError) as caught:
+        service.execute_running(submission.run.run_id, request)
+
     assert caught.value.error_code == "invalid_job_state"
+    failed = job_service.get(submission.run.run_id)
+    assert failed is not None and failed.status == "failed"
+    assert failed.error_code == "startup_failed"
     assert lock.release_calls == 1
     with pytest.raises(listing_update.ListingUpdateError) as second:
         service.execute_running(submission.run.run_id, request)
@@ -305,8 +327,7 @@ def test_pending_invocation_releases_reservation_exactly_once(tmp_path: Path) ->
 def test_initial_job_lookup_failure_releases_reservation(tmp_path: Path) -> None:
     service, job_service, repository, _, _, lock = make_service(tmp_path)
     request = listing_update.ListingUpdateRequest(types=("sale",), max_pages=1)
-    submission = service.submit(request)
-    job_service.start(submission.run.run_id)
+    submission = start_submission(service, job_service, request)
     original_get = repository.get
     failures_remaining = 1
 
@@ -367,8 +388,98 @@ def test_handoff_failed_start_releases_pending_reservation(tmp_path: Path) -> No
     future = service.handoff(submission, request, FailedStartExecutor())
 
     assert isinstance(future.exception(), RuntimeError)
-    pending = job_service.get(submission.run.run_id)
-    assert pending is not None and pending.status == "pending"
+    failed = job_service.get(submission.run.run_id)
+    assert failed is not None and failed.status == "failed"
+    assert failed.error_code == "startup_failed"
+    assert lock.release_calls == 1
+
+
+def test_set_owner_failure_terminalizes_created_pending_run(tmp_path: Path) -> None:
+    lock = FakeLock(set_owner_error=RuntimeError("owner metadata write failed"))
+    service, job_service, repository, _, _, _ = make_service(tmp_path, lock=lock)
+
+    with pytest.raises(listing_update.ListingUpdateError) as caught:
+        service.submit(listing_update.ListingUpdateRequest(types=("sale",)))
+
+    assert caught.value.error_code == "startup_failed"
+    assert len(repository.runs) == 1
+    failed = next(iter(repository.runs.values()))
+    assert failed.status == "failed"
+    assert failed.error_code == "startup_failed"
+    assert job_service.get(failed.run_id) == failed
+    assert lock.release_calls == 1
+
+
+def test_transient_start_failure_is_retried_and_terminalized(tmp_path: Path) -> None:
+    service, job_service, _, _, _, lock = make_service(tmp_path)
+    request = listing_update.ListingUpdateRequest(types=("sale",), max_pages=1)
+    submission = service.submit(request)
+    original_start = job_service.start
+    start_attempts = 0
+
+    def flaky_start(run_id: str):
+        nonlocal start_attempts
+        start_attempts += 1
+        if start_attempts == 1:
+            raise RuntimeError("transient start failure")
+        return original_start(run_id)
+
+    job_service.start = flaky_start  # type: ignore[method-assign]
+    future: Future[None] = Future()
+    future.set_exception(RuntimeError("executor start failed"))
+
+    class FailedExecutor:
+        def submit(self, run_id, callable):
+            return future
+
+    service.handoff(submission, request, FailedExecutor())
+
+    failed = job_service.get(submission.run.run_id)
+    assert start_attempts == 2
+    assert failed is not None and failed.status == "failed"
+    assert failed.error_code == "startup_failed"
+    assert lock.release_calls == 1
+
+
+def test_duplicate_handoff_cannot_reconcile_legitimate_worker(tmp_path: Path) -> None:
+    service, job_service, _, preparation, _, lock = make_service(tmp_path)
+    request = listing_update.ListingUpdateRequest(types=("sale",), max_pages=1)
+    submission = service.submit(request)
+    submit_entered = Event()
+    allow_submit = Event()
+
+    class BlockingExecutor(DeferredExecutor):
+        def submit(self, run_id, callable):
+            self.callable = callable
+            submit_entered.set()
+            assert allow_submit.wait(timeout=5)
+            return self.future
+
+    executor = BlockingExecutor()
+    handoff_results: list[Future] = []
+
+    def first_handoff() -> None:
+        handoff_results.append(service.handoff(submission, request, executor))
+
+    thread = Thread(target=first_handoff)
+    thread.start()
+    assert submit_entered.wait(timeout=5)
+    with pytest.raises(listing_update.ListingUpdateError) as caught:
+        service.handoff(submission, request, DeferredExecutor())
+    assert caught.value.error_code == "execution_not_owned"
+    assert lock.release_calls == 0
+    assert preparation.calls == []
+
+    allow_submit.set()
+    thread.join(timeout=5)
+    assert len(handoff_results) == 1
+    job_service.start(submission.run.run_id)
+    assert executor.callable is not None
+    result = executor.callable()
+    executor.future.set_result(None)
+
+    assert result.status == "succeeded"
+    assert preparation.calls == ["sale"]
     assert lock.release_calls == 1
 
 
@@ -409,8 +520,7 @@ def test_cross_service_running_job_cannot_execute_without_reservation(
 ) -> None:
     owner, job_service, repository, _, publisher, _ = make_service(tmp_path)
     request = listing_update.ListingUpdateRequest(types=("sale",), max_pages=1)
-    submission = owner.submit(request)
-    job_service.start(submission.run.run_id)
+    submission = start_submission(owner, job_service, request)
     outsider = listing_update.ListingUpdateService(
         job_service,
         publisher,

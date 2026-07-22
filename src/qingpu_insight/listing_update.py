@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 
 import pandas as pd
 
@@ -204,7 +204,9 @@ class _RunState:
 class _Reservation:
     idempotency_key: str
     lock: ListingUpdateLock
-    claimed: bool = False
+    state: Literal[
+        "reserved", "handed_off", "claimed", "reconciling", "released"
+    ] = "reserved"
 
 
 class _ActionStep:
@@ -304,13 +306,22 @@ class ListingUpdateService:
                 if not submission.created:
                     lock.release()
                     return submission
-                lock.set_owner(idempotency_key, submission.run.run_id)
+                try:
+                    lock.set_owner(idempotency_key, submission.run.run_id)
+                except Exception:
+                    self._recover_startup_failure(submission.run.run_id)
+                    raise ListingUpdateError(
+                        "startup_failed", "listing update startup failed"
+                    ) from None
                 self._reservations[submission.run.run_id] = _Reservation(
                     idempotency_key=idempotency_key,
                     lock=lock,
                 )
                 self._reserved_by_key[idempotency_key] = submission.run.run_id
                 return submission
+            except ListingUpdateError:
+                lock.release()
+                raise
             except Exception:
                 lock.release()
                 raise
@@ -329,10 +340,11 @@ class ListingUpdateService:
         run_id = submission.run.run_id
         with self._reservation_guard:
             reservation = self._reservations.get(run_id)
-            if reservation is None or reservation.claimed:
+            if reservation is None or reservation.state != "reserved":
                 raise ListingUpdateError(
                     "execution_not_owned", "listing update execution is not owned"
                 )
+            reservation.state = "handed_off"
         try:
             future = executor.submit(
                 run_id, lambda: self.execute_running(run_id, request)
@@ -352,29 +364,47 @@ class ListingUpdateService:
     def _claim_execution(self, run_id: str) -> None:
         with self._reservation_guard:
             reservation = self._reservations.get(run_id)
-            if reservation is None or reservation.claimed:
+            if reservation is None or reservation.state != "handed_off":
                 raise ListingUpdateError(
                     "execution_not_owned", "listing update execution is not owned"
                 )
-            reservation.claimed = True
+            reservation.state = "claimed"
 
     def _reconcile_handoff_failure(self, run_id: str) -> None:
         with self._reservation_guard:
             reservation = self._reservations.get(run_id)
-            if reservation is None or reservation.claimed:
+            if reservation is None or reservation.state != "handed_off":
                 return
-        try:
-            run = self._job_service.get(run_id)
-            if run is not None and run.status == "running":
-                self._job_service.fail(
-                    run_id,
-                    "startup_failed",
-                    "listing update executor startup failed",
-                )
-        except Exception:
-            pass
-        finally:
-            self._release_reservation(run_id)
+            reservation.state = "reconciling"
+        self._recover_startup_failure(run_id)
+        self._release_reservation(run_id)
+
+    def _recover_startup_failure(self, run_id: str) -> None:
+        """Bounded legal recovery: pending/retry_wait -> running -> failed."""
+        for _attempt in range(3):
+            try:
+                run = self._job_service.get(run_id)
+            except Exception:
+                continue
+            if run is None or run.status in (
+                "succeeded", "failed", "skipped", "needs_attention"
+            ):
+                return
+            if run.status in ("pending", "retry_wait"):
+                try:
+                    run = self._job_service.start(run_id)
+                except Exception:
+                    continue
+            if run.status == "running":
+                try:
+                    self._job_service.fail(
+                        run_id,
+                        "startup_failed",
+                        "listing update startup failed",
+                    )
+                    return
+                except Exception:
+                    continue
 
     def _fail_running_if_possible(
         self, run_id: str, error: ListingUpdateError
@@ -456,6 +486,8 @@ class ListingUpdateService:
         except ListingUpdateError as error:
             if run is not None and run.status == "running":
                 self._job_service.fail(run_id, error.error_code, error.safe_message)
+            elif run is not None and run.status in ("pending", "retry_wait"):
+                self._recover_startup_failure(run_id)
             elif run is None:
                 self._fail_running_if_possible(run_id, error)
             raise
@@ -588,6 +620,7 @@ class ListingUpdateService:
             reservation = self._reservations.pop(run_id, None)
             if reservation is None:
                 return
+            reservation.state = "released"
             if self._reserved_by_key.get(reservation.idempotency_key) == run_id:
                 self._reserved_by_key.pop(reservation.idempotency_key, None)
         reservation.lock.release()

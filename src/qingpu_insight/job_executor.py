@@ -49,7 +49,11 @@ class LocalJobExecutor:
                 except Exception as error:
                     message = redact_job_message(str(error))
                     logger.error("job %s failed: %s", run_id, message)
-                    self._job_service.fail(run_id, "unhandled_exception", message)
+                    current = self._job_service.get(run_id)
+                    if current is not None and current.status == "running":
+                        self._job_service.fail(
+                            run_id, "unhandled_exception", message
+                        )
             finally:
                 with self._futures_lock:
                     self._futures.pop(run_id, None)

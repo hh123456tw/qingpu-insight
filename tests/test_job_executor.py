@@ -8,6 +8,7 @@ import pytest
 
 from qingpu_insight.job_executor import LocalJobExecutor
 from qingpu_insight.jobs import ACTIVE_STATUSES, InvalidJobTransition, JobRun, JobService, JobStatus
+from qingpu_insight.listing_update import ListingUpdateRequest, ListingUpdateService
 
 
 class FakeJobRepository:
@@ -104,4 +105,55 @@ def test_executor_propagates_lifecycle_corruption() -> None:
     future = executor.submit(run.run_id, lambda: None)
     with pytest.raises(InvalidJobTransition):
         future.result(timeout=1)
+    executor.shutdown()
+
+
+def test_executor_preserves_listing_service_terminal_failure(tmp_path) -> None:
+    repo = FakeJobRepository()
+    job_service = JobService(repo)
+    executor = LocalJobExecutor(job_service)
+
+    class FailingPreparation:
+        def prepare(self, listing_type, max_pages):
+            raise RuntimeError("mysql://admin:password@db/private")
+
+    class Lock:
+        def __init__(self) -> None:
+            self.released = 0
+
+        def try_acquire(self):
+            return True
+
+        def set_owner(self, idempotency_key, run_id):
+            pass
+
+        def read_owner(self):
+            return None
+
+        def release(self):
+            self.released += 1
+
+    class Publisher:
+        def current(self):
+            return None
+
+    lock = Lock()
+    listing_service = ListingUpdateService(
+        job_service,
+        publisher=Publisher(),  # type: ignore[arg-type]
+        preparation_runner=FailingPreparation(),
+        root=tmp_path,
+        lock_factory=lambda: lock,
+    )
+    request = ListingUpdateRequest(types=("sale",), max_pages=1)
+    submission = listing_service.submit(request)
+
+    future = listing_service.handoff(submission, request, executor)
+    future.result(timeout=2)
+
+    failed = job_service.get(submission.run.run_id)
+    assert failed is not None and failed.status == "failed"
+    assert failed.error_code == "preparation_failed"
+    assert failed.error_message == "sale listing preparation failed"
+    assert lock.released == 1
     executor.shutdown()
