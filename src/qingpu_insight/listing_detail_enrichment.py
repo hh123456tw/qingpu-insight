@@ -18,12 +18,17 @@ from qingpu_insight.listing_591 import SourceListing
 from qingpu_insight.listing_capture import ChromeConfig, create_chrome, is_verification_page
 
 _NEW_HOUSE_HOST = "newhouse.591.com.tw"
-# listing_591 accepts new-house records only when their final URL segment is numeric.
-_SAFE_LISTING_ID = re.compile(r"[0-9]{1,32}\Z")
+# listing_591 emits numeric JSON-LD IDs and canonical legacy DOM IDs (NH-<digits>).
+_SAFE_LISTING_ID = re.compile(r"(?:[0-9]{1,32}|NH-[0-9]{1,32})\Z")
+_DOORPLATE = (
+    r"(?:[0-9]+(?:之[0-9]+)?號(?:[0-9]+樓)?|"
+    r"[0-9]+號之[0-9]+(?: [0-9]+樓)?)"
+)
 _ADDRESS = re.compile(
     r"桃園市(?:中壢區|大園區)[一-龥A-Za-z0-9]+(?:路|街)"
     r"(?:[一二三四五六七八九十0-9]+段)?(?:[0-9]+巷)?(?:[0-9]+弄)?"
-    r"[0-9]+(?:之[0-9]+)?號(?:[0-9]+樓)?\Z"
+    + _DOORPLATE
+    + r"\Z"
 )
 
 
@@ -220,7 +225,12 @@ def _postal_address_text(postal_address: dict[str, object]) -> str:
 def _normalize_address(address: str) -> str:
     if any(ord(character) < 32 or ord(character) == 127 for character in address):
         return ""
-    return address.replace(" ", "").replace("\u3000", "").replace("台", "臺")
+    normalized = address.strip().replace("台", "臺")
+    floor_match = re.search(r"號之([0-9]+)[ \u3000]+([0-9]+樓)\Z", normalized)
+    if floor_match:
+        prefix = normalized[: floor_match.start()].replace(" ", "").replace("\u3000", "")
+        return f"{prefix}號之{floor_match.group(1)} {floor_match.group(2)}"
+    return normalized.replace(" ", "").replace("\u3000", "")
 
 
 def _is_accepted_address(address: str) -> bool:

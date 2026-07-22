@@ -8,7 +8,7 @@ from threading import Barrier
 import pytest
 
 import qingpu_insight.listing_detail_enrichment as detail_enrichment
-from qingpu_insight.listing_591 import SourceListing
+from qingpu_insight.listing_591 import SourceListing, extract_rendered_page
 from qingpu_insight.listing_capture import ChromeConfig
 from qingpu_insight.listing_detail_enrichment import (
     DetailEnrichmentBlocked,
@@ -153,6 +153,42 @@ def test_parser_accepts_only_explicit_bounded_address_suffixes() -> None:
     assert result.address == "桃園市大園區領航北路四段2之3號5樓"
 
 
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("桃園市中壢區高鐵南路一段1之2號", "桃園市中壢區高鐵南路一段1之2號"),
+        ("桃園市中壢區高鐵南路一段1號之2", "桃園市中壢區高鐵南路一段1號之2"),
+        ("桃園市中壢區高鐵南路一段1號之2 3樓", "桃園市中壢區高鐵南路一段1號之2 3樓"),
+    ],
+)
+def test_parser_accepts_bounded_doorplate_subnumber_forms(source: str, expected: str) -> None:
+    html = f"<div class='detail-address'>{source}</div>"
+
+    result = extract_detail_address(
+        html, "https://newhouse.591.com.tw/home/housing/detail?hid=123", fixed_clock()
+    )
+
+    assert result is not None
+    assert result.address == expected
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "桃園市中壢區高鐵南路一段1號之",
+        "桃園市中壢區高鐵南路一段1號之2公車站",
+        "桃園市中壢區高鐵南路一段1號之2，鄰近公車",
+        "桃園市中壢區高鐵南路一段1號之2 3樓接待中心",
+    ],
+)
+def test_parser_rejects_invalid_or_descriptive_doorplate_subnumber_forms(address: str) -> None:
+    assert extract_detail_address(
+        f"<div class='detail-address'>{address}</div>",
+        "https://newhouse.591.com.tw/home/housing/detail?hid=123",
+        fixed_clock(),
+    ) is None
+
+
 def test_enricher_rejects_verification_page_without_accepted_raw_evidence(tmp_path: Path) -> None:
     browser = FakeDetailBrowser("<html><title>驗證</title><body>captcha</body></html>")
     enricher = ListingDetailEnricher(browser, fixed_clock)
@@ -272,6 +308,21 @@ def test_success_saves_accepted_evidence_and_copies_payload(
     assert not (tmp_path / "details-diagnostic" / "123.html").exists()
 
 
+def test_enricher_accepts_legacy_parser_newhouse_identifier(
+    tmp_path: Path, detail_html: str
+) -> None:
+    legacy_html = (FIXTURE_DIR / "591_newhouse_page.html").read_text(encoding="utf-8")
+    listing = extract_rendered_page(legacy_html, "newhouse").listings[0]
+    browser = FakeDetailBrowser(detail_html)
+
+    result = ListingDetailEnricher(browser, fixed_clock).enrich(listing, tmp_path)
+
+    assert listing.source_listing_id == "NH-2001"
+    assert browser.calls[0] == f"get:{listing.source_url}"
+    assert result.payload["structured_address"] == "桃園市中壢區高鐵南路一段1號"
+    assert (tmp_path / "details" / "NH-2001.html").exists()
+
+
 def test_enricher_rejects_path_traversal_listing_id_before_creating_file(
     tmp_path: Path, detail_html: str
 ) -> None:
@@ -286,7 +337,10 @@ def test_enricher_rejects_path_traversal_listing_id_before_creating_file(
     assert not (tmp_path / "escape.html").exists()
 
 
-@pytest.mark.parametrize("source_listing_id", ["CON", "con", "AUX", "NUL", "COM1", "123.html"])
+@pytest.mark.parametrize(
+    "source_listing_id",
+    ["CON", "con", "AUX", "NUL", "COM1", "123.html", "nh-2001", "ＮＨ-2001", "NH-2001."],
+)
 def test_enricher_rejects_noncanonical_or_windows_reserved_listing_id(
     tmp_path: Path, detail_html: str, source_listing_id: str
 ) -> None:
