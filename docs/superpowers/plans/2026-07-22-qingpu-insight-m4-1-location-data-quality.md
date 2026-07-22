@@ -21,6 +21,7 @@
 | File | Responsibility |
 |---|---|
 | `location_evidence.py` | 定義定位方法、可信度與原因契約 |
+| `listing_detail_enrichment.py` | 以正常可見瀏覽流程保存新建案詳細頁並擷取公開地址 |
 | `listing_geocoding.py` | 官方門牌 exact match、MySQL cache 與 geocoder adapter |
 | `listing_normalization.py` | 將來源座標轉成初始 evidence |
 | `listing_location.py` | 計算最近站、距離、eligibility 與最終 reason |
@@ -39,7 +40,7 @@
 
 **Interfaces:**
 - Consumes: `NormalizedListing`, `SourceListing`。
-- Produces: `LocationEvidence`, `LocationMethod`, `LocationConfidence`, `unknown_location(reason)`；`NormalizedListing` 新增 `location_method`、`location_confidence`、`location_reason`、`geocoded_at`、`geocoder_version`。
+- Produces: `LocationEvidence`, `LocationMethod`, `LocationConfidence`, `unknown_location(reason)`；`NormalizedListing` 新增 `structured_address`、`address_source_url`、`address_observed_at`、`location_method`、`location_confidence`、`location_reason`、`geocoded_at`、`geocoder_version`。
 
 - [ ] **Step 1: 寫入失敗測試**
 
@@ -61,7 +62,8 @@ def test_unknown_location_has_explicit_reason() -> None:
 ```
 
 在 `tests/test_listing_normalization.py` 增加 assertion：有來源座標時 method 為
-`source_coordinates`、confidence 為 `high`；無座標時為 `unknown`。
+`source_coordinates`、confidence 為 `high`；無座標時為 `unknown`；payload 的
+`structured_address`、`address_source_url`、`address_observed_at` 只有型別合法時才保留。
 
 - [ ] **Step 2: 驗證測試先失敗**
 
@@ -97,7 +99,8 @@ def unknown_location(reason: str) -> LocationEvidence:
 
 在 `normalize_listing()` 以 `_valid_taiwan_coordinate()` 判斷來源座標；合法座標建立 high
 evidence，不合法或缺少時建立 `unknown_location("missing_or_invalid_source_coordinates")`，並將
-六個欄位寫入 `NormalizedListing` 與 `_stable_dict()`。
+定位與地址欄位寫入 `NormalizedListing` 與 `_stable_dict()`。`address_observed_at` 正規化為 UTC
+datetime；地址不完整時三個 address metadata 一律設為 `None`，避免保存半套 provenance。
 
 - [ ] **Step 4: 執行聚焦測試與既有正規化測試**
 
@@ -111,7 +114,86 @@ git add src/qingpu_insight/location_evidence.py src/qingpu_insight/listing_norma
 git commit -m "feat(m4): add listing location evidence contract"
 ```
 
-### Task 2: 結構化地址 geocoder 與持久 cache
+### Task 2: 新建案詳細頁地址 enrichment
+
+**Files:**
+- Create: `src/qingpu_insight/listing_detail_enrichment.py`
+- Create: `tests/test_listing_detail_enrichment.py`
+- Create: `tests/fixtures/listings/591_newhouse_detail.html`
+- Modify: `src/qingpu_insight/listing_capture.py`
+- Test: `tests/test_listing_capture.py`
+
+**Interfaces:**
+- Consumes: `SourceListing`、既有可見 Chrome factory、batch directory 與 human-facing `source_url`。
+- Produces: `DetailAddress`, `extract_detail_address(html, source_url, observed_at)`, `ListingDetailEnricher.enrich(listing, batch_dir) -> SourceListing`、公開 `is_verification_page(html)`。
+
+- [ ] **Step 1: 寫入 parser、provenance、raw evidence 與安全停止測試**
+
+```python
+def test_extracts_jsonld_postal_address_with_provenance(detail_html) -> None:
+    observed_at = datetime(2026, 7, 22, tzinfo=timezone.utc)
+    result = extract_detail_address(detail_html, "https://newhouse.591.com.tw/home/housing/detail?hid=123", observed_at)
+    assert result.address == "桃園市中壢區高鐵南路一段1號"
+    assert result.representation == "jsonld_postal_address"
+    assert result.source_url.startswith("https://newhouse.591.com.tw/")
+    assert result.observed_at == observed_at
+
+
+def test_enricher_rejects_verification_page_without_accepted_raw_evidence(tmp_path) -> None:
+    enricher = ListingDetailEnricher(FakeDetailBrowser(verification_html()), fixed_clock())
+    with pytest.raises(DetailEnrichmentBlocked, match="verification_required"):
+        enricher.enrich(newhouse_listing(), tmp_path)
+    assert not list((tmp_path / "details").glob("*.html"))
+```
+
+另測試：非 newhouse 原樣回傳且不導航；非 591 HTTPS URL 在導航前拒絕；沒有地址的正常詳細頁
+保留 raw diagnostic 並回傳原 listing；成功時只複製 payload 並增加三個 address provenance 欄位。
+
+- [ ] **Step 2: 驗證測試先失敗**
+
+Run: `.venv\\Scripts\\python.exe -m pytest tests/test_listing_detail_enrichment.py tests/test_listing_capture.py -q`
+Expected: FAIL，`listing_detail_enrichment` 與公開 verification helper 尚不存在。
+
+- [ ] **Step 3: 實作保守的詳細頁 enrichment**
+
+```python
+@dataclass(frozen=True)
+class DetailAddress:
+    address: str
+    source_url: str
+    observed_at: datetime
+    representation: Literal["jsonld_postal_address", "dom_street_address"]
+
+
+class ListingDetailEnricher:
+    def enrich(self, listing: SourceListing, batch_dir: Path) -> SourceListing:
+        if listing.listing_type != "newhouse":
+            return listing
+        # validate allowlisted HTTPS URL, navigate with existing visible browser,
+        # reject verification, parse, atomically persist accepted evidence,
+        # then return a copied SourceListing payload with address provenance.
+```
+
+Parser 優先讀取 JSON-LD `PostalAddress` 的 `addressRegion`、`addressLocality`、`streetAddress`；
+DOM fallback 只接受 `[itemprop="streetAddress"]`、`.detail-address`、`.house-address` 等明確地址節點。
+結果必須正規化後以 `桃園市中壢區` 或 `桃園市大園區` 開頭且包含路／街與門牌號；只有區名的
+描述不得接受。成功 HTML 寫入 `batch_dir/details/<source_listing_id>.html`，以 `.tmp` + replace
+原子保存；驗證頁不得成為 accepted evidence。將 `listing_capture._likely_verification()` 改名為公開
+`is_verification_page()` 並更新既有 call sites，不複製驗證規則。
+
+- [ ] **Step 4: 執行聚焦與 capture 回歸測試**
+
+Run: `.venv\\Scripts\\python.exe -m pytest tests/test_listing_detail_enrichment.py tests/test_listing_capture.py -q`
+Expected: PASS，無真實網路或 Chrome。
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add src/qingpu_insight/listing_detail_enrichment.py src/qingpu_insight/listing_capture.py tests/test_listing_detail_enrichment.py tests/test_listing_capture.py tests/fixtures/listings/591_newhouse_detail.html
+git commit -m "feat(m4): enrich newhouse detail addresses"
+```
+
+### Task 3: 結構化地址 geocoder 與持久 cache
 
 **Files:**
 - Create: `src/qingpu_insight/listing_geocoding.py`
@@ -195,7 +277,7 @@ git add src/qingpu_insight/listing_geocoding.py tests/test_listing_geocoding.py
 git commit -m "feat(m4): add cached listing geocoding service"
 ```
 
-### Task 3: 站點判定、repository migration 與 build 整合
+### Task 4: 站點判定、repository migration 與 build 整合
 
 **Files:**
 - Modify: `src/qingpu_insight/listing_location.py`
@@ -238,8 +320,10 @@ Expected: FAIL，原因為新欄位未保存或 outside row 丟失最近距離�
 `_upgrade_location_schema()` 加入欄位。既有 Parquet writer 若仍輸出資料，僅同步欄位作為匯出相容，
 不得由 Web 或 M4 job 讀回作正式狀態。
 
-在 `listing_build()` 的 normalize 後、life-circle 前，只對 method=`unknown` 且 address 非空資料呼叫
-`GeocodingService`；新增品質 JSON：
+在 591 update/build 流程中，先對缺少座標的新建案呼叫 `ListingDetailEnricher`，再 normalize；
+normalize 後、life-circle 前，只對 method=`unknown` 且 `structured_address` 非空資料呼叫
+`GeocodingService`。Detail enrichment blocked 時批次標為不完整且不發布；正常頁無地址只記錄
+`detail_address_missing` 並繼續。新增品質 JSON：
 
 ```python
 quality["location"] = {
@@ -265,7 +349,7 @@ git add src/qingpu_insight/listing_location.py src/qingpu_insight/listing_reposi
 git commit -m "feat(m4): publish auditable listing locations"
 ```
 
-### Task 4: M4.1 方法文件與 release evidence
+### Task 5: M4.1 方法文件與 release evidence
 
 **Files:**
 - Create: `docs/m4-location-methodology.md`
@@ -294,7 +378,8 @@ Expected: FAIL，help 尚未包含 flag 或說明。
 
 - [ ] **Step 3: 補齊文件與 help**
 
-文件明列方法優先序、信心等級、兩公里規則、cache、隱私、失敗原因、品質 JSON 欄位，以及：
+文件明列搜尋頁限制、詳細頁 enrichment、方法優先序、信心等級、兩公里規則、cache、隱私、
+失敗原因、品質 JSON 欄位，以及：
 
 ```powershell
 qingpu-data listing-build --input data/raw/listings/591/<date>/<batch_id> `
