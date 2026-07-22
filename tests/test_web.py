@@ -6,6 +6,7 @@ import pytest
 from flask.testing import FlaskClient
 from sklearn.dummy import DummyRegressor
 
+from qingpu_insight.jobs import JobRun
 from qingpu_insight.market_metrics import MarketFilters
 from qingpu_insight.valuation import ModelRegistry, ValuationBundle
 
@@ -589,3 +590,97 @@ def test_frontend_renders_evidence_before_summary(client):
     assert "confidence_reasons" in script
     assert "comparables" in script
     assert "innerHTML =" not in script
+
+
+# ------------------------------------------------------------------
+# Admin API / Job Center (M4.2)
+# ------------------------------------------------------------------
+
+
+class FakeAdminJobRepository:
+    def __init__(self) -> None:
+        self._runs: dict[str, JobRun] = {}
+
+    def create(self, run: JobRun) -> None:
+        self._runs[run.run_id] = run
+
+    def get(self, run_id: str) -> JobRun | None:
+        return self._runs.get(run_id)
+
+    def find_active_by_key(self, idempotency_key: str) -> JobRun | None:
+        for run in self._runs.values():
+            if run.idempotency_key == idempotency_key and run.status in (
+                "pending", "running", "retry_wait",
+            ):
+                return run
+        return None
+
+    def transition(self, run_id, current_status, target_status):
+        return True
+
+
+class FakeAdminExecutor:
+    def __init__(self) -> None:
+        self.submitted: list[str] = []
+
+    def submit(self, run_id: str, callable) -> None:
+        self.submitted.append(run_id)
+
+
+@pytest.fixture
+def admin_app(market_frame: pd.DataFrame):
+    from qingpu_insight.jobs import JobService
+    from qingpu_insight.listing_update import ListingUpdateService
+    from qingpu_insight.web import create_app
+
+    repo = FakeAdminJobRepository()
+    job_service = JobService(repo)
+    listing_service = ListingUpdateService(job_service=job_service, publisher=None)  # type: ignore[arg-type]
+    executor = FakeAdminExecutor()
+    app = create_app(
+        data_source=InMemoryMarketDataSource(market_frame),
+        job_service=job_service,
+        listing_update_service=listing_service,
+        job_executor=executor,
+    )
+    return app, executor
+
+
+@pytest.fixture
+def admin_client(admin_app) -> FlaskClient:
+    app, _ = admin_app
+    with app.test_client() as client:
+        with client.session_transaction() as sess:
+            sess["_csrf_token"] = "test-token"
+        yield client
+
+
+def test_listing_update_returns_202_without_waiting(
+    admin_app, admin_client: FlaskClient,
+) -> None:
+    _, executor = admin_app
+    response = admin_client.post(
+        "/api/admin/listing-updates",
+        json={"types": ["sale", "newhouse", "rental"], "max_pages": 1},
+        headers={"X-Qingpu-CSRF": "test-token"},
+    )
+    assert response.status_code == 202
+    assert response.json["status"] == "pending"
+    assert executor.submitted == [response.json["run_id"]]
+
+
+def test_admin_update_rejects_non_loopback(admin_client: FlaskClient) -> None:
+    response = admin_client.post(
+        "/api/admin/listing-updates",
+        environ_base={"REMOTE_ADDR": "10.0.0.2"},
+    )
+    assert response.status_code == 403
+
+
+def test_admin_update_rejects_wrong_csrf(admin_client: FlaskClient) -> None:
+    response = admin_client.post(
+        "/api/admin/listing-updates",
+        json={"types": ["sale"], "max_pages": 1},
+        headers={"X-Qingpu-CSRF": "wrong-token"},
+    )
+    assert response.status_code == 403
