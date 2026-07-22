@@ -11,6 +11,17 @@ import pymysql
 from qingpu_insight.jobs import JobRun, JobStatus
 
 ConnectionFactory = Callable[[], pymysql.Connection]
+_CREATE_ATTEMPTS = 3
+
+
+class DuplicateActiveJobRuns(RuntimeError):
+    def __init__(self, idempotency_key: str, active_count: int) -> None:
+        self.idempotency_key = idempotency_key
+        self.active_count = active_count
+        super().__init__(
+            f"cannot enforce active job uniqueness: idempotency key {idempotency_key!r} "
+            f"has {active_count} active rows"
+        )
 
 
 class MySQLJobRepository:
@@ -37,7 +48,7 @@ class MySQLJobRepository:
     def _ensure_schema(self) -> None:
         with self._connection() as connection:
             try:
-                with connection.cursor() as cursor:
+                with connection.cursor(pymysql.cursors.DictCursor) as cursor:
                     cursor.execute("""
                         CREATE TABLE IF NOT EXISTS job_runs (
                             run_id VARCHAR(36) NOT NULL PRIMARY KEY,
@@ -70,6 +81,55 @@ class MySQLJobRepository:
                             INDEX idx_status (status)
                         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                     """)
+                    cursor.execute(
+                        """SELECT 1 AS present
+                           FROM information_schema.COLUMNS
+                           WHERE TABLE_SCHEMA = DATABASE()
+                             AND TABLE_NAME = 'job_runs'
+                             AND COLUMN_NAME = 'active_idempotency_key'
+                           LIMIT 1"""
+                    )
+                    if cursor.fetchone() is None:
+                        cursor.execute(
+                            """ALTER TABLE job_runs
+                               ADD COLUMN active_idempotency_key VARCHAR(255)
+                               GENERATED ALWAYS AS (
+                                   CASE
+                                       WHEN status IN ('pending', 'running', 'retry_wait')
+                                       THEN idempotency_key
+                                       ELSE NULL
+                                   END
+                               ) STORED"""
+                        )
+                    cursor.execute(
+                        """SELECT 1 AS present
+                           FROM information_schema.STATISTICS
+                           WHERE TABLE_SCHEMA = DATABASE()
+                             AND TABLE_NAME = 'job_runs'
+                             AND INDEX_NAME = 'uq_job_runs_active_key'
+                           LIMIT 1"""
+                    )
+                    if cursor.fetchone() is None:
+                        cursor.execute(
+                            """SELECT idempotency_key, COUNT(*) AS active_count
+                               FROM job_runs
+                               WHERE status IN ('pending', 'running', 'retry_wait')
+                               GROUP BY idempotency_key
+                               HAVING COUNT(*) > 1
+                               ORDER BY idempotency_key
+                               LIMIT 1"""
+                        )
+                        duplicate = cursor.fetchone()
+                        if duplicate is not None:
+                            raise DuplicateActiveJobRuns(
+                                str(duplicate["idempotency_key"]),
+                                int(duplicate["active_count"]),
+                            )
+                        cursor.execute(
+                            """ALTER TABLE job_runs
+                               ADD UNIQUE INDEX uq_job_runs_active_key
+                               (active_idempotency_key)"""
+                        )
                 connection.commit()
             except Exception:
                 connection.rollback()
@@ -127,15 +187,21 @@ class MySQLJobRepository:
 
     def create_or_get(self, run: JobRun) -> tuple[JobRun, bool]:
         with self._connection() as connection:
-            try:
-                with connection.cursor() as cursor:
-                    self._insert(cursor, run)
-                connection.commit()
-                return run, True
-            except pymysql.err.IntegrityError as error:
-                connection.rollback()
-                if not error.args or error.args[0] != 1062:
+            for attempt in range(_CREATE_ATTEMPTS):
+                try:
+                    with connection.cursor() as cursor:
+                        self._insert(cursor, run)
+                    connection.commit()
+                    return run, True
+                except pymysql.err.IntegrityError as error:
+                    connection.rollback()
+                    if not self._is_active_key_duplicate(error):
+                        raise
+                    duplicate_error = error
+                except Exception:
+                    connection.rollback()
                     raise
+
                 try:
                     with connection.cursor(pymysql.cursors.DictCursor) as cursor:
                         cursor.execute(
@@ -149,11 +215,19 @@ class MySQLJobRepository:
                     connection.rollback()
                     raise
                 if row is None:
-                    raise
+                    if attempt == _CREATE_ATTEMPTS - 1:
+                        raise duplicate_error
+                    continue
                 return self._row_to_run(row), False
-            except Exception:
-                connection.rollback()
-                raise
+        raise AssertionError("unreachable")
+
+    @staticmethod
+    def _is_active_key_duplicate(error: pymysql.err.IntegrityError) -> bool:
+        return (
+            bool(error.args)
+            and error.args[0] == 1062
+            and "uq_job_runs_active_key" in str(error).lower()
+        )
 
     def get(self, run_id: str) -> JobRun | None:
         with self._connection() as connection:

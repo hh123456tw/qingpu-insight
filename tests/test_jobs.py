@@ -87,7 +87,7 @@ class TestJobService:
     def test_job_service_rejects_illegal_transition(self, repo: FakeJobRepository) -> None:
         run = JobService(repo).create("listing_update", "same-key", "manual").run
         with pytest.raises(InvalidJobTransition):
-            JobService(repo).succeed(run.run_id)
+            JobService(repo).succeed(run.run_id, "v1", {})
 
     def test_active_idempotency_key_returns_existing_run(self, repo: FakeJobRepository) -> None:
         service = JobService(repo)
@@ -121,10 +121,30 @@ class TestJobService:
         assert failed.error_code == "capture_failed"
         assert failed.error_message == "api_key: ***"
 
+    @pytest.mark.parametrize("error_code", ["", " ", "UPPER_CASE", "has-dash", "has.dot"])
+    def test_fail_rejects_nonstable_error_code(
+        self,
+        service: JobService,
+        error_code: str,
+    ) -> None:
+        run = service.create("test", f"bad-code-{error_code}", "manual").run
+        service.start(run.run_id)
+        with pytest.raises(ValueError, match="stable error code"):
+            service.fail(run.run_id, error_code, "api_key=super-secret")
+        assert service.get(run.run_id).status == "running"  # type: ignore[union-attr]
+
+    def test_succeed_and_fail_require_terminal_metadata(self, service: JobService) -> None:
+        run = service.create("test", "required-metadata", "manual").run
+        service.start(run.run_id)
+        with pytest.raises(TypeError):
+            service.succeed(run.run_id)  # type: ignore[call-arg]
+        with pytest.raises(TypeError):
+            service.fail(run.run_id)  # type: ignore[call-arg]
+
     def test_failed_to_needs_attention(self, service: JobService) -> None:
         run = service.create("test", "key4", "manual").run
         service.start(run.run_id)
-        service.fail(run.run_id)
+        service.fail(run.run_id, "test_failure", "test failed")
         attention = service.needs_attention(run.run_id)
         assert attention.status == "needs_attention"
 
@@ -145,7 +165,7 @@ class TestJobService:
         service = JobService(repo)
         first = service.create("test", "dup-key", "manual").run
         service.start(first.run_id)
-        service.succeed(first.run_id)
+        service.succeed(first.run_id, "v1", {})
         second = service.create("test", "dup-key", "manual").run
         assert second.run_id != first.run_id
 

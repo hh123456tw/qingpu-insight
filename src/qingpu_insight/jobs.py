@@ -67,6 +67,7 @@ _CREDENTIAL_PATTERN = re.compile(r"(?<=\/\/)[^:]+:[^@]+@")
 _API_KEY_PATTERN = re.compile(r"(?i)(api[_-]?key|token|secret)\s*[:=]\s*\S+")
 _PHONE_PATTERN = re.compile(r"(?<!\d)09\d{2}(?:-?\d{3}){2}(?!\d)")
 _LANDLINE_PATTERN = re.compile(r"(?<!\d)0[2-8](?:-?\d){7,8}(?!\d)")
+_ERROR_CODE_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 
 
 def redact_job_message(message: str) -> str:
@@ -160,8 +161,8 @@ class JobService:
     def succeed(
         self,
         run_id: str,
-        output_version: str | None = None,
-        summary: dict[str, object] | None = None,
+        output_version: str,
+        summary: dict[str, object],
     ) -> JobRun:
         return self._transition(
             run_id,
@@ -170,7 +171,9 @@ class JobService:
             summary=summary,
         )
 
-    def fail(self, run_id: str, error_code: str = "", error_message: str = "") -> JobRun:
+    def fail(self, run_id: str, error_code: str, error_message: str) -> JobRun:
+        if _ERROR_CODE_PATTERN.fullmatch(error_code) is None:
+            raise ValueError("error_code must be a nonblank stable error code token")
         return self._transition(
             run_id,
             "failed",
