@@ -160,3 +160,64 @@ def test_missing_or_invalid_coordinates_have_no_station_and_missing_reason(stati
         "missing_coordinates",
     ]
     assert result["station_code"].isna().all()
+
+
+def test_station_input_requires_at_least_one_valid_station(station_frame):
+    for invalid in (
+        station_frame.iloc[0:0],
+        station_frame.assign(twd97_x=np.nan),
+        station_frame.assign(station_code=""),
+    ):
+        with pytest.raises(ValueError, match="valid station"):
+            assign_listing_life_circle(
+                pd.DataFrame([{"latitude": 25.032, "longitude": 121.225}]),
+                invalid,
+                2_000,
+            )
+
+
+def test_station_input_ignores_invalid_rows_but_uses_valid_station(station_frame):
+    stations = pd.concat(
+        [
+            station_frame.iloc[[1]],
+            pd.DataFrame(
+                [{"station_code": "", "twd97_x": np.nan, "twd97_y": np.nan}]
+            ),
+        ],
+        ignore_index=True,
+    )
+    result = assign_listing_life_circle(
+        pd.DataFrame([{"latitude": 25.032, "longitude": 121.225}]), stations, 2_000
+    )
+    assert result.loc[0, "station_code"] == "A18"
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "geocoder_unavailable",
+        "address_not_resolved",
+        "invalid_geocoder_coordinates",
+        "missing_structured_address",
+        "detail_address_missing",
+    ],
+)
+def test_unknown_missing_coordinate_keeps_specific_resolution_diagnostic(
+    station_frame, reason
+):
+    result = assign_listing_life_circle(
+        pd.DataFrame(
+            [
+                {
+                    "latitude": np.nan,
+                    "longitude": np.nan,
+                    "location_method": "unknown",
+                    "location_reason": reason,
+                }
+            ]
+        ),
+        station_frame,
+        2_000,
+    )
+    assert result.loc[0, "location_reason"] == reason
+    assert not result.loc[0, "location_eligible"]

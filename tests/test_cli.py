@@ -56,6 +56,103 @@ def test_listing_build_geocoder_is_opt_in() -> None:
     assert enabled.geocoder_enabled is True
 
 
+def test_listing_build_detail_enrichment_is_explicit_and_visible() -> None:
+    args = cli.build_parser().parse_args(
+        [
+            "listing-build",
+            "--detail-enrichment-enabled",
+            "--profile-dir",
+            "C:/ChromeProfile",
+            "--page-timeout",
+            "15",
+        ]
+    )
+    assert args.detail_enrichment_enabled is True
+    assert args.profile_dir == "C:/ChromeProfile"
+    assert args.page_timeout == 15
+    enricher = cli.create_listing_detail_enricher(args)
+    assert enricher._chrome_config.headless is False
+    assert enricher._chrome_config.profile_dir == "C:/ChromeProfile"
+    assert enricher._chrome_config.page_timeout_seconds == 15
+
+
+def test_detail_enrichment_requires_explicit_profile_configuration(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert main(["listing-build", "--detail-enrichment-enabled"]) == 1
+    assert "--profile-dir" in capsys.readouterr().err
+
+
+def test_listing_build_main_only_constructs_detail_enricher_when_enabled(
+    monkeypatch, tmp_path
+) -> None:
+    captured = []
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        cli,
+        "listing_build",
+        lambda root, args, *, detail_enricher=None: captured.append(detail_enricher) or 0,
+    )
+    monkeypatch.setattr(
+        cli,
+        "create_listing_detail_enricher",
+        lambda args: (_ for _ in ()).throw(AssertionError("should not construct")),
+    )
+
+    assert main(["listing-build"]) == 0
+    assert captured == [None]
+
+    sentinel = object()
+    monkeypatch.setattr(cli, "create_listing_detail_enricher", lambda args: sentinel)
+    assert main(["listing-build", "--detail-enrichment-enabled"]) == 0
+    assert captured == [None, sentinel]
+
+
+def test_geocoding_service_uses_persistent_mysql_cache(monkeypatch) -> None:
+    calls = []
+
+    class Cache:
+        def __init__(self, factory):
+            calls.append(factory)
+
+        def ensure_schema(self):
+            calls.append("ensure_schema")
+
+    connection_factory = object()
+    monkeypatch.setattr(cli, "MySQLGeocodeCache", Cache)
+    service = cli.create_listing_geocoding_service(
+        pd.DataFrame(
+            [{"normalized_address": "高鐵南路一段1號", "latitude": 25.03, "longitude": 121.22}]
+        ),
+        connection_factory,
+    )
+
+    assert service is not None
+    assert calls == [connection_factory, "ensure_schema"]
+
+
+def test_geocoding_service_requires_database_connection_factory() -> None:
+    with pytest.raises(ValueError, match="QINGPU_DATABASE_URL"):
+        cli.create_listing_geocoding_service(pd.DataFrame(), None)
+
+
+@pytest.mark.parametrize(
+    "batch_id",
+    ["../../escaped", r"C:\\escaped", r"\\\\server\\share", "a/b", "a\\b", "", "x" * 65, "ＡＢＣ"],
+)
+def test_listing_manifest_rejects_unsafe_batch_id(batch_id) -> None:
+    assert not cli._valid_listing_build_manifest(
+        {
+            "batch_id": batch_id,
+            "listing_type": "sale",
+            "started_at": "2026-07-22T12:00:00+00:00",
+            "is_complete": True,
+            "pages": [{"page_number": 1}],
+        }
+    )
+
+
 def test_normalized_rows_preserve_ranges_and_acquisition_metadata() -> None:
     source = SourceListing(
         source_listing_id="newhouse-001",
@@ -184,6 +281,21 @@ def test_location_quality_is_json_safe_and_deterministic() -> None:
             "by_reason": {"eligible_manual": 1, "null": 1},
         }
     }
+
+
+def test_location_quality_exposes_preserved_geocoder_failure_reason() -> None:
+    quality = cli._listing_location_quality(
+        pd.DataFrame(
+            [
+                {
+                    "location_eligible": False,
+                    "location_method": "unknown",
+                    "location_reason": "geocoder_unavailable",
+                }
+            ]
+        )
+    )
+    assert quality["location"]["by_reason"] == {"geocoder_unavailable": 1}
 
 
 def test_detail_diagnostics_are_persisted_with_location_quality(tmp_path) -> None:
@@ -642,13 +754,15 @@ class TestListingBuild:
         monkeypatch.setattr(
             cli, "create_listing_repository", lambda root: published.append(root)
         )
+        monkeypatch.setattr(cli, "create_listing_detail_enricher", lambda args: Blocked())
 
-        result = cli.listing_build(
-            tmp_path,
-            cli.build_parser().parse_args(
-                ["listing-build", "--batch-dir", str(batch_dir)]
-            ),
-            detail_enricher=Blocked(),
+        result = main(
+            [
+                "listing-build",
+                "--batch-dir",
+                str(batch_dir),
+                "--detail-enrichment-enabled",
+            ]
         )
 
         assert result == 1
@@ -783,14 +897,32 @@ class TestListingBuild:
         )
         published = []
 
-        def unavailable(_doorplates):
+        def unavailable(_doorplates, _connection_factory):
             raise RuntimeError("adapter unavailable")
 
+        original_factory = cli.create_mysql_connection_factory
+        monkeypatch.setenv(
+            "QINGPU_DATABASE_URL",
+            "mysql+pymysql://user:pass@127.0.0.1:3306/qingpu_insight",
+        )
+        monkeypatch.setattr(cli, "create_mysql_connection_factory", lambda: object())
         monkeypatch.setattr(cli, "create_listing_geocoding_service", unavailable)
         monkeypatch.setattr(
             cli, "create_listing_repository", lambda root: published.append(root)
         )
 
+        with pytest.raises(RuntimeError, match="adapter unavailable"):
+            main(
+                [
+                    "listing-build",
+                    "--batch-dir",
+                    str(batch_dir),
+                    "--geocoder-enabled",
+                ]
+            )
+        assert published == []
+        monkeypatch.delenv("QINGPU_DATABASE_URL")
+        monkeypatch.setattr(cli, "create_mysql_connection_factory", original_factory)
         assert (
             main(
                 [
@@ -802,8 +934,57 @@ class TestListingBuild:
             )
             == 1
         )
-        assert published == []
         assert "無法啟用官方門牌 geocoder" in capsys.readouterr().err
+
+    def test_geocoder_enrichment_programming_value_error_propagates(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        raw = tmp_path / "data" / "raw"
+        raw.mkdir(parents=True)
+        shutil.copy2(FIXTURES / "doorplates.csv", raw / "doorplates.csv")
+        batch_dir = raw / "listings" / "591" / "2026-07-22" / "geocoder-value-error"
+        batch_dir.mkdir(parents=True)
+        shutil.copy2(
+            FIXTURES / "listings" / "591_sale_page.html",
+            batch_dir / "page-0001.html",
+        )
+        (batch_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "batch_id": "geocoder-value-error",
+                    "source": "591",
+                    "listing_type": "sale",
+                    "started_at": "2026-07-22T12:00:00+00:00",
+                    "reached_terminal_page": True,
+                    "is_complete": True,
+                    "errors": [],
+                    "pages": [{"page_number": 1}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv(
+            "QINGPU_DATABASE_URL",
+            "mysql+pymysql://user:pass@127.0.0.1:3306/qingpu_insight",
+        )
+        monkeypatch.setattr(cli, "create_mysql_connection_factory", lambda: object())
+        monkeypatch.setattr(cli, "create_listing_geocoding_service", lambda *_: object())
+        monkeypatch.setattr(
+            cli,
+            "_enrich_rows_with_geocoder",
+            lambda *_: (_ for _ in ()).throw(ValueError("programmer mistake")),
+        )
+
+        with pytest.raises(ValueError, match="programmer mistake"):
+            main(
+                [
+                    "listing-build",
+                    "--batch-dir",
+                    str(batch_dir),
+                    "--geocoder-enabled",
+                ]
+            )
 
     def test_default_build_selects_cross_type_batch_by_manifest_started_at(
         self, tmp_path, monkeypatch

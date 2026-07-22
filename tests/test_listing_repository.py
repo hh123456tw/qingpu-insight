@@ -491,6 +491,36 @@ class TestParquetRepositorySpecific:
         expected = snapshots_dir / f"{complete_batch.batch_id}.parquet"
         assert expected.exists()
 
+    @pytest.mark.parametrize(
+        "batch_id",
+        ["../../escaped", r"C:\\escaped", r"\\\\server\\share", "a/b", "a\\b", "", "x" * 65],
+    )
+    def test_unsafe_batch_id_cannot_escape_snapshot_directory(
+        self, parquet_repository, complete_batch, normalized_rows, batch_id
+    ):
+        batch = CaptureBatch(
+            batch_id=batch_id,
+            source=complete_batch.source,
+            listing_type=complete_batch.listing_type,
+            started_at=complete_batch.started_at,
+        )
+        with pytest.raises(ValueError, match="batch_id"):
+            parquet_repository.save_batch(batch, normalized_rows.iloc[[0]])
+        assert not list(parquet_repository.base_path.parent.glob("escaped*.parquet"))
+
+    def test_parquet_canonicalizes_invalid_location_method(
+        self, parquet_repository, complete_batch, normalized_rows
+    ):
+        rows = normalized_rows.iloc[[0]].copy()
+        rows["location_method"] = "forged"
+        rows["location_confidence"] = "high"
+        rows["location_reason"] = "eligible_source_coordinates"
+        parquet_repository.save_batch(complete_batch, rows)
+        stored = parquet_repository.load_current().iloc[0]
+        assert stored["location_method"] == "unknown"
+        assert stored["location_confidence"] == "unknown"
+        assert stored["location_reason"] == "invalid_location_method"
+
     def test_no_tmp_file_left_behind(
         self, parquet_repository, complete_batch, normalized_rows,
     ):
@@ -867,6 +897,27 @@ class TestMySQLRepositoryActualAdapter:
         assert range_params["building_area_max_ping"] == 30.0
         assert range_params["acquisition_representation"] == "jsonld"
         assert range_params["acquisition_schema_version"] == "591-newhouse-jsonld-v1"
+
+    def test_mysql_canonicalizes_invalid_location_method(
+        self, complete_batch, normalized_rows
+    ):
+        connection = RecordingConnection()
+        repository = MySQLListingRepository(connection)
+        rows = normalized_rows.iloc[[0]].copy()
+        rows["location_method"] = "forged"
+        rows["location_confidence"] = "high"
+        rows["location_reason"] = "eligible_source_coordinates"
+
+        repository.save_batch(complete_batch, rows)
+
+        inserts = [
+            params
+            for sql, params in connection.executions
+            if sql.lstrip().startswith("INSERT INTO listing_current")
+        ]
+        assert inserts[0]["location_method"] == "unknown"
+        assert inserts[0]["location_confidence"] == "unknown"
+        assert inserts[0]["location_reason"] == "invalid_location_method"
 
     def test_runtime_and_migration_schemas_define_range_and_acquisition_columns(self):
         migration_sql = (

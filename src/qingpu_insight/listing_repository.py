@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -81,6 +82,25 @@ _LOCATION_DEFAULT_COLUMNS = (
     "location_reason",
 )
 _LISTING_STATE_TABLES = ("listing_snapshots", "listing_current")
+_BATCH_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
+_LOCATION_METHODS = {"source_coordinates", "structured_address", "manual", "unknown"}
+
+
+def valid_listing_batch_id(batch_id: object) -> bool:
+    return isinstance(batch_id, str) and _BATCH_ID_PATTERN.fullmatch(batch_id) is not None
+
+
+def _sanitize_location_provenance(rows: pd.DataFrame) -> pd.DataFrame:
+    sanitized = rows.copy()
+    if "location_method" not in sanitized:
+        return sanitized
+    valid = sanitized["location_method"].isin(_LOCATION_METHODS)
+    if valid.all():
+        return sanitized
+    sanitized.loc[~valid, "location_method"] = "unknown"
+    sanitized.loc[~valid, "location_confidence"] = "unknown"
+    sanitized.loc[~valid, "location_reason"] = "invalid_location_method"
+    return sanitized
 
 
 class ParquetListingRepository:
@@ -101,8 +121,10 @@ class ParquetListingRepository:
     def save_batch(self, batch: CaptureBatch, rows: pd.DataFrame) -> None:
         if rows.empty:
             return
+        if not valid_listing_batch_id(batch.batch_id):
+            raise ValueError("invalid batch_id")
 
-        rows = rows.copy()
+        rows = _sanitize_location_provenance(rows)
         rows["batch_id"] = batch.batch_id
         rows["source"] = batch.source
 
@@ -134,6 +156,8 @@ class ParquetListingRepository:
     ) -> pd.DataFrame:
         snapshots_dir = self.base_path / _SNAPSHOT_DIR
         if batch_id is not None:
+            if not valid_listing_batch_id(batch_id):
+                raise ValueError("invalid batch_id")
             path = snapshots_dir / f"{batch_id}.parquet"
             try:
                 return pd.read_parquet(path)
@@ -219,6 +243,11 @@ class ParquetListingRepository:
         snapshots_dir.mkdir(parents=True, exist_ok=True)
 
         target = snapshots_dir / f"{batch_id}.parquet"
+        root = snapshots_dir.resolve(strict=True)
+        try:
+            target.resolve(strict=False).relative_to(root)
+        except ValueError as exc:
+            raise ValueError("invalid batch_id") from exc
         self._atomic_write(target, rows)
 
     def _merge_current(self, rows: pd.DataFrame) -> None:
@@ -606,7 +635,7 @@ class MySQLListingRepository:
                     self._conn.commit()
                     return
 
-                for _, row in rows.iterrows():
+                for _, row in _sanitize_location_provenance(rows).iterrows():
                     params = {
                         "batch_id": batch.batch_id,
                         "source": batch.source,

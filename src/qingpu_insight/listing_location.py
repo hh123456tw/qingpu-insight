@@ -30,10 +30,26 @@ def assign_listing_life_circle(
 ) -> pd.DataFrame:
     output = listings.copy()
 
+    required = {"station_code", "twd97_x", "twd97_y"}
+    missing = required.difference(stations.columns)
+    if missing:
+        raise ValueError(f"stations missing required columns: {sorted(missing)}")
+    valid_stations = stations.copy()
+    valid_stations["twd97_x"] = pd.to_numeric(valid_stations["twd97_x"], errors="coerce")
+    valid_stations["twd97_y"] = pd.to_numeric(valid_stations["twd97_y"], errors="coerce")
+    valid_stations = valid_stations.loc[
+        valid_stations["station_code"].notna()
+        & valid_stations["station_code"].astype(str).str.strip().ne("")
+        & np.isfinite(valid_stations["twd97_x"])
+        & np.isfinite(valid_stations["twd97_y"])
+    ].copy()
+    if valid_stations.empty:
+        raise ValueError("stations must contain at least one valid station")
+
     transformer = Transformer.from_crs("EPSG:3826", "EPSG:4326", always_xy=True)
     station_lons, station_lats = transformer.transform(
-        stations["twd97_x"].to_numpy(dtype=float),
-        stations["twd97_y"].to_numpy(dtype=float),
+        valid_stations["twd97_x"].to_numpy(dtype=float),
+        valid_stations["twd97_y"].to_numpy(dtype=float),
     )
 
     lats = pd.to_numeric(output["latitude"], errors="coerce").to_numpy(dtype=float)
@@ -53,13 +69,28 @@ def assign_listing_life_circle(
     station_code_col = pd.Series(pd.NA, index=output.index, dtype="string")
     station_dist_col = pd.Series(np.nan, index=output.index, dtype=float)
     location_eligible = np.zeros(len(output), dtype=bool)
-    location_reason = np.full(len(output), "missing_coordinates", dtype=object)
     methods = (
         output["location_method"].fillna("unknown").astype(str).to_numpy()
         if "location_method" in output
         else np.full(len(output), "source_coordinates", dtype=object)
     )
-
+    preserved_reasons = {
+        "geocoder_unavailable",
+        "address_not_resolved",
+        "invalid_geocoder_coordinates",
+        "missing_structured_address",
+        "detail_address_missing",
+    }
+    prior_reasons = (
+        output["location_reason"].fillna("").astype(str).to_numpy()
+        if "location_reason" in output
+        else np.full(len(output), "", dtype=object)
+    )
+    location_reason = np.where(
+        (methods == "unknown") & np.isin(prior_reasons, list(preserved_reasons)),
+        prior_reasons,
+        "missing_coordinates",
+    ).astype(object)
     if has_coords.any():
         distances = _haversine_distance(
             lats[has_coords], lons[has_coords],
@@ -72,7 +103,7 @@ def assign_listing_life_circle(
         valid_indices = np.where(has_coords)[0]
         # Retain nearest-station evidence even if the listing is outside the
         # service radius; the radius only controls eligibility.
-        station_code_col.iloc[valid_indices] = stations.iloc[nearest_idx][
+        station_code_col.iloc[valid_indices] = valid_stations.iloc[nearest_idx][
             "station_code"
         ].values
         station_dist_col.iloc[valid_indices] = nearest_dist

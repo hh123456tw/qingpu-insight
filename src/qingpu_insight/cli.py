@@ -29,12 +29,16 @@ from qingpu_insight.listing_591 import (
     SourceListing,
     extract_rendered_page,
 )
-from qingpu_insight.listing_capture import ChromeConfig, Selenium591Source
-from qingpu_insight.listing_detail_enrichment import DetailEnrichmentBlocked
+from qingpu_insight.listing_capture import ChromeConfig, Selenium591Source, create_chrome
+from qingpu_insight.listing_detail_enrichment import (
+    DetailEnrichmentBlocked,
+    ListingDetailEnricher,
+)
 from qingpu_insight.listing_events import detect_listing_events
 from qingpu_insight.listing_geocoding import (
     DoorplateListingGeocoder,
     GeocodingService,
+    MySQLGeocodeCache,
 )
 from qingpu_insight.listing_location import assign_listing_life_circle
 from qingpu_insight.listing_normalization import NormalizedListing, normalize_listing
@@ -42,6 +46,7 @@ from qingpu_insight.listing_repository import (
     ListingRepository,
     MySQLListingRepository,
     ParquetListingRepository,
+    valid_listing_batch_id,
 )
 from qingpu_insight.listing_sources import CaptureBatch, ListingSource
 from qingpu_insight.listing_valuation import compare_listing_to_model
@@ -266,27 +271,33 @@ def create_listing_source(
     return Selenium591Source(base_dir=root, config=config or ChromeConfig())
 
 
-def create_listing_repository(root: Path) -> ListingRepository:
+def create_mysql_connection_factory():
     database_url = os.environ.get("QINGPU_DATABASE_URL")
-    if database_url:
-        parsed = urllib.parse.urlparse(database_url)
-        if parsed.scheme not in ("mysql", "mysql+pymysql"):
-            raise ValueError(
-                f"Unsupported scheme: {parsed.scheme!r}; "
-                "expected 'mysql' or 'mysql+pymysql'"
-            )
-        database = parsed.path.lstrip("/")
-        if not database:
-            raise ValueError("QINGPU_DATABASE_URL must include a database name")
-        connection = pymysql.connect(
-            host=parsed.hostname or "localhost",
-            port=parsed.port or 3306,
-            user=urllib.parse.unquote(parsed.username or ""),
-            password=urllib.parse.unquote(parsed.password or ""),
-            database=database,
-            charset="utf8mb4",
+    if not database_url:
+        raise ValueError("QINGPU_DATABASE_URL is required for persistent geocoding")
+    parsed = urllib.parse.urlparse(database_url)
+    if parsed.scheme not in ("mysql", "mysql+pymysql"):
+        raise ValueError(
+            f"Unsupported scheme: {parsed.scheme!r}; "
+            "expected 'mysql' or 'mysql+pymysql'"
         )
-        return MySQLListingRepository(connection)
+    database = parsed.path.lstrip("/")
+    if not database:
+        raise ValueError("QINGPU_DATABASE_URL must include a database name")
+    kwargs = {
+        "host": parsed.hostname or "localhost",
+        "port": parsed.port or 3306,
+        "user": urllib.parse.unquote(parsed.username or ""),
+        "password": urllib.parse.unquote(parsed.password or ""),
+        "database": database,
+        "charset": "utf8mb4",
+    }
+    return lambda: pymysql.connect(**kwargs)
+
+
+def create_listing_repository(root: Path) -> ListingRepository:
+    if os.environ.get("QINGPU_DATABASE_URL"):
+        return MySQLListingRepository(create_mysql_connection_factory()())
     return ParquetListingRepository(root / "data" / "processed")
 
 
@@ -418,28 +429,34 @@ def _write_listing_location_quality(
     )
 
 
-class _InMemoryGeocodeCache:
-    """Per-build cache for the explicit official-doorplate adapter."""
-
-    def __init__(self) -> None:
-        self._values: dict[str, LocationEvidence] = {}
-
-    def get(self, normalized_address: str) -> LocationEvidence | None:
-        return self._values.get(normalized_address)
-
-    def put(self, normalized_address: str, evidence: LocationEvidence) -> None:
-        self._values[normalized_address] = evidence
-
-
-def create_listing_geocoding_service(doorplates: pd.DataFrame) -> GeocodingService:
+def create_listing_geocoding_service(
+    doorplates: pd.DataFrame, connection_factory=None
+) -> GeocodingService:
     """Create the only default geocoder: local official doorplate evidence.
 
     It is deliberately local and must be called explicitly by
     ``listing-build --geocoder-enabled``; no browser, secret, or network is
     implicitly configured for offline builds.
     """
-    return GeocodingService(
-        DoorplateListingGeocoder(doorplates), _InMemoryGeocodeCache()
+    if connection_factory is None:
+        raise ValueError("QINGPU_DATABASE_URL is required for persistent geocoding")
+    cache = MySQLGeocodeCache(connection_factory)
+    cache.ensure_schema()
+    return GeocodingService(DoorplateListingGeocoder(doorplates), cache)
+
+
+def create_listing_detail_enricher(args) -> ListingDetailEnricher:
+    if args.page_timeout < 1:
+        raise ValueError("page-timeout 必須 >= 1")
+    if not args.profile_dir:
+        raise ValueError("detail enrichment requires --profile-dir")
+    return ListingDetailEnricher(
+        browser_factory=create_chrome,
+        chrome_config=ChromeConfig(
+            headless=False,
+            profile_dir=args.profile_dir,
+            page_timeout_seconds=args.page_timeout,
+        ),
     )
 
 
@@ -560,8 +577,7 @@ def _valid_listing_build_manifest(manifest: object) -> bool:
     if not isinstance(manifest, dict):
         return False
     if (
-        not isinstance(manifest.get("batch_id"), str)
-        or not manifest["batch_id"]
+        not valid_listing_batch_id(manifest.get("batch_id"))
         or manifest.get("listing_type") not in listing_type_choices
         or not isinstance(manifest.get("started_at"), str)
         or not manifest["started_at"]
@@ -763,12 +779,13 @@ def listing_build(root: Path, args, *, detail_enricher=None) -> int:
     df = pd.DataFrame(rows)
     if args.geocoder_enabled:
         try:
-            df = _enrich_rows_with_geocoder(
-                df, create_listing_geocoding_service(doorplates)
+            geocoding_service = create_listing_geocoding_service(
+                doorplates, create_mysql_connection_factory()
             )
-        except Exception as exc:
+        except (OSError, ValueError, pymysql.MySQLError) as exc:
             print(f"無法啟用官方門牌 geocoder: {exc}", file=sys.stderr)
             return 1
+        df = _enrich_rows_with_geocoder(df, geocoding_service)
     located = assign_listing_life_circle(df, stations, settings.radius_m)
 
     batch = CaptureBatch(
@@ -998,6 +1015,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     build_parser.add_argument("--batch-dir", default=None)
     build_parser.add_argument("--geocoder-enabled", action="store_true")
+    build_parser.add_argument("--detail-enrichment-enabled", action="store_true")
+    build_parser.add_argument("--profile-dir", default=None)
+    build_parser.add_argument("--page-timeout", type=int, default=30)
 
     sync_parser = subparsers.add_parser(
         "listing-sync",
@@ -1030,7 +1050,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "listing-scrape":
         return listing_scrape(root, args)
     if args.command == "listing-build":
-        return listing_build(root, args)
+        detail_enricher = None
+        if args.detail_enrichment_enabled:
+            try:
+                detail_enricher = create_listing_detail_enricher(args)
+            except ValueError as exc:
+                print(f"無法啟用 detail enrichment: {exc}", file=sys.stderr)
+                return 1
+        return listing_build(root, args, detail_enricher=detail_enricher)
     if args.command == "listing-sync":
         return listing_sync(root, args)
     return 0
