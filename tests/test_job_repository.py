@@ -148,6 +148,20 @@ def test_schema_migration_is_idempotent_and_signals_active_duplicates() -> None:
     assert "ADD UNIQUE INDEX uq_job_runs_active_key" in migration
 
 
+def test_mysql_trigger_identifier_is_quoted_in_ddl_and_insert() -> None:
+    connection = FakeConnection()
+    repository = MySQLJobRepository(connection)
+    repository.create_or_get(pending_run())
+    statements = [sql for sql, _ in connection.cursor_instance.executed]
+    migration = (
+        Path(__file__).parents[1] / "database" / "004_m4_jobs_publishing_schema.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "`trigger` VARCHAR(32) NOT NULL" in statements[0]
+    assert any("(run_id, job_type, `trigger`," in sql for sql in statements)
+    assert "`trigger` VARCHAR(32) NOT NULL" in migration
+
+
 def test_create_or_get_returns_created_run(fake_conn: FakeConnection) -> None:
     repo = MySQLJobRepository(fake_conn)
     run, created = repo.create_or_get(pending_run())

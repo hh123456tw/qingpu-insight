@@ -12,7 +12,12 @@ import pytest
 
 from qingpu_insight import publishing
 from qingpu_insight.listing_sources import CaptureBatch
-from qingpu_insight.publishing import DatasetVersion, MySQLVersionPublisher, compute_artifact_hash
+from qingpu_insight.publishing import (
+    DatasetVersion,
+    ImmutableDatasetVersionError,
+    MySQLVersionPublisher,
+    compute_artifact_hash,
+)
 
 
 class FakeDatabase:
@@ -28,6 +33,8 @@ class FakeDatabase:
         self.runtime_current: dict[tuple[str, str, str], dict[str, Any]] = {}
         self.runtime_events: dict[str, dict[str, Any]] = {}
         self.fail_on: str | None = None
+        self.concurrent_snapshot: dict[str, Any] | None = None
+        self.concurrent_error: pymysql.err.IntegrityError | None = None
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -188,13 +195,52 @@ class FakeConnection:
         self.closed = True
 
 
-class FakeConnectionFactory:
+class ConcurrentStageCursor(FakeCursor):
+    def execute(self, sql: str, params: Any = None) -> int:
+        normalized = " ".join(sql.lower().split())
+        database = self.connection.database
+        if (
+            normalized.startswith("insert into dataset_versions")
+            and database.concurrent_snapshot is not None
+        ):
+            winner = database.concurrent_snapshot
+            error = database.concurrent_error
+            database.concurrent_snapshot = None
+            database.restore(winner)
+            self.connection.preserve_concurrent_commit = True
+            assert error is not None
+            raise error
+        return super().execute(sql, params)
+
+
+class ConcurrentStageConnection(FakeConnection):
     def __init__(self, database: FakeDatabase) -> None:
+        super().__init__(database)
+        self.preserve_concurrent_commit = False
+
+    def cursor(self, cursor_class: object = None) -> FakeCursor:
+        self.cursor_classes.append(cursor_class)
+        return ConcurrentStageCursor(self)
+
+    def rollback(self) -> None:
+        self.rollbacks += 1
+        if not self.preserve_concurrent_commit:
+            self.database.restore(self._before)
+        self.preserve_concurrent_commit = False
+
+
+class FakeConnectionFactory:
+    def __init__(
+        self,
+        database: FakeDatabase,
+        connection_type: type[FakeConnection] = FakeConnection,
+    ) -> None:
         self.database = database
+        self.connection_type = connection_type
         self.connections: list[FakeConnection] = []
 
     def __call__(self) -> FakeConnection:
-        connection = FakeConnection(self.database)
+        connection = self.connection_type(self.database)
         self.connections.append(connection)
         return connection
 
@@ -270,6 +316,17 @@ def make_publisher() -> tuple[FakeDatabase, FakeConnectionFactory, MySQLVersionP
     return database, factory, publisher
 
 
+def make_concurrent_publisher(
+    winner: FakeDatabase,
+    error: pymysql.err.IntegrityError,
+) -> tuple[FakeDatabase, FakeConnectionFactory, MySQLVersionPublisher]:
+    database = FakeDatabase()
+    database.concurrent_snapshot = winner.snapshot()
+    database.concurrent_error = error
+    factory = FakeConnectionFactory(database, ConcurrentStageConnection)
+    return database, factory, MySQLVersionPublisher(factory, dataset_key="listings")
+
+
 def test_stage_writes_only_immutable_version_tables(
     tmp_path: Path, batch: CaptureBatch, listing_rows: pd.DataFrame,
     listing_events: pd.DataFrame,
@@ -311,6 +368,69 @@ def test_stage_is_idempotent_but_immutable(
     )
     with pytest.raises(ValueError, match="immutable conflict"):
         publisher.stage(changed_version, [batch], changed, listing_events)
+
+
+def test_concurrent_identical_stage_recovers_as_idempotent_retry(
+    tmp_path: Path, batch: CaptureBatch, listing_rows: pd.DataFrame,
+    listing_events: pd.DataFrame,
+) -> None:
+    version = make_version(tmp_path / "v1.parquet", listing_rows)
+    winner, _, winner_publisher = make_publisher()
+    winner_publisher.stage(version, [batch], listing_rows, listing_events)
+    database, factory, publisher = make_concurrent_publisher(
+        winner,
+        pymysql.err.IntegrityError(
+            1062,
+            "Duplicate entry 'listings-v1' for key 'dataset_versions.PRIMARY'",
+        ),
+    )
+
+    publisher.stage(version, [batch], listing_rows, listing_events)
+
+    assert database.versions[("listings", "v1")]["run_id"] == "run-1"
+    assert len(factory.connections) == 3
+    assert all(connection.closed for connection in factory.connections)
+
+
+def test_concurrent_conflicting_stage_raises_controlled_immutable_error(
+    tmp_path: Path, batch: CaptureBatch, listing_rows: pd.DataFrame,
+    listing_events: pd.DataFrame,
+) -> None:
+    candidate = make_version(tmp_path / "v1.parquet", listing_rows)
+    winner_version = DatasetVersion(**{**candidate.__dict__, "run_id": "other-run"})
+    winner, _, winner_publisher = make_publisher()
+    winner_publisher.stage(winner_version, [batch], listing_rows, listing_events)
+    _, _, publisher = make_concurrent_publisher(
+        winner,
+        pymysql.err.IntegrityError(
+            1062,
+            "Duplicate entry 'listings-v1' for key 'PRIMARY'",
+        ),
+    )
+
+    with pytest.raises(ImmutableDatasetVersionError) as raised:
+        publisher.stage(candidate, [batch], listing_rows, listing_events)
+
+    assert "immutable conflict" in str(raised.value)
+
+
+def test_concurrent_stage_does_not_swallow_unrelated_duplicate(
+    tmp_path: Path, batch: CaptureBatch, listing_rows: pd.DataFrame,
+    listing_events: pd.DataFrame,
+) -> None:
+    version = make_version(tmp_path / "v1.parquet", listing_rows)
+    winner, _, winner_publisher = make_publisher()
+    winner_publisher.stage(version, [batch], listing_rows, listing_events)
+    unrelated = pymysql.err.IntegrityError(
+        1062,
+        "Duplicate entry 'run-1' for key 'dataset_versions.uq_run_id'",
+    )
+    _, _, publisher = make_concurrent_publisher(winner, unrelated)
+
+    with pytest.raises(pymysql.err.IntegrityError) as raised:
+        publisher.stage(version, [batch], listing_rows, listing_events)
+
+    assert raised.value is unrelated
 
 
 @pytest.mark.parametrize(
@@ -510,6 +630,33 @@ def test_migration_defines_scoped_immutable_staging_and_collision_guard() -> Non
     assert "information_schema" in sql
     assert "SIGNAL SQLSTATE '45000'" in sql
     assert "DROP TABLE dataset_versions" not in sql
+
+
+def test_dataset_row_number_identifier_is_quoted_for_mysql_8() -> None:
+    connection = FakeConnection(FakeDatabase())
+    publisher = MySQLVersionPublisher(connection)
+    rows = pd.DataFrame([{"source_listing_id": "one"}])
+    version = DatasetVersion(
+        version="v1",
+        run_id="run-1",
+        status="ready",
+        summary={},
+        artifact_path="unused.parquet",
+        artifact_hash="a" * 64,
+        artifact_row_count=1,
+        rows_hash=publishing.compute_rows_hash(rows),
+    )
+    publisher.stage(version, [], rows, pd.DataFrame())
+    publisher.stage(version, [], rows, pd.DataFrame())
+    statements = [sql for sql, _ in connection.executions if "row_number" in sql]
+    migration = (
+        Path(__file__).parents[1] / "database" / "004_m4_jobs_publishing_schema.sql"
+    ).read_text(encoding="utf-8")
+
+    assert statements
+    assert all("`row_number`" in sql for sql in statements)
+    assert "`row_number` BIGINT UNSIGNED NOT NULL" in migration
+    assert "PRIMARY KEY (dataset_key, version, `row_number`)" in migration
 
 
 def test_runtime_schema_setup_inspects_existing_dataset_version_shape() -> None:

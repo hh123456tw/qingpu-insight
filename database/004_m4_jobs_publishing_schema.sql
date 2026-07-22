@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS job_runs (
     run_id VARCHAR(36) NOT NULL PRIMARY KEY,
     job_type VARCHAR(64) NOT NULL,
-    trigger VARCHAR(32) NOT NULL,
+    `trigger` VARCHAR(32) NOT NULL,
     idempotency_key VARCHAR(255) NOT NULL,
     status VARCHAR(32) NOT NULL,
     active_idempotency_key VARCHAR(255)
@@ -182,10 +182,10 @@ CREATE TABLE IF NOT EXISTS dataset_version_batches (
 CREATE TABLE IF NOT EXISTS dataset_version_rows (
     dataset_key VARCHAR(64) NOT NULL,
     version VARCHAR(64) NOT NULL,
-    row_number BIGINT UNSIGNED NOT NULL,
+    `row_number` BIGINT UNSIGNED NOT NULL,
     payload JSON NOT NULL,
     row_hash CHAR(64) NOT NULL,
-    PRIMARY KEY (dataset_key, version, row_number)
+    PRIMARY KEY (dataset_key, version, `row_number`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS dataset_version_events (

@@ -53,7 +53,7 @@ class MySQLJobRepository:
                         CREATE TABLE IF NOT EXISTS job_runs (
                             run_id VARCHAR(36) NOT NULL PRIMARY KEY,
                             job_type VARCHAR(64) NOT NULL,
-                            trigger VARCHAR(32) NOT NULL,
+                            `trigger` VARCHAR(32) NOT NULL,
                             idempotency_key VARCHAR(255) NOT NULL,
                             status VARCHAR(32) NOT NULL,
                             active_idempotency_key VARCHAR(255)
@@ -164,7 +164,7 @@ class MySQLJobRepository:
     def _insert(cursor: Any, run: JobRun) -> None:
         cursor.execute(
             """INSERT INTO job_runs
-               (run_id, job_type, trigger, idempotency_key, status, attempt,
+               (run_id, job_type, `trigger`, idempotency_key, status, attempt,
                 input_version, output_version, summary, error_code, error_message,
                 started_at, finished_at)
                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",

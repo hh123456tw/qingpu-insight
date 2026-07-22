@@ -23,6 +23,10 @@ class DatasetVersionMigrationConflict(RuntimeError):
     """Raised when legacy metadata cannot be made immutable without invention."""
 
 
+class ImmutableDatasetVersionError(ValueError):
+    """Raised when a dataset version key is already owned by another payload."""
+
+
 @dataclass(frozen=True)
 class DatasetVersion:
     version: str
@@ -65,10 +69,10 @@ _CREATE_VERSION_ROWS_SQL = """
 CREATE TABLE IF NOT EXISTS dataset_version_rows (
   dataset_key VARCHAR(64) NOT NULL,
   version VARCHAR(64) NOT NULL,
-  row_number BIGINT UNSIGNED NOT NULL,
+  `row_number` BIGINT UNSIGNED NOT NULL,
   payload JSON NOT NULL,
   row_hash CHAR(64) NOT NULL,
-  PRIMARY KEY (dataset_key, version, row_number)
+  PRIMARY KEY (dataset_key, version, `row_number`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 """
 
@@ -301,6 +305,7 @@ class MySQLVersionPublisher:
             raise ValueError("duplicate event_key in staged payload")
 
         with self._operation_connection() as connection:
+            inserting_version_metadata = False
             try:
                 with connection.cursor(pymysql.cursors.DictCursor) as cursor:
                     existing = self._select_version(cursor, version.version)
@@ -309,12 +314,13 @@ class MySQLVersionPublisher:
                             cursor, existing, version, batch_payloads, row_payloads,
                             event_payloads,
                         ):
-                            raise ValueError(
+                            raise ImmutableDatasetVersionError(
                                 f"immutable conflict for {self._dataset_key}/{version.version}"
                             )
                         connection.commit()
                         return
 
+                    inserting_version_metadata = True
                     cursor.execute(
                         """INSERT INTO dataset_versions
                            (dataset_key, version, run_id, status, summary, artifact_path,
@@ -334,6 +340,7 @@ class MySQLVersionPublisher:
                             "rows_hash": version.rows_hash,
                         },
                     )
+                    inserting_version_metadata = False
                     for batch_id, payload in batch_payloads:
                         cursor.execute(
                             """INSERT INTO dataset_version_batches
@@ -349,7 +356,7 @@ class MySQLVersionPublisher:
                     for row_number, (payload, row_hash) in enumerate(row_payloads):
                         cursor.execute(
                             """INSERT INTO dataset_version_rows
-                               (dataset_key, version, row_number, payload, row_hash)
+                               (dataset_key, version, `row_number`, payload, row_hash)
                                VALUES (%(dataset_key)s, %(version)s, %(row_number)s,
                                        %(payload)s, %(row_hash)s)""",
                             {
@@ -373,6 +380,16 @@ class MySQLVersionPublisher:
                             },
                         )
                 connection.commit()
+            except pymysql.err.IntegrityError as error:
+                connection.rollback()
+                if not (
+                    inserting_version_metadata
+                    and self._is_dataset_version_primary_duplicate(error)
+                ):
+                    raise
+                self._recover_concurrent_stage(
+                    version, batch_payloads, row_payloads, event_payloads
+                )
             except Exception:
                 connection.rollback()
                 raise
@@ -497,6 +514,41 @@ class MySQLVersionPublisher:
         )
         return cursor.fetchone()
 
+    @staticmethod
+    def _is_dataset_version_primary_duplicate(
+        error: pymysql.err.IntegrityError,
+    ) -> bool:
+        if not error.args or error.args[0] != 1062:
+            return False
+        message = str(error).lower()
+        return (
+            "dataset_versions.primary" in message
+            or "for key 'primary'" in message
+            or "for key `primary`" in message
+        )
+
+    def _recover_concurrent_stage(
+        self,
+        version: DatasetVersion,
+        batches: list[tuple[str, str]],
+        rows: list[tuple[str, str]],
+        events: list[tuple[str, str]],
+    ) -> None:
+        with self._operation_connection() as connection:
+            try:
+                with connection.cursor(pymysql.cursors.DictCursor) as cursor:
+                    existing = self._select_version(cursor, version.version)
+                    if existing is None or not self._matches_existing_stage(
+                        cursor, existing, version, batches, rows, events
+                    ):
+                        raise ImmutableDatasetVersionError(
+                            f"immutable conflict for {self._dataset_key}/{version.version}"
+                        )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+
     def _matches_existing_stage(
         self,
         cursor,
@@ -517,8 +569,8 @@ class MySQLVersionPublisher:
             for row in cursor.fetchall()
         ]
         cursor.execute(
-            "SELECT row_number, payload, row_hash FROM dataset_version_rows "
-            "WHERE dataset_key = %s AND version = %s ORDER BY row_number",
+            "SELECT `row_number`, payload, row_hash FROM dataset_version_rows "
+            "WHERE dataset_key = %s AND version = %s ORDER BY `row_number`",
             (self._dataset_key, version.version),
         )
         existing_rows = [
@@ -568,8 +620,8 @@ class MySQLVersionPublisher:
         ]
 
         cursor.execute(
-            "SELECT row_number, payload, row_hash FROM dataset_version_rows "
-            "WHERE dataset_key = %s AND version = %s ORDER BY row_number",
+            "SELECT `row_number`, payload, row_hash FROM dataset_version_rows "
+            "WHERE dataset_key = %s AND version = %s ORDER BY `row_number`",
             (self._dataset_key, version.version),
         )
         stored_rows = cursor.fetchall()
