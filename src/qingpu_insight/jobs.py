@@ -57,6 +57,12 @@ class JobRun:
     error_message: str | None
 
 
+@dataclass(frozen=True)
+class JobSubmission:
+    run: JobRun
+    created: bool
+
+
 _CREDENTIAL_PATTERN = re.compile(r"(?<=\/\/)[^:]+:[^@]+@")
 _API_KEY_PATTERN = re.compile(r"(?i)(api[_-]?key|token|secret)\s*[:=]\s*\S+")
 _PHONE_PATTERN = re.compile(r"(?<!\d)09\d{2}(?:-?\d{3}){2}(?!\d)")
@@ -72,11 +78,17 @@ def redact_job_message(message: str) -> str:
 
 
 class JobRepository(Protocol):
-    def create(self, run: JobRun) -> None: ...
+    def create_or_get(self, run: JobRun) -> tuple[JobRun, bool]: ...
     def get(self, run_id: str) -> JobRun | None: ...
     def find_active_by_key(self, idempotency_key: str) -> JobRun | None: ...
+    def list_recent(self, limit: int = 20) -> list[JobRun]: ...
     def transition(
         self, run_id: str, current_status: JobStatus, target_status: JobStatus,
+        *,
+        output_version: str | None = None,
+        summary: dict[str, object] | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
     ) -> bool: ...
 
 
@@ -87,10 +99,7 @@ class JobService:
     def create(
         self, job_type: str, idempotency_key: str, trigger: str,
         input_version: str | None = None,
-    ) -> JobRun:
-        existing = self._repository.find_active_by_key(idempotency_key)
-        if existing is not None:
-            return existing
+    ) -> JobSubmission:
         run = JobRun(
             run_id=str(uuid.uuid4()),
             job_type=job_type,
@@ -106,16 +115,39 @@ class JobService:
             error_code=None,
             error_message=None,
         )
-        self._repository.create(run)
-        return run
+        persisted, created = self._repository.create_or_get(run)
+        return JobSubmission(run=persisted, created=created)
 
-    def _transition(self, run_id: str, target: JobStatus) -> JobRun:
+    def get(self, run_id: str) -> JobRun | None:
+        return self._repository.get(run_id)
+
+    def list_recent(self, limit: int = 20) -> list[JobRun]:
+        return self._repository.list_recent(limit)
+
+    def _transition(
+        self,
+        run_id: str,
+        target: JobStatus,
+        *,
+        output_version: str | None = None,
+        summary: dict[str, object] | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> JobRun:
         run = self._repository.get(run_id)
         if run is None:
             raise ValueError(f"run {run_id} not found")
         if target not in ALLOWED_TRANSITIONS.get(run.status, ()):
             raise InvalidJobTransition(run_id, run.status, target)
-        success = self._repository.transition(run_id, run.status, target)
+        success = self._repository.transition(
+            run_id,
+            run.status,
+            target,
+            output_version=output_version,
+            summary=summary,
+            error_code=error_code,
+            error_message=error_message,
+        )
         if not success:
             raise InvalidJobTransition(run_id, run.status, target)
         updated = self._repository.get(run_id)
@@ -125,11 +157,26 @@ class JobService:
     def start(self, run_id: str) -> JobRun:
         return self._transition(run_id, "running")
 
-    def succeed(self, run_id: str) -> JobRun:
-        return self._transition(run_id, "succeeded")
+    def succeed(
+        self,
+        run_id: str,
+        output_version: str | None = None,
+        summary: dict[str, object] | None = None,
+    ) -> JobRun:
+        return self._transition(
+            run_id,
+            "succeeded",
+            output_version=output_version,
+            summary=summary,
+        )
 
     def fail(self, run_id: str, error_code: str = "", error_message: str = "") -> JobRun:
-        return self._transition(run_id, "failed")
+        return self._transition(
+            run_id,
+            "failed",
+            error_code=error_code,
+            error_message=redact_job_message(error_message),
+        )
 
     def retry(self, run_id: str) -> JobRun:
         return self._transition(run_id, "retry_wait")
