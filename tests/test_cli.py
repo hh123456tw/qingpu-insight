@@ -75,6 +75,30 @@ def test_listing_build_help_documents_location_quality_controls(capsys) -> None:
     assert "default: 30" in output
 
 
+def test_location_quality_docs_preserve_offline_environment_and_prerequisites() -> None:
+    root = Path(__file__).resolve().parents[1]
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    methodology = (root / "docs" / "m4-location-methodology.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "data/raw/doorplates.csv" in readme
+    assert "data/raw/doorplates.csv" in methodology
+    assert "qingpu-data acquire" in readme
+    assert "pwsh -NoProfile -Command" in readme
+    assert "$env:QINGPU_DATABASE_URL = $null" in readme
+    assert "missing_coordinates" in methodology
+    assert "detail.detail_address_missing" in methodology
+    assert "contact-shaped text" in methodology
+    assert "per-row cache get/put" in methodology
+
+
+def test_listing_docs_describe_free_text_contact_risk() -> None:
+    root = Path(__file__).resolve().parents[1]
+    for path in (root / "README.md", root / "docs" / "m3-listing-methodology.md"):
+        assert "contact-shaped text" in path.read_text(encoding="utf-8")
+
+
 def test_listing_build_detail_enrichment_is_explicit_and_visible() -> None:
     args = cli.build_parser().parse_args(
         [

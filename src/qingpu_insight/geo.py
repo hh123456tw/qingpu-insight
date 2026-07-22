@@ -16,10 +16,16 @@ def station_points(stations: tuple[Station, ...], doorplates: pd.DataFrame) -> p
         }
     )
     located = match_addresses(source, doorplates)
-    assignable = located["twd97_x"].notna()
+    assignable = (
+        located["match_quality"].eq("exact")
+        & located["twd97_x"].notna()
+        & located["twd97_y"].notna()
+    )
     if not assignable.all():
-        missing = located.loc[~assignable, "station_code"].tolist()
-        raise ValueError(f"station addresses could not be located at all: {missing}")
+        invalid = located.loc[~assignable, "station_code"].tolist()
+        raise ValueError(
+            f"station addresses require exact official doorplate matches: {invalid}"
+        )
     return located[["station_code", "station_name", "twd97_x", "twd97_y"]]
 
 

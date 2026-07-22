@@ -1,6 +1,43 @@
 import pandas as pd
+import pytest
 
-from qingpu_insight.geo import assign_life_circle
+from qingpu_insight.config import Station
+from qingpu_insight.geo import assign_life_circle, station_points
+
+
+def test_station_points_requires_exact_official_doorplates() -> None:
+    doorplates = pd.DataFrame(
+        {
+            "district": ["大園區", "中壢區", "中壢區"],
+            "normalized_address": [
+                "領航北路四段351號",
+                "高鐵北路一段5號",
+                "高鐵南路二段350號",
+            ],
+            "road_key": ["領航北路四段", "高鐵北路一段", "高鐵南路二段"],
+            "house_number": [351, 5, 350],
+            "twd97_x": [274000.0, 276000.0, 275000.0],
+            "twd97_y": [2768000.0, 2767000.0, 2766000.0],
+        }
+    )
+    exact_stations = (
+        Station("A17", "領航站", "桃園市大園區領航北路四段351號"),
+        Station("A18", "高鐵桃園站", "桃園市中壢區高鐵北路一段5號"),
+        Station("A19", "桃園體育園區站", "桃園市中壢區高鐵南路二段350號"),
+    )
+
+    exact = station_points(exact_stations, doorplates)
+
+    assert exact["station_code"].tolist() == ["A17", "A18", "A19"]
+    with pytest.raises(ValueError, match="exact"):
+        station_points(
+            (
+                Station("A17", "領航站", "桃園市大園區領航北路四段352號"),
+                exact_stations[1],
+                exact_stations[2],
+            ),
+            doorplates,
+        )
 
 
 def test_assign_life_circle_uses_nearest_station_inside_radius() -> None:

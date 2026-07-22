@@ -151,7 +151,7 @@ mysql -u root -p < database/001_market_schema.sql
 - Chrome 瀏覽器（最新穩定版）
 - 預設開啟可見 Chrome；`--headless` 僅為 best-effort，591 頁面或驗證流程可能不支援
 - `--profile-dir <path>` 會把本機 Chrome user-data 目錄傳給 Selenium；請使用專用且未被其他 Chrome 程序占用的目錄
-- 系統不把 591 帳號、密碼、Cookie 或聯絡欄位寫入 manifest、結構化快照或 API；不要把密碼放在命令列。原始 HTML 可能重現公開頁面文字，必須留在本機忽略路徑並依資料保留政策刪除
+- 系統不刻意抽取 591 帳號、密碼、Cookie 或專用聯絡欄位；不要把密碼放在命令列。title 等 free text 與 raw HTML 仍可能含 contact-shaped text，發布 snapshot 或 API 前必須經偵測／清理 gate；原始 HTML 必須留在本機忽略路徑並依資料保留政策刪除
 
 三種公開桃園路由分別為：
 
@@ -227,8 +227,8 @@ newhouse 的 JSON-LD 提供每坪單價 `lowPrice` / `highPrice` 與坪數範圍
 - 原始 HTML **不提交 Git**（`data/raw/listings/` 已排除）
 - 公開 API 回傳已過濾欄位，不包含 `raw_hash`、`batch_id` 等內部欄位
 - 座標經四捨五入至小數四位
-- manifest、結構化快照與 API 不保留聯絡欄位；本機 raw HTML 仍可能包含公開頁面文字
-- 不儲存帳號密碼
+- 結構化 schema 沒有專用聯絡欄位，也不刻意抽取聯絡資訊；但 title 等 free text 與本機 raw HTML 仍可能含 contact-shaped text，發布 snapshot 或 API 前必須通過偵測／清理 gate
+- 不儲存帳號密碼；Chrome profile 與 raw HTML 視為敏感本機資料
 
 ### 方法論文件
 
@@ -236,14 +236,19 @@ newhouse 的 JSON-LD 提供每坪單價 `lowPrice` / `highPrice` 與坪數範圍
 
 ## M4.1 刊登定位品質 smoke
 
-`listing-build` 預設保留 M3 的本機／Parquet 相容流程：不開 Chrome、不啟用 geocoder，且需要一個已完成（`is_complete=true`）的 raw batch。下列 `$batchDir` 請改成實際完整批次；不要把真實密碼放進指令、文件或 Git。
+`listing-build` 的所有模式（包含預設離線、geocoder 與 detail）都需要已完成（`is_complete=true`）的 raw batch **及** `data/raw/doorplates.csv`。目前沒有單獨下載門牌的 CLI；請先執行既有 [M0 工作流程](#m0-工作流程) 的 `qingpu-data acquire`，它會從桃園官方資料來源建立此 CSV（也會下載 M0 的交易輸入）。檔案必須保留官方欄位／schema，讓既有門牌 ingest 建立區域、正規化地址與 TWD97 座標。
+
+`listing-build` 預設保留 M3 的本機／Parquet 相容流程：不開 Chrome、不啟用 geocoder。下列 `$batchDir` 請改成實際完整批次；不要把真實密碼放進指令、文件或 Git。
 
 ```powershell
 $batchDir = "data/raw/listings/591/<YYYY-MM-DD>/<complete-batch-id>"
 
-# 預設離線 build（未設定 QINGPU_DATABASE_URL）
-Remove-Item Env:QINGPU_DATABASE_URL -ErrorAction SilentlyContinue
-.\.venv\Scripts\qingpu-data.exe listing-build --batch-dir $batchDir
+# 預設離線 build：只在 child pwsh 清除 DB env，不改變目前 shell
+pwsh -NoProfile -Command {
+  param($inputBatch)
+  $env:QINGPU_DATABASE_URL = $null
+  & .\.venv\Scripts\qingpu-data.exe listing-build --batch-dir $inputBatch
+} -args $batchDir
 
 # 選用：官方門牌精確 geocoder；需 MySQL 作 persistent cache
 $env:QINGPU_DATABASE_URL = "mysql+pymysql://<user>:<password>@127.0.0.1:3306/<database>"
