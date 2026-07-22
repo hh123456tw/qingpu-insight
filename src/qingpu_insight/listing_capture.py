@@ -426,7 +426,7 @@ def _capture_readiness(
     empty_selectors: tuple[str, ...],
 ) -> str | bool:
     html = browser.page_source
-    if _likely_verification(html):
+    if is_verification_page(html):
         return "verification"
     card_matches = [
         browser.find_elements("css selector", selector)
@@ -443,7 +443,7 @@ def _capture_readiness(
     return False
 
 
-def _likely_verification(html: str) -> bool:
+def is_verification_page(html: str) -> bool:
     soup = BeautifulSoup(html, "html.parser")
     for element in soup(["script", "style", "noscript", "template"]):
         element.decompose()
@@ -476,7 +476,7 @@ def _write_diagnostic(
     writer: RawBatchWriter, page_number: int, browser: webdriver.Chrome
 ) -> None:
     html = _diagnostic_html(browser)
-    if html and not _likely_verification(html):
+    if html and not is_verification_page(html):
         writer.write_diagnostic(page_number, html)
 
 

@@ -11,6 +11,7 @@ from qingpu_insight.listing_capture import (
     ChromeConfig,
     RawBatchWriter,
     Selenium591Source,
+    is_verification_page,
 )
 from qingpu_insight.listing_sources import ListingType
 from tests.fake_browser import FakeBrowser
@@ -36,6 +37,11 @@ def test_newhouse_uses_human_facing_taoyuan_route():
 
 def test_visible_browser_is_default():
     assert ChromeConfig().headless is False
+
+
+def test_verification_helper_is_public_and_ignores_script_tokens():
+    assert is_verification_page("<html><title>驗證</title><body>captcha</body></html>")
+    assert not is_verification_page("<html><script>window.verify = 'analytics'</script></html>")
 
 
 def test_writer_batch_dir_contains_type_and_matches_manifest(tmp_path):
