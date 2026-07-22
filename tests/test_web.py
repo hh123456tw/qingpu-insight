@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+from concurrent.futures import Future
+from dataclasses import replace
+from datetime import UTC, datetime
+from pathlib import Path
+from threading import Event
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -597,12 +603,17 @@ def test_frontend_renders_evidence_before_summary(client):
 # ------------------------------------------------------------------
 
 
-class FakeAdminJobRepository:
+class MemoryAdminJobRepository:
     def __init__(self) -> None:
         self._runs: dict[str, JobRun] = {}
+        self.terminal = Event()
 
-    def create(self, run: JobRun) -> None:
+    def create_or_get(self, run: JobRun) -> tuple[JobRun, bool]:
+        active = self.find_active_by_key(run.idempotency_key)
+        if active is not None:
+            return active, False
         self._runs[run.run_id] = run
+        return run, True
 
     def get(self, run_id: str) -> JobRun | None:
         return self._runs.get(run_id)
@@ -615,7 +626,41 @@ class FakeAdminJobRepository:
                 return run
         return None
 
-    def transition(self, run_id, current_status, target_status):
+    def list_recent(self, limit: int = 20) -> list[JobRun]:
+        return list(reversed(list(self._runs.values())))[:limit]
+
+    def transition(
+        self,
+        run_id,
+        current_status,
+        target_status,
+        *,
+        output_version=None,
+        summary=None,
+        error_code=None,
+        error_message=None,
+    ):
+        run = self._runs.get(run_id)
+        if run is None or run.status != current_status:
+            return False
+        started_at = run.started_at
+        if target_status == "running" and started_at is None:
+            started_at = datetime.now(UTC)
+        finished_at = run.finished_at
+        if target_status in {"succeeded", "failed", "skipped"}:
+            finished_at = datetime.now(UTC)
+        self._runs[run_id] = replace(
+            run,
+            status=target_status,
+            started_at=started_at,
+            finished_at=finished_at,
+            output_version=output_version or run.output_version,
+            summary=summary if summary is not None else run.summary,
+            error_code=error_code or run.error_code,
+            error_message=error_message or run.error_message,
+        )
+        if target_status in {"succeeded", "failed", "skipped", "needs_attention"}:
+            self.terminal.set()
         return True
 
 
@@ -623,32 +668,51 @@ class FakeAdminExecutor:
     def __init__(self) -> None:
         self.submitted: list[str] = []
 
-    def submit(self, run_id: str, callable) -> None:
+    def submit(self, run_id: str, callable) -> Future:
         self.submitted.append(run_id)
+        return Future()
+
+    def shutdown(self, wait: bool = True) -> None:
+        del wait
+
+
+class StubListingUpdateService:
+    def __init__(self, job_service) -> None:
+        self.job_service = job_service
+        self.handoffs: list[str] = []
+        self.handoff_error: Exception | None = None
+
+    def submit(self, request):
+        identity = f"{request.types!r}:{request.max_pages}:{request.trigger}"
+        return self.job_service.create("listing_update", identity, request.trigger)
+
+    def handoff(self, submission, request, executor):
+        del request
+        if self.handoff_error is not None:
+            raise self.handoff_error
+        self.handoffs.append(submission.run.run_id)
+        return executor.submit(submission.run.run_id, lambda: None)
 
 
 @pytest.fixture
 def admin_app(market_frame: pd.DataFrame):
     from qingpu_insight.jobs import JobService
-    from qingpu_insight.listing_update import ListingUpdateService
-    from qingpu_insight.web import create_app
+    from qingpu_insight.web import AdminServices, create_app
 
-    repo = FakeAdminJobRepository()
+    repo = MemoryAdminJobRepository()
     job_service = JobService(repo)
-    listing_service = ListingUpdateService(job_service=job_service, publisher=None)  # type: ignore[arg-type]
+    listing_service = StubListingUpdateService(job_service)
     executor = FakeAdminExecutor()
     app = create_app(
         data_source=InMemoryMarketDataSource(market_frame),
-        job_service=job_service,
-        listing_update_service=listing_service,
-        job_executor=executor,
+        admin_services=AdminServices(job_service, listing_service, executor),
     )
-    return app, executor
+    return app, repo, listing_service, executor
 
 
 @pytest.fixture
 def admin_client(admin_app) -> FlaskClient:
-    app, _ = admin_app
+    app, _, _, _ = admin_app
     with app.test_client() as client:
         with client.session_transaction() as sess:
             sess["_csrf_token"] = "test-token"
@@ -658,7 +722,7 @@ def admin_client(admin_app) -> FlaskClient:
 def test_listing_update_returns_202_without_waiting(
     admin_app, admin_client: FlaskClient,
 ) -> None:
-    _, executor = admin_app
+    _, _, service, executor = admin_app
     response = admin_client.post(
         "/api/admin/listing-updates",
         json={"types": ["sale", "newhouse", "rental"], "max_pages": 1},
@@ -666,7 +730,27 @@ def test_listing_update_returns_202_without_waiting(
     )
     assert response.status_code == 202
     assert response.json["status"] == "pending"
+    assert response.json["created"] is True
     assert executor.submitted == [response.json["run_id"]]
+    assert service.handoffs == [response.json["run_id"]]
+
+
+def test_exact_active_duplicate_returns_existing_run_without_second_handoff(
+    admin_app, admin_client: FlaskClient,
+) -> None:
+    _, _, service, executor = admin_app
+    request = {
+        "json": {"types": ["sale", "newhouse", "rental"], "max_pages": 1},
+        "headers": {"X-Qingpu-CSRF": "test-token"},
+    }
+    first = admin_client.post("/api/admin/listing-updates", **request)
+    duplicate = admin_client.post("/api/admin/listing-updates", **request)
+
+    assert duplicate.status_code == 202
+    assert duplicate.json["run_id"] == first.json["run_id"]
+    assert duplicate.json["created"] is False
+    assert service.handoffs == [first.json["run_id"]]
+    assert executor.submitted == [first.json["run_id"]]
 
 
 def test_admin_update_rejects_non_loopback(admin_client: FlaskClient) -> None:
@@ -677,6 +761,18 @@ def test_admin_update_rejects_non_loopback(admin_client: FlaskClient) -> None:
     assert response.status_code == 403
 
 
+@pytest.mark.parametrize(
+    "path",
+    ["/api/admin/listing-updates", "/api/jobs", "/api/jobs/123"],
+)
+def test_admin_and_job_routes_reject_untrusted_host(
+    admin_client: FlaskClient, path: str,
+) -> None:
+    method = admin_client.post if path.startswith("/api/admin") else admin_client.get
+    response = method(path, base_url="http://attacker.example")
+    assert response.status_code == 403
+
+
 def test_admin_update_rejects_wrong_csrf(admin_client: FlaskClient) -> None:
     response = admin_client.post(
         "/api/admin/listing-updates",
@@ -684,3 +780,403 @@ def test_admin_update_rejects_wrong_csrf(admin_client: FlaskClient) -> None:
         headers={"X-Qingpu-CSRF": "wrong-token"},
     )
     assert response.status_code == 403
+
+
+@pytest.mark.parametrize(
+    ("payload", "field"),
+    [
+        ([], "body"),
+        ({"types": []}, "types"),
+        ({"types": "sale"}, "types"),
+        ({"types": ["sale", "sale"]}, "types"),
+        ({"types": ["other"]}, "types"),
+        ({"types": ["sale"], "max_pages": True}, "max_pages"),
+        ({"types": ["sale"], "max_pages": 0}, "max_pages"),
+        ({"types": ["sale"], "max_pages": 101}, "max_pages"),
+        ({"types": ["sale"], "trigger": ""}, "trigger"),
+    ],
+)
+def test_admin_update_rejects_invalid_json_contract(
+    admin_client: FlaskClient, payload, field: str,
+) -> None:
+    response = admin_client.post(
+        "/api/admin/listing-updates",
+        json=payload,
+        headers={"X-Qingpu-CSRF": "test-token"},
+    )
+    assert response.status_code == 400
+    assert response.json["error"]["code"] == "invalid_request"
+    assert field in response.json["error"]["fields"]
+
+
+def test_admin_update_rejects_malformed_or_wrong_content_type(
+    admin_client: FlaskClient,
+) -> None:
+    malformed = admin_client.post(
+        "/api/admin/listing-updates",
+        data="{",
+        content_type="application/json",
+        headers={"X-Qingpu-CSRF": "test-token"},
+    )
+    wrong_type = admin_client.post(
+        "/api/admin/listing-updates",
+        data='{"types":["sale"]}',
+        content_type="text/plain",
+        headers={"X-Qingpu-CSRF": "test-token"},
+    )
+    assert malformed.status_code == 400
+    assert wrong_type.status_code == 400
+    assert malformed.json["error"]["code"] == "invalid_request"
+    assert wrong_type.json["error"]["code"] == "invalid_request"
+
+
+def test_synchronous_handoff_failure_returns_safe_503(
+    admin_app, admin_client: FlaskClient,
+) -> None:
+    _, repo, service, _ = admin_app
+    service.handoff_error = RuntimeError(
+        "mysql://admin:password@localhost/db <html> 0912-345-678"
+    )
+    response = admin_client.post(
+        "/api/admin/listing-updates",
+        json={"types": ["sale"], "max_pages": 1},
+        headers={"X-Qingpu-CSRF": "test-token"},
+    )
+    body = response.get_data(as_text=True)
+    assert response.status_code == 503
+    assert response.json["error"]["code"] == "enqueue_failed"
+    assert "password" not in body
+    assert "<html>" not in body
+    assert repo._runs
+
+
+def test_job_detail_and_history_use_public_safe_contract(
+    admin_app, admin_client: FlaskClient,
+) -> None:
+    _, repo, _, _ = admin_app
+    from qingpu_insight.jobs import JobService
+
+    service = JobService(repo)
+    first = service.create("listing_update", "first", "manual").run
+    second = service.create("listing_update", "second", "scheduled").run
+    service.start(second.run_id)
+    service.fail(
+        second.run_id,
+        "capture_failed",
+        "mysql://admin:password@localhost/db token=abc 0912-345-678 SELECT * FROM users",
+    )
+
+    detail = admin_client.get(f"/api/jobs/{second.run_id}")
+    history = admin_client.get("/api/jobs?limit=1")
+    serialized = detail.get_data(as_text=True)
+
+    assert detail.status_code == 200
+    assert detail.json == history.json["items"][0]
+    assert detail.json["run_id"] == second.run_id
+    assert detail.json["input_version"] is None
+    assert detail.json["output_version"] is None
+    assert detail.json["started_at"] is not None
+    assert detail.json["finished_at"] is not None
+    assert history.json["limit"] == 1
+    assert first.run_id not in serialized
+    assert "password" not in serialized
+    assert "token=abc" not in serialized
+    assert "0912-345-678" not in serialized
+    assert "SELECT" not in serialized
+
+
+def test_job_detail_redacts_unsafe_nested_summary(
+    admin_app, admin_client: FlaskClient,
+) -> None:
+    _, repo, _, _ = admin_app
+    from qingpu_insight.jobs import JobService
+
+    service = JobService(repo)
+    run = service.create("listing_update", "unsafe-summary", "manual").run
+    service.start(run.run_id)
+    service.succeed(
+        run.run_id,
+        "v-safe",
+        {
+            "rows": 3,
+            "diagnostic": "<html>verification page</html>",
+            "database_url": "mysql://admin:password@localhost/db",
+            "nested": {"query": "SELECT * FROM contacts"},
+        },
+    )
+
+    response = admin_client.get(f"/api/jobs/{run.run_id}")
+    serialized = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert response.json["summary"]["rows"] == 3
+    assert "<html>" not in serialized
+    assert "password" not in serialized
+    assert "SELECT" not in serialized
+
+
+@pytest.mark.parametrize("limit", ["", "zero", "0", "101", "1.5"])
+def test_job_history_rejects_invalid_limit(
+    admin_client: FlaskClient, limit: str,
+) -> None:
+    response = admin_client.get("/api/jobs", query_string={"limit": limit})
+    assert response.status_code == 400
+    assert response.json["error"]["fields"] == {"limit": "integer_1_to_100"}
+
+
+def test_job_detail_validates_uuid_before_lookup(admin_client: FlaskClient) -> None:
+    invalid = admin_client.get("/api/jobs/not-a-uuid")
+    absent = admin_client.get("/api/jobs/00000000-0000-4000-8000-000000000000")
+    assert invalid.status_code == 400
+    assert invalid.json["error"]["fields"] == {"run_id": "invalid_uuid"}
+    assert absent.status_code == 404
+
+
+def test_production_admin_composition_requires_database_and_strong_secret(
+    monkeypatch, tmp_path: Path, market_frame: pd.DataFrame,
+) -> None:
+    import qingpu_insight.cli as cli
+    import qingpu_insight.web as web
+    from qingpu_insight.jobs import JobService
+
+    repo = MemoryAdminJobRepository()
+    service = StubListingUpdateService(JobService(repo))
+    executor = FakeAdminExecutor()
+    monkeypatch.setattr(cli, "_create_listing_update_service", lambda root: service)
+    monkeypatch.setattr(web, "LocalJobExecutor", lambda job_service: executor)
+    monkeypatch.setenv(
+        "QINGPU_DATABASE_URL",
+        "mysql+pymysql://<user>:<password>@127.0.0.1:3306/<database>",
+    )
+    monkeypatch.setenv("QINGPU_SECRET_KEY", "A7!" * 16)
+
+    app = web.create_app(
+        root=tmp_path, data_source=InMemoryMarketDataSource(market_frame)
+    )
+    with app.test_client() as client:
+        with client.session_transaction() as sess:
+            sess["_csrf_token"] = "test-token"
+        response = client.post(
+            "/api/admin/listing-updates",
+            json={"types": ["sale"], "max_pages": 1},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+    assert response.status_code == 202
+    assert app.secret_key == "A7!" * 16
+    app.extensions["qingpu_admin_shutdown"]()
+
+
+@pytest.mark.parametrize("secret", [None, "short-secret", "dev-secret-key"])
+def test_production_admin_fails_closed_without_strong_secret(
+    monkeypatch, tmp_path: Path, market_frame: pd.DataFrame, secret: str | None,
+) -> None:
+    from qingpu_insight.web import create_app
+
+    monkeypatch.setenv("QINGPU_DATABASE_URL", "mysql://placeholder/db")
+    if secret is None:
+        monkeypatch.delenv("QINGPU_SECRET_KEY", raising=False)
+    else:
+        monkeypatch.setenv("QINGPU_SECRET_KEY", secret)
+    app = create_app(root=tmp_path, data_source=InMemoryMarketDataSource(market_frame))
+    with app.test_client() as client:
+        with client.session_transaction() as sess:
+            sess["_csrf_token"] = "test-token"
+        response = client.post(
+            "/api/admin/listing-updates",
+            json={"types": ["sale"], "max_pages": 1},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+    assert response.status_code == 503
+    assert response.json["error"]["code"] == "admin_unavailable"
+
+
+def test_market_composition_error_starts_with_fixed_safe_response(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    import qingpu_insight.web as web
+
+    monkeypatch.setattr(
+        web,
+        "repository_from_env",
+        lambda root: (_ for _ in ()).throw(
+            RuntimeError("mysql://admin:password@localhost/db SELECT secret")
+        ),
+    )
+    app = web.create_app(root=tmp_path)
+    with app.test_client() as client:
+        response = client.get(
+            "/api/market/summary", query_string={"transaction_type": "resale"}
+        )
+    body = response.get_data(as_text=True)
+    assert response.status_code == 503
+    assert response.json["error"]["code"] == "market_data_unavailable"
+    assert "password" not in body
+    assert "SELECT" not in body
+
+
+def test_admin_composition_error_returns_fixed_safe_message(
+    monkeypatch, tmp_path: Path, market_frame: pd.DataFrame,
+) -> None:
+    import qingpu_insight.cli as cli
+    import qingpu_insight.web as web
+
+    monkeypatch.setenv("QINGPU_DATABASE_URL", "mysql://<user>:<password>@local/<db>")
+    monkeypatch.setenv("QINGPU_SECRET_KEY", "B8!" * 16)
+    monkeypatch.setattr(
+        cli,
+        "_create_listing_update_service",
+        lambda root: (_ for _ in ()).throw(
+            RuntimeError("mysql://admin:password@localhost/db SELECT secret")
+        ),
+    )
+    app = web.create_app(
+        root=tmp_path, data_source=InMemoryMarketDataSource(market_frame)
+    )
+    with app.test_client() as client:
+        with client.session_transaction() as sess:
+            sess["_csrf_token"] = "test-token"
+        response = client.post(
+            "/api/admin/listing-updates",
+            json={"types": ["sale"], "max_pages": 1},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+    body = response.get_data(as_text=True)
+    assert response.status_code == 503
+    assert response.json["error"]["code"] == "admin_unavailable"
+    assert "password" not in body
+    assert "SELECT" not in body
+
+
+def test_job_center_frontend_has_non_overlapping_bounded_polling_contract() -> None:
+    script = Path("src/qingpu_insight/static/app.js").read_text(encoding="utf-8")
+    job_center = script.split("// --- Job Center (M4.2) ---", maxsplit=1)[1]
+    assert "setInterval" not in job_center
+    assert "response.ok" in job_center
+    assert "setTimeout" in job_center
+    assert "Math.min" in job_center
+    assert "finally" in job_center
+    assert "submitBtn.disabled = false" in job_center
+
+
+class GatePreparationRunner:
+    def __init__(self, started: Event, release: Event) -> None:
+        self.started = started
+        self.release = release
+        self.calls: list[str] = []
+
+    def prepare(self, listing_type: str, max_pages: int):
+        from qingpu_insight.listing_sources import CaptureBatch
+        from qingpu_insight.listing_update import PreparedListingType
+
+        self.calls.append(listing_type)
+        self.started.set()
+        assert self.release.wait(5), "test did not release preparation gate"
+        batch = CaptureBatch(
+            batch_id=f"batch-{listing_type}",
+            source="591",
+            listing_type=listing_type,
+            started_at=datetime(2026, 7, 22, tzinfo=UTC),
+            reached_terminal_page=True,
+        )
+        rows = pd.DataFrame(
+            [{
+                "source": "591",
+                "listing_type": listing_type,
+                "source_listing_id": f"{listing_type}-1",
+                "snapshot_at": batch.started_at,
+            }]
+        )
+        events = pd.DataFrame(
+            [{"event_key": f"event-{listing_type}", "listing_type": listing_type}]
+        )
+        return PreparedListingType(batch, rows, events, {"accepted": 1})
+
+
+class GatePublisher:
+    def __init__(self) -> None:
+        self.pointer = None
+        self.staged = []
+
+    def current(self):
+        return self.pointer
+
+    def stage(self, version, batches, rows, events) -> None:
+        self.staged.append((version, list(batches), rows.copy(), events.copy()))
+
+    def publish(self, version: str, expected_current_version: str | None):
+        assert expected_current_version is None
+        self.pointer = self.staged[-1][0]
+        return self.pointer
+
+
+class GateLock:
+    def __init__(self) -> None:
+        self.owner = None
+
+    def try_acquire(self) -> bool:
+        return True
+
+    def set_owner(self, idempotency_key: str, run_id: str) -> None:
+        self.owner = (idempotency_key, run_id)
+
+    def read_owner(self):
+        return self.owner
+
+    def release(self) -> None:
+        self.owner = None
+
+
+def test_real_executor_web_flow_starts_once_and_shuts_down(
+    tmp_path: Path, market_frame: pd.DataFrame,
+) -> None:
+    from qingpu_insight.job_executor import LocalJobExecutor
+    from qingpu_insight.jobs import JobService
+    from qingpu_insight.listing_update import ListingUpdateService
+    from qingpu_insight.web import AdminServices, create_app
+
+    repo = MemoryAdminJobRepository()
+    jobs = JobService(repo)
+    started = Event()
+    release = Event()
+    preparation = GatePreparationRunner(started, release)
+    service = ListingUpdateService(
+        jobs,
+        GatePublisher(),
+        preparation_runner=preparation,
+        root=tmp_path,
+        lock_factory=GateLock,
+    )
+    executor = LocalJobExecutor(jobs)
+    app = create_app(
+        data_source=InMemoryMarketDataSource(market_frame),
+        admin_services=AdminServices(jobs, service, executor),
+    )
+    try:
+        with app.test_client() as client:
+            with client.session_transaction() as sess:
+                sess["_csrf_token"] = "test-token"
+            first = client.post(
+                "/api/admin/listing-updates",
+                json={"types": ["sale", "newhouse", "rental"], "max_pages": 1},
+                headers={"X-Qingpu-CSRF": "test-token"},
+            )
+            assert first.status_code == 202
+            assert started.wait(5), "executor did not enter preparation"
+            duplicate = client.post(
+                "/api/admin/listing-updates",
+                json={"types": ["sale", "newhouse", "rental"], "max_pages": 1},
+                headers={"X-Qingpu-CSRF": "test-token"},
+            )
+            assert duplicate.json["run_id"] == first.json["run_id"]
+            assert duplicate.json["created"] is False
+            assert preparation.calls == ["sale"]
+            release.set()
+            assert repo.terminal.wait(5), "job did not reach a terminal state"
+            detail = client.get(f"/api/jobs/{first.json['run_id']}")
+            assert detail.status_code == 200
+            assert detail.json["status"] == "succeeded"
+            assert detail.json["output_version"]
+            assert detail.json["summary"]["rows"] == 3
+            assert preparation.calls == ["sale", "newhouse", "rental"]
+    finally:
+        release.set()
+        app.extensions["qingpu_admin_shutdown"]()

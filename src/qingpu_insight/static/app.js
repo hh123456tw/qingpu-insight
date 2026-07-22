@@ -595,35 +595,108 @@ document.addEventListener("DOMContentLoaded", function () {
   const typesSelect = document.getElementById("job-types");
   const maxPagesInput = document.getElementById("job-max-pages");
   const statusEl = document.getElementById("job-status");
+  const terminalStatuses = ["succeeded", "failed", "skipped", "needs_attention"];
+  const maxPollAttempts = 120;
+  const maxPollFailures = 5;
+  const minPollDelay = 1000;
+  const maxPollDelay = 10000;
+  var activePollToken = 0;
+  var pollInFlight = false;
+  var submitting = false;
 
   function getCSRFToken() {
     var meta = document.querySelector('meta[name="csrf-token"]');
     return meta ? meta.getAttribute("content") : "";
   }
 
+  function parseApiResponse(response) {
+    return response.json()
+      .catch(function () { return null; })
+      .then(function (data) {
+        if (!response.ok) {
+          var safeMessage = data && data.error && data.error.message;
+          throw new Error(safeMessage || "伺服器暫時無法處理要求");
+        }
+        if (!data) throw new Error("伺服器回應格式不正確");
+        return data;
+      });
+  }
+
+  function releaseButton() {
+    submitting = false;
+    submitBtn.disabled = false;
+  }
+
   function pollJob(runId) {
-    var interval = setInterval(function () {
-      fetch("/api/jobs/" + runId)
-        .then(function (r) { return r.json(); })
+    activePollToken += 1;
+    var token = activePollToken;
+    var attempts = 0;
+    var failures = 0;
+    var delay = minPollDelay;
+
+    function pollOnce() {
+      if (token !== activePollToken || pollInFlight) return;
+      pollInFlight = true;
+      attempts += 1;
+      var shouldContinue = false;
+      var nextDelay = delay;
+
+      fetch("/api/jobs/" + encodeURIComponent(runId))
+        .then(parseApiResponse)
         .then(function (data) {
+          failures = 0;
+          delay = minPollDelay;
           statusEl.textContent = "狀態：" + data.status;
-          if (["succeeded", "failed", "skipped", "needs_attention"].indexOf(data.status) !== -1) {
-            clearInterval(interval);
-            submitBtn.disabled = false;
+          if (terminalStatuses.indexOf(data.status) !== -1) {
             if (data.status === "succeeded") {
-              setTimeout(function () { location.reload(); }, 1000);
+              var version = data.output_version ? "；版本：" + data.output_version : "";
+              var rows = data.summary && data.summary.rows != null
+                ? "；筆數：" + data.summary.rows
+                : "";
+              statusEl.textContent = "更新完成" + version + rows;
+            } else if (data.error_message) {
+              statusEl.textContent += "；" + data.error_message;
             }
+            activePollToken += 1;
+            releaseButton();
+            return;
           }
+          if (attempts >= maxPollAttempts) {
+            activePollToken += 1;
+            statusEl.textContent = "輪詢次數已達上限，請至工作歷史查詢";
+            releaseButton();
+            return;
+          }
+          shouldContinue = true;
+          nextDelay = delay;
         })
-        .catch(function () {
-          clearInterval(interval);
-          submitBtn.disabled = false;
-          statusEl.textContent = "輪詢失敗";
+        .catch(function (error) {
+          failures += 1;
+          delay = Math.min(maxPollDelay, Math.max(minPollDelay, delay * 2));
+          if (failures >= maxPollFailures || attempts >= maxPollAttempts) {
+            activePollToken += 1;
+            statusEl.textContent = "輪詢停止：" + error.message;
+            releaseButton();
+            return;
+          }
+          statusEl.textContent = "輪詢暫時失敗，正在重試";
+          shouldContinue = true;
+          nextDelay = delay;
+        })
+        .finally(function () {
+          pollInFlight = false;
+          if (shouldContinue && token === activePollToken) {
+            setTimeout(pollOnce, nextDelay);
+          }
         });
-    }, 2000);
+    }
+
+    setTimeout(pollOnce, minPollDelay);
   }
 
   submitBtn.addEventListener("click", function () {
+    if (submitting || submitBtn.disabled) return;
+    submitting = true;
     submitBtn.disabled = true;
     statusEl.textContent = "提交中…";
 
@@ -638,19 +711,16 @@ document.addEventListener("DOMContentLoaded", function () {
       },
       body: JSON.stringify({ types: types, max_pages: maxPages }),
     })
-      .then(function (r) {
-        if (!r.ok) {
-          if (r.status === 403) throw new Error("權限不足");
-          throw new Error("提交失敗 " + r.status);
-        }
-        return r.json();
-      })
+      .then(parseApiResponse)
       .then(function (data) {
-        statusEl.textContent = "已提交，工作 ID: " + data.run_id;
+        submitting = false;
+        statusEl.textContent = data.created === false
+          ? "監看既有工作：" + data.run_id
+          : "已提交，工作 ID: " + data.run_id;
         pollJob(data.run_id);
       })
       .catch(function (err) {
-        submitBtn.disabled = false;
+        releaseButton();
         statusEl.textContent = "錯誤：" + err.message;
       });
   });

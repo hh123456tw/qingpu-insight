@@ -234,6 +234,109 @@ newhouse 的 JSON-LD 提供每坪單價 `lowPrice` / `highPrice` 與坪數範圍
 
 請參閱 [docs/m3-listing-methodology.md](docs/m3-listing-methodology.md)。
 
+## M4.2 Windows 本機更新工作中心
+
+M4.2 的正式路徑是 Windows 本機 Flask → 單一背景 worker → 可見 Selenium/591 →
+run-specific Parquet → MySQL versioned staging → 單一 transaction 發布。Web request 只負責驗證、建立
+job 與 handoff，成功時立即回 `202`，不等待 Chrome。Chrome 刻意維持可見，讓操作人員可以處理授權範圍內的
+人工驗證或辨識驗證頁；M4.2 不以 headless 模式規避網站控制，也不需要 Ollama 或 Gemini。LLM 是後續智慧層，
+不是三類 ingestion、驗證或 atomic publish 的必要條件。
+
+### 必要設定與資料庫 migration
+
+管理端只在 `QINGPU_DATABASE_URL` 與至少 32 個隨機字元的 `QINGPU_SECRET_KEY` 同時存在時啟用。
+請勿使用 `dev-secret-key`、真實密碼範例或把 secret 提交到 Git。正式工作中心固定只綁
+`127.0.0.1`；`QINGPU_PORT` 必須是可用的本機 TCP port。工作中心啟用時保持
+`QINGPU_DEBUG=0`，避免 Flask debug reloader 建立第二個 app/executor。以下全部是 placeholder：
+
+```powershell
+$env:QINGPU_DATABASE_URL = "mysql+pymysql://<user>:<url-encoded-password>@127.0.0.1:3306/<database>"
+$env:QINGPU_SECRET_KEY = "<at-least-32-cryptographically-random-characters>"
+$env:QINGPU_PORT = "5000"
+$env:QINGPU_DEBUG = "0"
+```
+
+MySQL 8 migration 依序套用；若用 `<database>` 與 `<user>`，MySQL client 會互動要求密碼，不把密碼寫進命令：
+
+```powershell
+Get-Content database/001_market_schema.sql | mysql -h 127.0.0.1 -u <user> -p <database>
+Get-Content database/002_add_valuation_columns.sql | mysql -h 127.0.0.1 -u <user> -p <database>
+Get-Content database/003_listing_intelligence_schema.sql | mysql -h 127.0.0.1 -u <user> -p <database>
+Get-Content database/004_listing_range_fields.sql | mysql -h 127.0.0.1 -u <user> -p <database>
+Get-Content database/004_m4_jobs_publishing_schema.sql | mysql -h 127.0.0.1 -u <user> -p <database>
+```
+
+正式 artifact 寫入 `data/processed/listing_versions/<version>.parquet`；advisory lock 位於
+`data/locks/listing_update.lock`。591 原始證據仍只留在 `data/raw/listings/591/`，報告留在
+`outputs/reports/`。這些本機資料／artifact 目錄不是 secret store，也不應公開。
+
+### 啟動、手動更新與查詢
+
+前景 CLI 與 Web 共用同一套 Task-3 組裝；兩者都建立每次操作獨立的 MySQL connection，並要求真實、可見的
+Selenium preparation runner：
+
+```powershell
+# 前景執行完整三類更新
+.\.venv\Scripts\qingpu-data.exe listing-update --types sale newhouse rental --max-pages 10
+
+# 查詢單一 job
+.\.venv\Scripts\qingpu-data.exe job-status --run-id <uuid>
+
+# 啟動本機工作中心（只監聽 127.0.0.1）
+.\.venv\Scripts\qingpu-web.exe
+```
+
+首頁的「刊登更新」按鈕會送出帶 session CSRF token 的 JSON POST。也可在同一個瀏覽器 session 內用開發工具
+手動送出；不要把 CSRF token 複製到文件：
+
+```text
+POST /api/admin/listing-updates
+Content-Type: application/json
+X-Qingpu-CSRF: <current-session-token>
+
+{"types":["sale","newhouse","rental"],"max_pages":1,"trigger":"manual"}
+```
+
+查詢 API 為 `GET /api/jobs/<uuid>` 與 `GET /api/jobs?limit=<1..100>`。回應只包含
+run/job type/status/trigger/attempt/timestamps/input-output version/summary，以及經過遮罩的 stable error
+code/message；不包含 DB URL、SQL、traceback、HTML、電話或內部 repository 欄位。狀態生命週期為
+`pending → running → succeeded|retry_wait|skipped|failed`，必要時再進入 `needs_attention`。
+
+### 發布、重試與復原語義
+
+- `sale`、`newhouse`、`rental` 先全部 preparation 成功且每類至少一筆，才產生一個 immutable artifact；
+  stage 及 publish 各一次。artifact hash/count/schema、任一類完整性、runtime row/event 或 pointer update
+  失敗，都 rollback 並保留上一個 published dataset。
+- exact active request 使用同一 idempotency key：回既有 run 並監看，不重複 enqueue、capture 或 publish。
+  terminal failure 可安全重送；version ownership 不覆寫，事件以 stable event key `INSERT IGNORE` 去重。
+- startup/handoff 失敗會用安全的 `startup_failed` 類型 terminalize 可觀察的 job，不讓該次新 run 永久卡在
+  `pending`；process-owned advisory lock 會在 handle close/process exit 自動釋放。若 process 在 durable
+  `pending/running` 寫入後直接崩潰，目前不做猜測式、按時間自動成功或重跑：操作人員須先從 job history 確認為
+  stale，再用受控維護流程依法轉成 `running → failed → needs_attention`，之後才重送；絕不能直接移動 pointer。
+- Web polling 每次 fetch settle 後才用 bounded `setTimeout` 排下一次，不會重疊；terminal 或超過 bounded
+  failure/attempt policy 一律停止並重新啟用按鈕。
+- 安全邊界同時驗證 socket remote address 是 loopback、`Host` 是 `localhost`/`127.0.0.1`/`[::1]`
+  （可含設定 port），且 POST 的 CSRF header 必須精確符合 session。系統不信任 forwarded headers。
+- executor 由 app/main process 擁有；正常離開會走 idempotent shutdown 並等待 worker，測試也必須明確 shutdown，
+  不遺留 thread。
+
+### M4.2 acceptance
+
+Deterministic release gate 不連真實 591、Selenium 或 MySQL，仍會用真實 Task-1/2/3 services、executor 與
+transactional state fakes 驗證 v1 → v2、active dedupe、事件重試去重，以及 preparation/artifact/stage/runtime/
+pointer 五個 v3 failure boundary 都保留 v2：
+
+```powershell
+$env:PYTHONPATH = (Resolve-Path "src").Path
+.\.venv\Scripts\python.exe -m pytest tests/test_web.py tests/test_m42_release_gate.py -q
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m ruff check .
+git diff --check
+```
+
+這個 deterministic gate 不能取代有授權的 live 591/visible-Chrome smoke 或真正 MySQL migration rehearsal；
+live 驗收需由操作人員在本機可見瀏覽器觀察三類完整 capture，再以 job detail 與 published version 核對結果。
+
 ## M4.1 刊登定位品質 smoke
 
 `listing-build` 的所有模式（包含預設離線、geocoder 與 detail）都需要已完成（`is_complete=true`）的 raw batch **及** `data/raw/doorplates.csv`。目前沒有單獨下載門牌的 CLI；請先執行既有 [M0 工作流程](#m0-工作流程) 的 `qingpu-data acquire`，它會從桃園官方資料來源建立此 CSV（也會下載 M0 的交易輸入）。檔案必須保留官方欄位／schema，讓既有門牌 ingest 建立區域、正規化地址與 TWD97 座標。
