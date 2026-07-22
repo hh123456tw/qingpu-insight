@@ -587,3 +587,71 @@ document.addEventListener("DOMContentLoaded", function () {
   fetchListingData();
   controls.addEventListener("change", fetchListingData);
 })();
+
+// --- Job Center (M4.2) ---
+
+(function () {
+  const submitBtn = document.getElementById("job-submit");
+  const typesSelect = document.getElementById("job-types");
+  const maxPagesInput = document.getElementById("job-max-pages");
+  const statusEl = document.getElementById("job-status");
+
+  function getCSRFToken() {
+    var meta = document.querySelector('meta[name="csrf-token"]');
+    return meta ? meta.getAttribute("content") : "";
+  }
+
+  function pollJob(runId) {
+    var interval = setInterval(function () {
+      fetch("/api/jobs/" + runId)
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          statusEl.textContent = "狀態：" + data.status;
+          if (["succeeded", "failed", "skipped", "needs_attention"].indexOf(data.status) !== -1) {
+            clearInterval(interval);
+            submitBtn.disabled = false;
+            if (data.status === "succeeded") {
+              setTimeout(function () { location.reload(); }, 1000);
+            }
+          }
+        })
+        .catch(function () {
+          clearInterval(interval);
+          submitBtn.disabled = false;
+          statusEl.textContent = "輪詢失敗";
+        });
+    }, 2000);
+  }
+
+  submitBtn.addEventListener("click", function () {
+    submitBtn.disabled = true;
+    statusEl.textContent = "提交中…";
+
+    var types = (typesSelect.value || "sale,newhouse,rental").split(",");
+    var maxPages = parseInt(maxPagesInput.value) || 10;
+
+    fetch("/api/admin/listing-updates", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Qingpu-CSRF": getCSRFToken(),
+      },
+      body: JSON.stringify({ types: types, max_pages: maxPages }),
+    })
+      .then(function (r) {
+        if (!r.ok) {
+          if (r.status === 403) throw new Error("權限不足");
+          throw new Error("提交失敗 " + r.status);
+        }
+        return r.json();
+      })
+      .then(function (data) {
+        statusEl.textContent = "已提交，工作 ID: " + data.run_id;
+        pollJob(data.run_id);
+      })
+      .catch(function (err) {
+        submitBtn.disabled = false;
+        statusEl.textContent = "錯誤：" + err.message;
+      });
+  });
+})();

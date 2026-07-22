@@ -7,10 +7,12 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, session
 from werkzeug.datastructures import MultiDict
 from werkzeug.exceptions import HTTPException
 
+from qingpu_insight.job_executor import LocalJobExecutor
+from qingpu_insight.jobs import JobService
 from qingpu_insight.listing_metrics import (
     ListingFilters,
     listing_summary,
@@ -18,6 +20,7 @@ from qingpu_insight.listing_metrics import (
     public_listings,
 )
 from qingpu_insight.listing_repository import ListingRepository
+from qingpu_insight.listing_update import ListingUpdateRequest, ListingUpdateService
 from qingpu_insight.market_metrics import (
     MarketFilters,
     market_summary,
@@ -109,15 +112,24 @@ def parse_valuation_payload(payload: dict[str, Any]) -> ValuationInput:
     )
 
 
+def _is_loopback() -> bool:
+    addr = request.remote_addr or ""
+    return addr in ("127.0.0.1", "::1", "localhost")
+
+
 def create_app(
     data_source: MarketDataSource | None = None,
     root: Path | None = None,
     valuation_store: FileValuationStore | None = None,
     model_registry: ModelRegistry | None = None,
     listing_repo: ListingRepository | None = None,
+    job_service: JobService | None = None,
+    listing_update_service: ListingUpdateService | None = None,
+    job_executor: LocalJobExecutor | None = None,
 ) -> Flask:
     app = Flask(__name__)
     app.json.default = _json_default
+    app.secret_key = os.environ.get("QINGPU_SECRET_KEY", "dev-secret-key")
 
     if data_source is None and root is not None:
         data_source = repository_from_env(root)
@@ -126,6 +138,14 @@ def create_app(
     store = valuation_store or FileValuationStore(Path.cwd() / "outputs" / "valuations")
     registry = model_registry or ModelRegistry(Path.cwd() / "artifacts")
     lr = listing_repo
+    js = job_service
+    lus = listing_update_service
+    jex = job_executor
+
+    @app.before_request
+    def ensure_session():
+        if "_csrf_token" not in session:
+            session["_csrf_token"] = str(uuid.uuid4())
 
     @app.errorhandler(ApiInputError)
     def handle_api_input_error(error: ApiInputError):
@@ -170,7 +190,7 @@ def create_app(
 
     @app.get("/")
     def index():
-        return render_template("index.html")
+        return render_template("index.html", csrf_token=session.get("_csrf_token", ""))
 
     @app.get("/api/market/summary")
     def summary_api():
@@ -275,6 +295,57 @@ def create_app(
                 {"error": {"code": "not_found", "message": "估價記錄不存在。", "fields": None}}
             ), 404
         return jsonify(record)
+
+    # ------------------------------------------------------------------
+    # Admin API (M4.2)
+    # ------------------------------------------------------------------
+
+    @app.post("/api/admin/listing-updates")
+    def admin_listing_update():
+        if not _is_loopback():
+            return jsonify({"error": {"code": "forbidden", "message": "僅允許本機存取。"}}), 403
+        csrf = request.headers.get("X-Qingpu-CSRF", "")
+        if csrf != session.get("_csrf_token", ""):
+            return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
+        if js is None or lus is None or jex is None:
+            return jsonify(
+                {"error": {"code": "admin_unavailable", "message": "管理功能未啟用。"}}
+            ), 503
+        payload = request.get_json(force=True) or {}
+        types = tuple(payload.get("types", ["sale", "newhouse", "rental"]))
+        max_pages = int(payload.get("max_pages", 10))
+        request_obj = ListingUpdateRequest(types=types, max_pages=max_pages)
+        run = lus.submit(request_obj)
+        jex.submit(run.run_id, lambda: lus.execute(run.run_id, request_obj))
+        return jsonify({"run_id": run.run_id, "status": run.status}), 202
+
+    @app.get("/api/jobs/<run_id>")
+    def get_job(run_id: str):
+        if js is None:
+            err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
+            return jsonify({"error": err}), 503
+        run = js._repository.get(run_id)
+        if run is None:
+            return jsonify({"error": {"code": "not_found", "message": "工作不存在。"}}), 404
+        return jsonify(
+            {
+                "run_id": run.run_id,
+                "job_type": run.job_type,
+                "status": run.status,
+                "trigger": run.trigger,
+                "attempt": run.attempt,
+                "error_code": run.error_code,
+                "error_message": run.error_message,
+                "summary": run.summary,
+            }
+        )
+
+    @app.get("/api/jobs")
+    def list_jobs():
+        if js is None:
+            err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
+            return jsonify({"error": err}), 503
+        return jsonify({"items": [], "limit": 20})
 
     return app
 
