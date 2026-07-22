@@ -281,6 +281,10 @@ def create_mysql_connection_factory():
             f"Unsupported scheme: {parsed.scheme!r}; "
             "expected 'mysql' or 'mysql+pymysql'"
         )
+    if parsed.query:
+        raise ValueError("unsupported database URL query parameters")
+    if parsed.fragment:
+        raise ValueError("database URL fragment is not supported")
     database = parsed.path.lstrip("/")
     if not database:
         raise ValueError("QINGPU_DATABASE_URL must include a database name")
@@ -361,8 +365,6 @@ def _enrich_rows_with_geocoder(rows: pd.DataFrame, geocoder) -> pd.DataFrame:
     ]
     for index in candidates:
         evidence: LocationEvidence = geocoder.enrich(enriched.loc[index].to_dict())
-        if evidence.method == "unknown" or evidence.latitude is None or evidence.longitude is None:
-            continue
         enriched.at[index, "latitude"] = evidence.latitude
         enriched.at[index, "longitude"] = evidence.longitude
         enriched.at[index, "location_method"] = evidence.method

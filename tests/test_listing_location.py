@@ -1,5 +1,6 @@
 """Tests for life-circle assignment of normalized listings."""
 
+import warnings
 from datetime import datetime
 
 import numpy as np
@@ -190,6 +191,39 @@ def test_station_input_ignores_invalid_rows_but_uses_valid_station(station_frame
         pd.DataFrame([{"latitude": 25.032, "longitude": 121.225}]), stations, 2_000
     )
     assert result.loc[0, "station_code"] == "A18"
+
+
+def test_station_transform_filters_invalid_wgs84_results_without_runtime_warning(
+    station_frame,
+):
+    stations = pd.concat(
+        [
+            station_frame.iloc[[1]],
+            pd.DataFrame(
+                [{"station_code": "BAD", "twd97_x": 1e10, "twd97_y": 1e10}]
+            ),
+        ],
+        ignore_index=True,
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = assign_listing_life_circle(
+            pd.DataFrame([{"latitude": 25.032, "longitude": 121.225}]),
+            stations,
+            2_000,
+        )
+    assert result.loc[0, "station_code"] == "A18"
+    assert not [warning for warning in caught if issubclass(warning.category, RuntimeWarning)]
+
+
+def test_all_invalid_transformed_stations_raise_clear_value_error(station_frame):
+    invalid = station_frame.iloc[[0]].assign(twd97_x=1e10, twd97_y=1e10)
+    with pytest.raises(ValueError, match="valid station"):
+        assign_listing_life_circle(
+            pd.DataFrame([{"latitude": 25.032, "longitude": 121.225}]),
+            invalid,
+            2_000,
+        )
 
 
 @pytest.mark.parametrize(

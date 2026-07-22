@@ -12,9 +12,10 @@ from qingpu_insight.cli import main
 from qingpu_insight.downloads import DownloadRecord, record_file
 from qingpu_insight.listing_591 import SourceListing
 from qingpu_insight.listing_detail_enrichment import DetailEnrichmentBlocked
+from qingpu_insight.listing_location import assign_listing_life_circle
 from qingpu_insight.listing_normalization import normalize_listing
 from qingpu_insight.listing_sources import CaptureBatch, CapturedPage
-from qingpu_insight.location_evidence import LocationEvidence
+from qingpu_insight.location_evidence import LocationEvidence, unknown_location
 from tests.test_market_cleaning import sample_rows
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -256,6 +257,61 @@ def test_geocoder_only_enriches_unknown_rows_with_complete_structured_address() 
     assert enriched.loc[1, "latitude"] == 25.032
     assert enriched.loc[1, "location_method"] == "structured_address"
     assert pd.isna(enriched.loc[2, "latitude"])
+
+
+@pytest.mark.parametrize(
+    "reason",
+    ["geocoder_unavailable", "address_not_resolved", "invalid_geocoder_coordinates"],
+)
+def test_unknown_geocoder_evidence_survives_location_pipeline(reason) -> None:
+    class Geocoder:
+        def enrich(self, record):
+            return unknown_location(reason)
+
+    rows = pd.DataFrame(
+        [
+            {
+                "source_listing_id": "unknown",
+                "latitude": None,
+                "longitude": None,
+                "location_method": "unknown",
+                "location_confidence": "unknown",
+                "location_reason": "missing_or_invalid_source_coordinates",
+                "geocoded_at": None,
+                "geocoder_version": None,
+                "structured_address": "桃園市中壢區高鐵南路一段1號",
+            }
+        ]
+    )
+    stations = pd.DataFrame(
+        [{"station_code": "A18", "twd97_x": 273000.0, "twd97_y": 2770000.0}]
+    )
+
+    enriched = cli._enrich_rows_with_geocoder(rows, Geocoder())
+    located = assign_listing_life_circle(enriched, stations, 2_000)
+
+    assert located.loc[0, "location_method"] == "unknown"
+    assert located.loc[0, "location_confidence"] == "unknown"
+    assert located.loc[0, "location_reason"] == reason
+    assert located.loc[0, "geocoded_at"] is None
+    assert located.loc[0, "geocoder_version"] is None
+    assert pd.isna(located.loc[0, "latitude"])
+    assert cli._listing_location_quality(located)["location"]["by_reason"] == {
+        reason: 1
+    }
+
+
+@pytest.mark.parametrize("suffix", ["?ssl=true", "?unknown=value", "#fragment"])
+def test_mysql_connection_factory_rejects_query_and_fragment(monkeypatch, suffix) -> None:
+    monkeypatch.setenv(
+        "QINGPU_DATABASE_URL",
+        "mysql+pymysql://user%40name:pass%2Fword@127.0.0.1:3306/qingpu_insight"
+        + suffix,
+    )
+    with pytest.raises(
+        ValueError, match="unsupported database URL query parameters|fragment"
+    ):
+        cli.create_mysql_connection_factory()
 
 
 def test_location_quality_is_json_safe_and_deterministic() -> None:

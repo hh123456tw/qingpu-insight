@@ -51,6 +51,19 @@ def assign_listing_life_circle(
         valid_stations["twd97_x"].to_numpy(dtype=float),
         valid_stations["twd97_y"].to_numpy(dtype=float),
     )
+    transformed_valid = (
+        np.isfinite(station_lats)
+        & np.isfinite(station_lons)
+        & (station_lats > 20.0)
+        & (station_lats < 30.0)
+        & (station_lons > 115.0)
+        & (station_lons < 125.0)
+    )
+    valid_stations = valid_stations.iloc[np.where(transformed_valid)[0]].copy()
+    station_lats = station_lats[transformed_valid]
+    station_lons = station_lons[transformed_valid]
+    if valid_stations.empty:
+        raise ValueError("stations must contain at least one valid station")
 
     lats = pd.to_numeric(output["latitude"], errors="coerce").to_numpy(dtype=float)
     lons = pd.to_numeric(output["longitude"], errors="coerce").to_numpy(dtype=float)
