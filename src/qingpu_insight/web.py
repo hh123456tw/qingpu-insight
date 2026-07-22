@@ -79,8 +79,20 @@ def _strong_admin_secret(secret: str | None) -> bool:
             "placeholder",
             "at-least-32",
             "random-characters",
+            "password",
+            "letmein",
+            "example",
+            "sample",
+            "0123456789",
+            "1234567890",
+            "abcdefghijklmnopqrstuvwxyz",
+            "zyxwvutsrqponmlkjihgfedcba",
+            "qwertyuiop",
+            "asdfghjkl",
         )
     ) or "<" in secret or ">" in secret:
+        return False
+    if lowered in (lowered + lowered)[1:-1]:
         return False
     if re.fullmatch(r"[0-9a-fA-F]{64,128}", secret):
         return len(set(lowered)) >= 8
@@ -336,9 +348,16 @@ _SQL_TEXT = re.compile(
     r"(?is)\b(select\s+.+\s+from|insert\s+into|update\s+.+\s+set|"
     r"delete\s+from|alter\s+table|create\s+table|drop\s+table)\b"
 )
+_DATABASE_URL_TEXT = re.compile(
+    r"(?ix)(?:\b(?:mysql|mariadb|postgres(?:ql)?)"
+    r"(?:\+[a-z0-9_.-]+)?://\S+|"
+    r"\bQINGPU_DATABASE_URL\b\s*[:=]\s*\S+)"
+)
 
 
 def _safe_public_text(value: str) -> str:
+    if _DATABASE_URL_TEXT.search(value):
+        return "redacted"
     redacted = redact_job_message(value)
     lowered = redacted.lower()
     if (

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 import subprocess
 from concurrent.futures import Future
 from dataclasses import replace
@@ -13,7 +14,7 @@ import pytest
 from flask.testing import FlaskClient
 from sklearn.dummy import DummyRegressor
 
-from qingpu_insight.jobs import JobRun
+from qingpu_insight.jobs import JobRun, JobSubmission
 from qingpu_insight.market_metrics import MarketFilters
 from qingpu_insight.valuation import ModelRegistry, ValuationBundle
 
@@ -988,6 +989,58 @@ def test_job_detail_redacts_unsafe_nested_summary(
 
 
 @pytest.mark.parametrize(
+    "database_url",
+    [
+        "mysql://admin:password@db.internal:3306/private",
+        "mysql+pymysql://db.internal/private",
+        "mariadb://db.internal/private",
+        "postgresql://db.internal/private",
+        "postgres://db.internal/private",
+        "QINGPU_DATABASE_URL=customdb://db.internal/private",
+    ],
+)
+def test_database_urls_are_fully_redacted_from_post_detail_and_history(
+    admin_app, admin_client: FlaskClient, database_url: str,
+) -> None:
+    _, repo, listing_service, _ = admin_app
+    from qingpu_insight.jobs import JobService
+
+    run = JobService(repo).create("listing_update", database_url, "manual").run
+    unsafe = replace(
+        run,
+        trigger=database_url,
+        summary={
+            "connection": database_url,
+            "public_report": "https://public.example/results/v2",
+        },
+        error_message=database_url,
+    )
+    repo._runs[run.run_id] = unsafe
+    listing_service.submit = lambda request: JobSubmission(unsafe, False)
+
+    post = admin_client.post(
+        "/api/admin/listing-updates",
+        json={"types": ["sale"], "max_pages": 1},
+        headers={"X-Qingpu-CSRF": "test-token"},
+    )
+    detail = admin_client.get(f"/api/jobs/{run.run_id}")
+    history = admin_client.get("/api/jobs?limit=1")
+
+    for payload in (post.json, detail.json, history.json["items"][0]):
+        assert payload["trigger"] == "redacted"
+        assert payload["summary"]["connection"] == "redacted"
+        assert payload["error_message"] == "redacted"
+        assert payload["summary"]["public_report"] == (
+            "https://public.example/results/v2"
+        )
+    for response in (post, detail, history):
+        serialized = response.get_data(as_text=True)
+        assert database_url not in serialized
+        assert "db.internal" not in serialized
+        assert "/private" not in serialized
+
+
+@pytest.mark.parametrize(
     "unsafe_trigger",
     [
         "x" * 64,
@@ -1131,6 +1184,10 @@ def test_production_admin_composition_requires_database_and_strong_secret(
         "dev-secret-key",
         "A" * 64,
         "abcd" * 16,
+        "01234567" * 8,
+        "0123456789abcdef" * 4,
+        "Abcdefghijklmnop12345678!@#$%^&*" * 2,
+        "abcdefghijklmnopqrstuvwxyzABCDEF1234!",
         "change-me-change-me-change-me-change-me",
         "<at-least-32-cryptographically-random-characters>",
     ],
@@ -1165,6 +1222,14 @@ def test_production_admin_fails_closed_without_strong_secret(
     assert response.status_code == 503
     assert response.json["error"]["code"] == "admin_unavailable"
     assert composition_calls == []
+
+
+def test_production_admin_accepts_generated_secret_formats() -> None:
+    import qingpu_insight.web as web
+
+    generated = (secrets.token_hex(32), secrets.token_urlsafe(32) + "Aa1!")
+
+    assert all(web._strong_admin_secret(value) for value in generated)
 
 
 def test_market_composition_error_starts_with_fixed_safe_response(
