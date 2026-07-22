@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -619,85 +620,9 @@ class MySQLListingRepository:
 
     def save_batch(self, batch: CaptureBatch, rows: pd.DataFrame) -> None:
         try:
-            with self._conn.cursor() as cur:
-                cur.execute(
-                    _INSERT_BATCH_SQL,
-                    {
-                        "batch_id": batch.batch_id,
-                        "source": batch.source,
-                        "listing_type": batch.listing_type,
-                        "started_at": batch.started_at,
-                        "reached_terminal_page": int(batch.reached_terminal_page),
-                        "error_count": len(batch.errors),
-                    },
-                )
-                if rows.empty:
-                    self._conn.commit()
-                    return
-
-                for _, row in _sanitize_location_provenance(rows).iterrows():
-                    params = {
-                        "batch_id": batch.batch_id,
-                        "source": batch.source,
-                        "listing_type": row["listing_type"],
-                        "source_listing_id": row["source_listing_id"],
-                        "snapshot_at": row["snapshot_at"],
-                        "source_url": row["source_url"],
-                        "title": str(row.get("title", "")),
-                        "asking_price_twd": _safe_int(row, "asking_price_twd"),
-                        "monthly_rent_twd": _safe_int(row, "monthly_rent_twd"),
-                        "building_area_ping": _safe_float(row, "building_area_ping"),
-                        "asking_unit_price_low_twd_per_ping": _safe_int(
-                            row, "asking_unit_price_low_twd_per_ping"
-                        ),
-                        "asking_unit_price_high_twd_per_ping": _safe_int(
-                            row, "asking_unit_price_high_twd_per_ping"
-                        ),
-                        "building_area_min_ping": _safe_float(
-                            row, "building_area_min_ping"
-                        ),
-                        "building_area_max_ping": _safe_float(
-                            row, "building_area_max_ping"
-                        ),
-                        "acquisition_representation": _safe_str(
-                            row, "acquisition_representation"
-                        ) or "unknown",
-                        "acquisition_schema_version": _safe_str(
-                            row, "acquisition_schema_version"
-                        ) or "unknown",
-                        "building_type": _safe_str(row, "building_type"),
-                        "bedrooms": _safe_int(row, "bedrooms"),
-                        "living_rooms": _safe_int(row, "living_rooms"),
-                        "bathrooms": _safe_int(row, "bathrooms"),
-                        "building_age_years": _safe_float(row, "building_age_years"),
-                        "floor": _safe_int(row, "floor"),
-                        "total_floors": _safe_int(row, "total_floors"),
-                        "parking_type": _safe_str(row, "parking_type"),
-                        "latitude": _safe_float(row, "latitude"),
-                        "longitude": _safe_float(row, "longitude"),
-                        "structured_address": _safe_str(row, "structured_address"),
-                        "address_source_url": _safe_str(row, "address_source_url"),
-                        "address_observed_at": _safe_datetime(row, "address_observed_at"),
-                        "location_method": _safe_str(row, "location_method") or "unknown",
-                        "location_confidence": _safe_str(row, "location_confidence") or "unknown",
-                        "location_reason": _safe_str(row, "location_reason") or "unknown",
-                        "geocoded_at": _safe_datetime(row, "geocoded_at"),
-                        "geocoder_version": _safe_str(row, "geocoder_version"),
-                        "station_code": _safe_str(row, "station_code"),
-                        "station_distance_m": _safe_float(row, "station_distance_m"),
-                        "location_eligible": _safe_bool(row, "location_eligible"),
-                        "model_evidence": _safe_str(row, "model_evidence"),
-                        "active": _safe_bool(row, "active", default=True),
-                        "consecutive_absences": _safe_int(
-                            row, "consecutive_absences", default=0
-                        ),
-                        "last_seen_batch_id": _safe_str(
-                            row, "last_seen_batch_id"
-                        ) or batch.batch_id,
-                        "raw_hash": str(row.get("raw_hash", "")),
-                    }
-                    cur.execute(_INSERT_SNAPSHOT_SQL, params)
-                    cur.execute(_INSERT_CURRENT_SQL, params)
+            publish_listing_payloads_in_transaction(
+                self._conn, [batch], rows, pd.DataFrame()
+            )
             self._conn.commit()
         except Exception:
             self._conn.rollback()
@@ -837,6 +762,113 @@ WHERE source = %(source)s
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def publish_listing_payloads_in_transaction(
+    connection,
+    batches: Sequence[CaptureBatch],
+    rows: pd.DataFrame,
+    events: pd.DataFrame,
+) -> None:
+    """Apply runtime listing payloads without owning the transaction."""
+    batch_by_id = {batch.batch_id: batch for batch in batches}
+    with connection.cursor() as cursor:
+        for batch in batches:
+            cursor.execute(
+                _INSERT_BATCH_SQL,
+                {
+                    "batch_id": batch.batch_id,
+                    "source": batch.source,
+                    "listing_type": batch.listing_type,
+                    "started_at": batch.started_at,
+                    "reached_terminal_page": int(batch.reached_terminal_page),
+                    "error_count": len(batch.errors),
+                },
+            )
+
+        for _, row in _sanitize_location_provenance(rows).iterrows():
+            batch_id = _safe_str(row, "batch_id")
+            if batch_id is None:
+                matching = [
+                    batch for batch in batches
+                    if batch.listing_type == row.get("listing_type")
+                ]
+                if len(matching) != 1:
+                    raise ValueError(
+                        "listing row requires an unambiguous batch_id when publishing batches"
+                    )
+                batch_id = matching[0].batch_id
+            batch = batch_by_id.get(batch_id)
+            if batch is None:
+                raise ValueError(f"listing row references unknown batch_id {batch_id}")
+            params = _listing_row_params(batch, row)
+            cursor.execute(_INSERT_SNAPSHOT_SQL, params)
+            cursor.execute(_INSERT_CURRENT_SQL, params)
+
+        for _, row in events.iterrows():
+            cursor.execute(
+                _INSERT_EVENT_SQL,
+                {
+                    "event_key": row["event_key"],
+                    "source": row["source"],
+                    "listing_type": row["listing_type"],
+                    "source_listing_id": row["source_listing_id"],
+                    "event_type": row["event_type"],
+                    "event_data": row.get("event_data"),
+                    "occurred_at": row["occurred_at"],
+                },
+            )
+
+
+def _listing_row_params(batch: CaptureBatch, row: pd.Series) -> dict[str, object]:
+    return {
+        "batch_id": batch.batch_id,
+        "source": batch.source,
+        "listing_type": row["listing_type"],
+        "source_listing_id": row["source_listing_id"],
+        "snapshot_at": row["snapshot_at"],
+        "source_url": row["source_url"],
+        "title": str(row.get("title", "")),
+        "asking_price_twd": _safe_int(row, "asking_price_twd"),
+        "monthly_rent_twd": _safe_int(row, "monthly_rent_twd"),
+        "building_area_ping": _safe_float(row, "building_area_ping"),
+        "asking_unit_price_low_twd_per_ping": _safe_int(
+            row, "asking_unit_price_low_twd_per_ping"
+        ),
+        "asking_unit_price_high_twd_per_ping": _safe_int(
+            row, "asking_unit_price_high_twd_per_ping"
+        ),
+        "building_area_min_ping": _safe_float(row, "building_area_min_ping"),
+        "building_area_max_ping": _safe_float(row, "building_area_max_ping"),
+        "acquisition_representation": _safe_str(row, "acquisition_representation") or "unknown",
+        "acquisition_schema_version": _safe_str(row, "acquisition_schema_version") or "unknown",
+        "building_type": _safe_str(row, "building_type"),
+        "bedrooms": _safe_int(row, "bedrooms"),
+        "living_rooms": _safe_int(row, "living_rooms"),
+        "bathrooms": _safe_int(row, "bathrooms"),
+        "building_age_years": _safe_float(row, "building_age_years"),
+        "floor": _safe_int(row, "floor"),
+        "total_floors": _safe_int(row, "total_floors"),
+        "parking_type": _safe_str(row, "parking_type"),
+        "latitude": _safe_float(row, "latitude"),
+        "longitude": _safe_float(row, "longitude"),
+        "structured_address": _safe_str(row, "structured_address"),
+        "address_source_url": _safe_str(row, "address_source_url"),
+        "address_observed_at": _safe_datetime(row, "address_observed_at"),
+        "location_method": _safe_str(row, "location_method") or "unknown",
+        "location_confidence": _safe_str(row, "location_confidence") or "unknown",
+        "location_reason": _safe_str(row, "location_reason") or "unknown",
+        "geocoded_at": _safe_datetime(row, "geocoded_at"),
+        "geocoder_version": _safe_str(row, "geocoder_version"),
+        "station_code": _safe_str(row, "station_code"),
+        "station_distance_m": _safe_float(row, "station_distance_m"),
+        "location_eligible": _safe_bool(row, "location_eligible"),
+        "model_evidence": _safe_str(row, "model_evidence"),
+        "active": _safe_bool(row, "active", default=True),
+        "consecutive_absences": _safe_int(row, "consecutive_absences", default=0),
+        "last_seen_batch_id": _safe_str(row, "last_seen_batch_id") or batch.batch_id,
+        "raw_hash": str(row.get("raw_hash", "")),
+    }
 
 
 def _safe_int(

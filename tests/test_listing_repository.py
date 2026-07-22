@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from qingpu_insight import listing_repository
 from qingpu_insight.listing_events import detect_listing_events
 from qingpu_insight.listing_repository import (
     _CREATE_CURRENT_SQL,
@@ -742,6 +743,57 @@ class LegacySchemaConnection(RecordingConnection):
 
 
 class TestMySQLRepositoryActualAdapter:
+    def test_transaction_helper_applies_all_payloads_without_owning_transaction(
+        self, complete_batch, normalized_rows
+    ):
+        connection = RecordingConnection()
+        events = pd.DataFrame([
+            {
+                "event_key": "event-1",
+                "source": "591",
+                "listing_type": "sale",
+                "source_listing_id": "sale-001",
+                "event_type": "new_listing",
+                "event_data": None,
+                "occurred_at": pd.Timestamp("2026-07-21 12:00:00"),
+            }
+        ])
+
+        listing_repository.publish_listing_payloads_in_transaction(
+            connection, [complete_batch], normalized_rows.iloc[[0]], events
+        )
+
+        sql = [statement.lstrip() for statement, _ in connection.executions]
+        assert any(statement.startswith("INSERT IGNORE INTO listing_batches") for statement in sql)
+        assert any(
+            statement.startswith("INSERT IGNORE INTO listing_snapshots") for statement in sql
+        )
+        assert any(statement.startswith("INSERT INTO listing_current") for statement in sql)
+        assert any(statement.startswith("INSERT IGNORE INTO listing_events") for statement in sql)
+        assert connection.commits == 0
+        assert connection.rollbacks == 0
+
+    def test_transaction_helper_leaves_failure_handling_to_caller(
+        self, complete_batch, normalized_rows
+    ):
+        class FailingCursor(RecordingCursor):
+            def execute(self, sql, params=None):
+                super().execute(sql, params)
+                if sql.lstrip().startswith("INSERT INTO listing_current"):
+                    raise RuntimeError("boom")
+
+        class FailingConnection(RecordingConnection):
+            def cursor(self):
+                return FailingCursor(self)
+
+        connection = FailingConnection()
+        with pytest.raises(RuntimeError, match="boom"):
+            listing_repository.publish_listing_payloads_in_transaction(
+                connection, [complete_batch], normalized_rows.iloc[[0]], pd.DataFrame()
+            )
+        assert connection.commits == 0
+        assert connection.rollbacks == 0
+
     def test_legacy_schema_is_upgraded_idempotently_and_backfilled(self):
         connection = LegacySchemaConnection()
 
