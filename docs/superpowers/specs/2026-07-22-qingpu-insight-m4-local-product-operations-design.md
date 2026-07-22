@@ -81,7 +81,7 @@ Windows Task Scheduler                  Local user action
                                |
           acquire -> validate -> stage -> build -> publish
                                |
-                    MySQL + Parquet + artifacts
+          MySQL runtime source of truth + artifact store
                                |
                        Flask Dashboard/API
                     /          |           \
@@ -93,6 +93,10 @@ Windows Task Scheduler                  Local user action
                                |
                   validated, versioned buyer report
 ```
+
+MySQL 是結構化 runtime 資料的唯一 source of truth，包含刊登、版本、工作、健康、使用者功能、
+報告 metadata 與 geocode cache。Parquet 只作分析／匯出快照，不參與網站正式讀寫或工作狀態。
+檔案系統只保存 raw evidence、模型、備份與 benchmark artifact。
 
 來源 adapter 不直接發布資料；工作 orchestrator 不實作來源解析；LLM provider 不讀任意資料庫。
 每個邊界使用明確資料契約，讓未來可替換資料庫、模型或部署位置。
@@ -117,8 +121,10 @@ pending -> running -> succeeded
 
 1. 來源資料先寫入不可變 raw batch 與 staging。
 2. 驗證批次完整性、schema、筆數及品質門檻。
-3. 在隔離的 build version 產生正規化資料、事件、指標及估價結果。
-4. 全部必要步驟成功後，原子切換 `published_version`。
+3. 先產生可重現、含 checksum 的 versioned Parquet 分析快照，再將相同 rows 載入 MySQL
+   隔離的 dataset version 並產生事件、指標及估價結果。
+4. Parquet 與 MySQL row-count／hash contract 一致且全部必要步驟成功後，在單一 transaction
+   原子切換 `published_version`。
 5. 失敗版本保留供診斷，但網站繼續讀取最後成功版本。
 
 相同來源、批次與工作參數產生相同冪等鍵。重跑不得重複事件、通知或報告。
@@ -145,7 +151,7 @@ pending -> running -> succeeded
 | `geocoder_version` | 定位規則／服務版本 |
 
 只有可信座標能進入兩公里正式指標。若外部 geocoder 不可用，紀錄待處理狀態並保留資料，
-不得用預設站點或區域中心點填補。定位 cache 以正規化地址為鍵，避免重複查詢。
+不得用預設站點或區域中心點填補。定位 cache 存在 MySQL，以正規化地址為唯一鍵，避免重複查詢。
 
 ## 8. Evidence Pack 與報告
 
@@ -278,8 +284,9 @@ Gemini 3.5 Flash 使用相同案例作雲端品質基準；送出前只使用匿
 
 ### 13.3 備份與還原
 
-備份包含 MySQL 邏輯備份、必要 Parquet、published manifest、模型與報告 metadata；raw HTML
-依保留政策處理。備份寫入日期化目錄、產生 checksum，並定期還原至隔離資料庫／暫存目錄後
+備份包含 MySQL 邏輯備份、模型、必要 artifact 與 raw batch manifest；Parquet 若存在只視為可重建
+匯出物，不是必要還原來源。raw HTML 依保留政策處理。備份寫入日期化目錄、產生 checksum，
+並定期還原至隔離資料庫／暫存目錄後
 執行 row count、manifest、artifact hash 與 smoke query。還原測試不得覆蓋正式資料。
 
 ## 14. 安全與隱私
@@ -295,7 +302,7 @@ Gemini 3.5 Flash 使用相同案例作雲端品質基準；送出前只使用匿
 
 1. 單元測試：狀態轉移、冪等鍵、Evidence Pack、schema、fact 驗證、通知去重及漂移計算。
 2. Contract tests：Mock、Ollama、Gemini、rule provider 與 notification provider 共用契約。
-3. 整合測試：staging／publish、失敗保留上一版、MySQL／Parquet、報告保存及收藏事件。
+3. 整合測試：MySQL staging／publish transaction、失敗保留上一版、報告保存及收藏事件。
 4. CLI／PowerShell 測試：環境檢查、工作觸發、排程安裝／移除、非零錯誤碼與無 secrets 輸出。
 5. Web 測試：一鍵更新 job、進度、profile、收藏、比較、報告、通知及 localhost 管理保護。
 6. E2E：以 fake 來源與 Mock LLM 完成全流程，CI 不連線 591、Ollama 或 Gemini。
