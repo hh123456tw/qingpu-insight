@@ -99,7 +99,7 @@ def _create_production_admin_services(
     root: Path,
     *,
     connection_factory=None,
-    preparation_runner_factory=None,
+    source_factory=None,
     executor_factory=None,
 ) -> AdminServices:
     # Task 3 owns URL parsing and visible-Selenium dependency construction.
@@ -108,8 +108,8 @@ def _create_production_admin_services(
     service_kwargs = {}
     if connection_factory is not None:
         service_kwargs["connection_factory"] = connection_factory
-    if preparation_runner_factory is not None:
-        service_kwargs["preparation_runner_factory"] = preparation_runner_factory
+    if source_factory is not None:
+        service_kwargs["source_factory"] = source_factory
     service = _create_listing_update_service(root, **service_kwargs)
     build_executor = executor_factory or LocalJobExecutor
     return AdminServices(
@@ -150,16 +150,39 @@ def parse_filters(args: MultiDict[str, str]) -> MarketFilters:
         bedrooms = tuple(int(value) for value in args.getlist("bedrooms"))
     except (TypeError, ValueError):
         raise ApiInputError("篩選條件格式不正確。", {"filters": "invalid"}) from None
-    return MarketFilters(
-        transaction_type=transaction_type,
-        station_codes=stations,
-        date_from=date_from,
-        date_to=date_to,
-        area_ping_min=area_ping_min,
-        area_ping_max=area_ping_max,
-        building_types=tuple(args.getlist("building_type")),
-        bedrooms=bedrooms,
-    )
+    try:
+        return MarketFilters(
+            transaction_type=transaction_type,
+            station_codes=stations,
+            date_from=date_from,
+            date_to=date_to,
+            area_ping_min=area_ping_min,
+            area_ping_max=area_ping_max,
+            building_types=tuple(args.getlist("building_type")),
+            bedrooms=bedrooms,
+        )
+    except ValueError:
+        fields: dict[str, str] = {}
+        if transaction_type not in {"resale", "presale"}:
+            fields["transaction_type"] = "resale_or_presale"
+        if not stations or not set(stations) <= {"A17", "A18", "A19"}:
+            fields["station"] = "A17_A18_or_A19"
+        if area_ping_min is not None and area_ping_min < 0:
+            fields["area_ping_min"] = "non_negative"
+        if area_ping_max is not None and area_ping_max < 0:
+            fields["area_ping_max"] = "non_negative"
+        if (
+            area_ping_min is not None
+            and area_ping_max is not None
+            and area_ping_min >= 0
+            and area_ping_max >= 0
+            and area_ping_min > area_ping_max
+        ):
+            fields["area_ping_min"] = "must_not_exceed_area_ping_max"
+            fields["area_ping_max"] = "must_not_be_less_than_area_ping_min"
+        raise ApiInputError(
+            "篩選條件無效。", fields or {"filters": "invalid"}
+        ) from None
 
 
 def _json_default(obj: Any) -> Any:

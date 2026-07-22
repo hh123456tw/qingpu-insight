@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import inspect
+import json
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
@@ -11,11 +13,8 @@ import pytest
 from test_publishing import FakeConnection, FakeCursor, FakeDatabase
 
 from qingpu_insight.job_executor import LocalJobExecutor
-from qingpu_insight.listing_sources import CaptureBatch
-from qingpu_insight.listing_update import (
-    AtomicParquetArtifactWriter,
-    PreparedListingType,
-)
+from qingpu_insight.listing_sources import CaptureBatch, CapturedPage
+from qingpu_insight.listing_update import AtomicParquetArtifactWriter
 from qingpu_insight.publishing import DatasetVersion, MySQLVersionPublisher
 from qingpu_insight.web import create_app
 
@@ -26,11 +25,15 @@ def test_production_composer_exposes_only_external_boundary_seams() -> None:
 
     cli_parameters = inspect.signature(cli._create_listing_update_service).parameters
     web_parameters = inspect.signature(web._create_production_admin_services).parameters
+    runner_parameters = inspect.signature(cli.M3ListingPreparationRunner).parameters
     assert "connection_factory" in cli_parameters
-    assert "preparation_runner_factory" in cli_parameters
+    assert "source_factory" in cli_parameters
+    assert "preparation_runner_factory" not in cli_parameters
     assert "connection_factory" in web_parameters
-    assert "preparation_runner_factory" in web_parameters
+    assert "source_factory" in web_parameters
+    assert "preparation_runner_factory" not in web_parameters
     assert "executor_factory" in web_parameters
+    assert runner_parameters["source_factory"].kind is inspect.Parameter.KEYWORD_ONLY
 
 
 class ProductionFakeDatabase(FakeDatabase):
@@ -66,6 +69,67 @@ class ProductionCursor(FakeCursor):
     def execute(self, sql: str, params=None) -> int:
         normalized = " ".join(sql.lower().split())
         database = self.connection.database
+        if normalized.startswith("show columns from `listing_"):
+            self.connection.kinds.discard("publisher")
+            self.connection.kinds.add("preparation")
+            default_unknown = {
+                "acquisition_representation",
+                "acquisition_schema_version",
+                "location_method",
+                "location_confidence",
+                "location_reason",
+            }
+            self.result = [
+                {
+                    "Field": column,
+                    "Null": "NO",
+                    "Default": "unknown" if column in default_unknown else None,
+                }
+                for column in (
+                    "asking_unit_price_low_twd_per_ping",
+                    "asking_unit_price_high_twd_per_ping",
+                    "building_area_min_ping",
+                    "building_area_max_ping",
+                    "acquisition_representation",
+                    "acquisition_schema_version",
+                    "structured_address",
+                    "address_source_url",
+                    "address_observed_at",
+                    "location_method",
+                    "location_confidence",
+                    "location_reason",
+                    "geocoded_at",
+                    "geocoder_version",
+                )
+            ]
+            self.rowcount = len(self.result)
+            return self.rowcount
+        if normalized.startswith("select * from listing_current"):
+            self.connection.kinds.discard("publisher")
+            self.connection.kinds.add("preparation")
+            listing_type = params["lt"] if params else None
+            self.result = [
+                {
+                    **row,
+                    "snapshot_at": pd.Timestamp(row["snapshot_at"]),
+                }
+                for row in database.runtime_current.values()
+                if listing_type is None or row["listing_type"] == listing_type
+            ]
+            self.description = (
+                [(column,) for column in self.result[0]] if self.result else []
+            )
+            self.rowcount = len(self.result)
+            return self.rowcount
+        if normalized.startswith((
+            "update `listing_snapshots` set `",
+            "update `listing_current` set `",
+        )):
+            self.connection.kinds.discard("publisher")
+            self.connection.kinds.add("preparation")
+            self.result = []
+            self.rowcount = 0
+            return 0
         if "job_runs" not in normalized:
             self.connection.kinds.add("publisher")
             if (
@@ -206,96 +270,74 @@ def _listing_payload(listing_type: str, version: str) -> dict[str, object]:
     }
 
 
-class ReleasePreparationRunner:
+class ReleaseListingSource:
     def __init__(
         self,
-        version: str,
-        *,
-        started: Event | None = None,
-        release: Event | None = None,
-        fail: bool = False,
+        owner: ReleaseSourceFactory,
     ) -> None:
-        self.version = version
-        self.started = started
-        self.release = release
-        self.fail = fail
-        self.calls: list[str] = []
-        self.prepared: list[PreparedListingType] = []
+        self.owner = owner
 
-    def prepare(self, listing_type: str, max_pages: int) -> PreparedListingType:
+    def capture(self, listing_type: str, max_pages: int) -> CaptureBatch:
         assert max_pages == 1
-        self.calls.append(listing_type)
-        if self.started is not None:
-            self.started.set()
-        if self.release is not None:
-            assert self.release.wait(5), "release gate did not open preparation"
-        if self.fail:
+        self.owner.calls.append(listing_type)
+        if self.owner.started is not None:
+            self.owner.started.set()
+        if self.owner.release is not None:
+            assert self.owner.release.wait(5), "release gate did not open capture"
+        if self.owner.fail:
             raise RuntimeError(
                 "mysql://admin:password@localhost/db <html> 0912-345-678"
             )
+        fixture_name = {
+            "sale": "591_sale_page.html",
+            "newhouse": "591_newhouse_page.html",
+            "rental": "591_rental_page.html",
+        }[listing_type]
+        html = (
+            Path(__file__).parent / "fixtures" / "listings" / fixture_name
+        ).read_text(encoding="utf-8")
         batch = CaptureBatch(
-            batch_id=f"batch-{listing_type}-{self.version}",
+            batch_id=f"batch-{listing_type}-{self.owner.version}",
             source="591",
             listing_type=listing_type,
             started_at=datetime(2026, 7, 22, 10, 0, tzinfo=UTC),
+            pages=[
+                CapturedPage(
+                    page_number=1,
+                    url=f"https://{listing_type}.591.com.tw/",
+                    html=html,
+                    accepted_count=2,
+                    representation="legacy_dom",
+                    schema_version="fixture-v1",
+                )
+            ],
             reached_terminal_page=True,
         )
-        rows = pd.DataFrame([_listing_payload(listing_type, self.version)])
-        events = pd.DataFrame(
-            [{
-                "event_key": f"event-{listing_type}-{self.version}",
-                "source": "591",
-                "listing_type": listing_type,
-                "source_listing_id": f"{listing_type}-{self.version}",
-                "event_type": "listed",
-                "event_data": "{}",
-                "occurred_at": batch.started_at,
-            }]
-        )
-        result = PreparedListingType(batch, rows, events, {"accepted": 1})
-        self.prepared.append(result)
-        return result
+        self.owner.batches.append(batch)
+        return batch
 
 
-class ConnectionOwningPreparationRunner:
-    def __init__(self, delegate: ReleasePreparationRunner, connection_factory) -> None:
-        self.delegate = delegate
-        self.connection_factory = connection_factory
-        self.connection_ids: list[int] = []
-
-    @property
-    def calls(self) -> list[str]:
-        return self.delegate.calls
-
-    @property
-    def prepared(self) -> list[PreparedListingType]:
-        return self.delegate.prepared
-
-    def prepare(self, listing_type: str, max_pages: int) -> PreparedListingType:
-        connection = self.connection_factory()
-        connection.kinds.add("preparation")
-        self.connection_ids.append(id(connection))
-        try:
-            return self.delegate.prepare(listing_type, max_pages)
-        finally:
-            connection.close()
-
-
-class ReleasePreparationFactory:
+class ReleaseSourceFactory:
     def __init__(self, version: str, **runner_kwargs) -> None:
         self.version = version
-        self.runner_kwargs = runner_kwargs
-        self.calls = 0
-        self.runner: ConnectionOwningPreparationRunner | None = None
+        self.started = runner_kwargs.get("started")
+        self.release = runner_kwargs.get("release")
+        self.fail = bool(runner_kwargs.get("fail", False))
+        self.calls: list[str] = []
+        self.batches: list[CaptureBatch] = []
+        self.factory_roots: list[Path] = []
+        self.configs: list[object] = []
 
-    def __call__(self, root: Path, connection_factory):
-        del root
-        self.calls += 1
-        self.runner = ConnectionOwningPreparationRunner(
-            ReleasePreparationRunner(self.version, **self.runner_kwargs),
-            connection_factory,
-        )
-        return self.runner
+    def __call__(self, root: Path, config) -> ReleaseListingSource:
+        self.factory_roots.append(root)
+        self.configs.append(config)
+        return ReleaseListingSource(self)
+
+
+def _prepare_release_root(root: Path) -> None:
+    doorplates = root / "data" / "raw" / "doorplates.csv"
+    doorplates.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(Path(__file__).parent / "fixtures" / "doorplates.csv", doorplates)
 
 
 class EmptyMarketSource:
@@ -314,7 +356,9 @@ def _seed_v1(
         started_at=datetime(2026, 7, 22, 9, 0, tzinfo=UTC),
         reached_terminal_page=True,
     )
-    rows = pd.DataFrame([_listing_payload("sale", "v1")])
+    v1_payload = _listing_payload("sale", "v1")
+    v1_payload["source_listing_id"] = "S-1001"
+    rows = pd.DataFrame([v1_payload])
     events = pd.DataFrame(
         [{
             "event_key": "event-sale-v1",
@@ -349,22 +393,35 @@ def _post(client, payload: dict[str, object]):
     )
 
 
-def test_production_composer_rejects_missing_task3_preparation_runner(
-    tmp_path: Path,
+def test_m3_runner_resolves_default_source_at_prepare_time(
+    tmp_path: Path, monkeypatch,
 ) -> None:
+    import qingpu_insight.cli as cli
     import qingpu_insight.web as web
 
+    _prepare_release_root(tmp_path)
     database = ProductionFakeDatabase()
     factory = ProductionConnectionFactory(database)
-    with pytest.raises(ValueError, match="preparation_runner"):
-        web._create_production_admin_services(
-            tmp_path,
-            connection_factory=factory,
-            preparation_runner_factory=lambda root, connections: None,
-            executor_factory=LocalJobExecutor,
-        )
-    assert factory.connections
-    assert all(connection.closed for connection in factory.connections)
+    services = web._create_production_admin_services(
+        tmp_path,
+        connection_factory=factory,
+        executor_factory=LocalJobExecutor,
+    )
+    source_factory = ReleaseSourceFactory("runtime-default")
+    monkeypatch.setattr(cli, "create_listing_source", source_factory)
+
+    runner = services.listing_update_service._preparation_runner
+    assert isinstance(runner, cli.M3ListingPreparationRunner)
+    prepared = runner.prepare("sale", 1)
+
+    assert len(prepared.rows) == 2
+    assert source_factory.calls == ["sale"]
+    preparation_connections = [
+        connection for connection in factory.connections
+        if "preparation" in connection.kinds
+    ]
+    assert len(preparation_connections) == 1
+    assert preparation_connections[0].closed is True
 
 
 @pytest.mark.parametrize(
@@ -380,8 +437,10 @@ def test_production_composer_rejects_missing_task3_preparation_runner(
 def test_m42_atomic_release_gate(
     tmp_path: Path, monkeypatch, boundary: str, expected_code: str,
 ) -> None:
+    import qingpu_insight.cli as cli
     import qingpu_insight.web as web
 
+    _prepare_release_root(tmp_path)
     database = ProductionFakeDatabase()
     factory = ProductionConnectionFactory(database)
     publisher = MySQLVersionPublisher(factory, dataset_key="listings")
@@ -391,18 +450,20 @@ def test_m42_atomic_release_gate(
 
     started = Event()
     release = Event()
-    preparation_v2_factory = ReleasePreparationFactory(
+    source_v2 = ReleaseSourceFactory(
         "v2", started=started, release=release
     )
     services_v2 = web._create_production_admin_services(
         tmp_path,
         connection_factory=factory,
-        preparation_runner_factory=preparation_v2_factory,
+        source_factory=source_v2,
         executor_factory=LocalJobExecutor,
     )
-    assert preparation_v2_factory.calls == 1
-    preparation_v2 = preparation_v2_factory.runner
-    assert preparation_v2 is not None
+    assert isinstance(
+        services_v2.listing_update_service._preparation_runner,
+        cli.M3ListingPreparationRunner,
+    )
+    assert source_v2.factory_roots == []
     app_v2 = create_app(
         data_source=EmptyMarketSource(),
         admin_services=services_v2,
@@ -424,32 +485,37 @@ def test_m42_atomic_release_gate(
             assert duplicate.status_code == 202
             assert duplicate.json["run_id"] == first.json["run_id"]
             assert duplicate.json["created"] is False
-            assert preparation_v2.calls == ["sale"]
+            assert source_v2.calls == ["sale"]
             release.set()
             assert database.terminal.wait(5), "v2 did not finish"
             detail = client.get(f"/api/jobs/{first.json['run_id']}")
             assert detail.status_code == 200
             assert detail.json["status"] == "succeeded"
-            assert detail.json["summary"]["rows"] == 3
+            assert detail.json["summary"]["rows"] == 6
             v2_version = detail.json["output_version"]
     finally:
         release.set()
         app_v2.extensions["qingpu_admin_shutdown"]()
 
     assert database.job_transitions.count(("pending", "running")) == 1
-    assert preparation_v2.calls == ["sale", "newhouse", "rental"]
+    assert source_v2.calls == ["sale", "newhouse", "rental"]
+    assert source_v2.factory_roots == [tmp_path] * 3
     assert database.pointer["listings"] == v2_version
     assert publisher.current().version == v2_version
-    assert len(database.runtime_current) == 4
-    assert len(database.runtime_events) == 4
-    assert database.versions[("listings", v2_version)]["artifact_row_count"] == 3
+    assert len(database.runtime_current) == 6
+    assert len(database.runtime_events) == 6
+    assert database.versions[("listings", v2_version)]["artifact_row_count"] == 6
 
     v2 = publisher.current()
     assert v2 is not None
-    batches = [item.batch for item in preparation_v2.prepared]
-    rows = pd.concat([item.rows for item in preparation_v2.prepared], ignore_index=True)
-    events = pd.concat(
-        [item.events for item in preparation_v2.prepared], ignore_index=True
+    batches = source_v2.batches
+    rows = pd.read_parquet(v2.artifact_path)
+    events = pd.DataFrame(
+        [
+            json.loads(payload)
+            for (dataset_key, version, _), payload in database.events.items()
+            if (dataset_key, version) == ("listings", v2.version)
+        ]
     )
     event_keys_before = set(database.runtime_events)
     publisher.stage(v2, batches, rows, events)
@@ -458,7 +524,7 @@ def test_m42_atomic_release_gate(
 
     runtime_before = database.snapshot()
     database.terminal.clear()
-    preparation_v3_factory = ReleasePreparationFactory(
+    source_v3 = ReleaseSourceFactory(
         f"v3-{boundary}", fail=boundary == "preparation"
     )
     if boundary == "artifact":
@@ -478,10 +544,13 @@ def test_m42_atomic_release_gate(
     services_v3 = web._create_production_admin_services(
         tmp_path,
         connection_factory=factory,
-        preparation_runner_factory=preparation_v3_factory,
+        source_factory=source_v3,
         executor_factory=LocalJobExecutor,
     )
-    assert preparation_v3_factory.calls == 1
+    assert isinstance(
+        services_v3.listing_update_service._preparation_runner,
+        cli.M3ListingPreparationRunner,
+    )
     app_v3 = create_app(
         data_source=EmptyMarketSource(),
         admin_services=services_v3,

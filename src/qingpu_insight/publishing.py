@@ -128,8 +128,11 @@ def _canonical_value(value: Any) -> Any:
         return value.isoformat()
     if hasattr(value, "item") and not isinstance(value, (str, bytes)):
         value = value.item()
-    if isinstance(value, float) and math.isnan(value):
-        return None
+    if isinstance(value, float):
+        if math.isnan(value):
+            return None
+        if math.isfinite(value) and value.is_integer():
+            return int(value)
     if isinstance(value, (str, int, float, bool)):
         return value
     return str(value)

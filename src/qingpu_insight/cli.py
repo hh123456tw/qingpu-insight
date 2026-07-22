@@ -1035,12 +1035,13 @@ def _prepare_listing_type(
 class M3ListingPreparationRunner:
     """Visible-Selenium production adapter for the shared M3 transformation."""
 
-    def __init__(self, root: Path, connection_factory) -> None:
+    def __init__(self, root: Path, connection_factory, *, source_factory=None) -> None:
         doorplates_path = root / "data" / "raw" / "doorplates.csv"
         if not doorplates_path.is_file():
             raise FileNotFoundError("data/raw/doorplates.csv is required")
         self._root = root
         self._connection_factory = connection_factory
+        self._source_factory = source_factory
         self._settings = get_settings(root)
         doorplates = build_doorplate_frame(doorplates_path)
         self._stations = station_points(self._settings.stations, doorplates)
@@ -1058,7 +1059,8 @@ class M3ListingPreparationRunner:
         connection = self._connection_factory()
         try:
             repository = MySQLListingRepository(connection)
-            source = create_listing_source(self._root, ChromeConfig(headless=False))
+            build_source = self._source_factory or create_listing_source
+            source = build_source(self._root, ChromeConfig(headless=False))
             return _prepare_listing_type(
                 listing_type,
                 max_pages,
@@ -1155,7 +1157,7 @@ def _create_listing_update_service(
     root: Path,
     *,
     connection_factory=None,
-    preparation_runner_factory=None,
+    source_factory=None,
 ) -> ListingUpdateService:
     operation_connection_factory = (
         connection_factory or create_mysql_connection_factory()
@@ -1165,11 +1167,11 @@ def _create_listing_update_service(
     publisher = MySQLVersionPublisher(
         operation_connection_factory, dataset_key="listings"
     )
-    build_preparation_runner = (
-        preparation_runner_factory or M3ListingPreparationRunner
-    )
-    preparation_runner = build_preparation_runner(
-        root, operation_connection_factory
+    runner_kwargs = {}
+    if source_factory is not None:
+        runner_kwargs["source_factory"] = source_factory
+    preparation_runner = M3ListingPreparationRunner(
+        root, operation_connection_factory, **runner_kwargs
     )
     return ListingUpdateService(
         job_service=job_service,

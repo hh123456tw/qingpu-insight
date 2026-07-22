@@ -327,6 +327,43 @@ def make_concurrent_publisher(
     return database, factory, MySQLVersionPublisher(factory, dataset_key="listings")
 
 
+def test_rows_hash_normalizes_only_finite_integral_floats() -> None:
+    integer = pd.DataFrame({"value": [1]})
+    integral_float = pd.DataFrame({"value": [1.0]})
+    fractional_float = pd.DataFrame({"value": [1.5]})
+    boolean = pd.DataFrame({"value": [True]})
+
+    assert publishing.compute_rows_hash(integer) == publishing.compute_rows_hash(
+        integral_float
+    )
+    assert publishing.compute_rows_hash(integer) != publishing.compute_rows_hash(
+        fractional_float
+    )
+    assert publishing.compute_rows_hash(integer) != publishing.compute_rows_hash(boolean)
+
+
+def test_rows_hash_preserves_null_equivalence_and_parquet_round_trip(
+    tmp_path: Path,
+) -> None:
+    nan_frame = pd.DataFrame({"value": [float("nan")]})
+    null_frame = pd.DataFrame({"value": [None]})
+    rows = pd.DataFrame(
+        {
+            "asking_price_twd": pd.Series([18_800_000, None], dtype=object),
+            "monthly_rent_twd": pd.Series([None, 25_000], dtype=object),
+        }
+    )
+    path = tmp_path / "nullable-numeric.parquet"
+    rows.to_parquet(path, index=False)
+
+    assert publishing.compute_rows_hash(nan_frame) == publishing.compute_rows_hash(
+        null_frame
+    )
+    assert publishing.compute_rows_hash(rows) == publishing.compute_rows_hash(
+        pd.read_parquet(path)
+    )
+
+
 def test_stage_writes_only_immutable_version_tables(
     tmp_path: Path, batch: CaptureBatch, listing_rows: pd.DataFrame,
     listing_events: pd.DataFrame,

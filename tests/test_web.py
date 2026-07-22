@@ -98,6 +98,58 @@ class TestMarketApi:
         assert response.status_code == 200
         assert response.get_json()["transaction_type"] == "resale"
 
+    @pytest.mark.parametrize(
+        ("query", "fields"),
+        [
+            (
+                "transaction_type=secret-unsupported-type",
+                {"transaction_type": "resale_or_presale"},
+            ),
+            (
+                "transaction_type=resale&station=secret-station",
+                {"station": "A17_A18_or_A19"},
+            ),
+            (
+                "transaction_type=resale&area_ping_min=-1",
+                {"area_ping_min": "non_negative"},
+            ),
+            (
+                "transaction_type=resale&area_ping_max=-1",
+                {"area_ping_max": "non_negative"},
+            ),
+            (
+                "transaction_type=resale&area_ping_min=-1&area_ping_max=-2",
+                {
+                    "area_ping_min": "non_negative",
+                    "area_ping_max": "non_negative",
+                },
+            ),
+            (
+                "transaction_type=resale&area_ping_min=20&area_ping_max=10",
+                {
+                    "area_ping_min": "must_not_exceed_area_ping_max",
+                    "area_ping_max": "must_not_be_less_than_area_ping_min",
+                },
+            ),
+        ],
+    )
+    def test_domain_filter_errors_are_curated_as_field_specific_400s(
+        self, client: FlaskClient, query: str, fields: dict[str, str]
+    ) -> None:
+        response = client.get(f"/api/market/summary?{query}")
+
+        assert response.status_code == 400
+        assert response.get_json() == {
+            "error": {
+                "code": "invalid_request",
+                "message": "篩選條件無效。",
+                "fields": fields,
+            }
+        }
+        serialized = response.get_data(as_text=True)
+        assert "secret-unsupported-type" not in serialized
+        assert "secret-station" not in serialized
+
     def test_trends_and_transactions_share_filters(self, client: FlaskClient) -> None:
         query = "transaction_type=presale&station=A17&date_from=2026-01-01"
         assert client.get(f"/api/market/trends?{query}").status_code == 200

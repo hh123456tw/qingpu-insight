@@ -41,6 +41,8 @@ class MarketFilters:
             raise ValueError("station_codes must contain A17, A18, or A19")
         if self.area_ping_min is not None and self.area_ping_min < 0:
             raise ValueError("area_ping_min must be non-negative")
+        if self.area_ping_max is not None and self.area_ping_max < 0:
+            raise ValueError("area_ping_max must be non-negative")
         if (
             self.area_ping_min is not None
             and self.area_ping_max is not None
