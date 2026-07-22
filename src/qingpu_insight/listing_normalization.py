@@ -193,7 +193,7 @@ def _address_metadata(
         and isinstance(observed_at, datetime)
     ):
         return None, None, None
-    if observed_at.tzinfo is None:
+    if observed_at.utcoffset() is None:
         observed_at = observed_at.replace(tzinfo=UTC)
     else:
         observed_at = observed_at.astimezone(UTC)

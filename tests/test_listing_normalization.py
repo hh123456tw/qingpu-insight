@@ -1,6 +1,7 @@
 """Tests for listing normalization."""
 
-from datetime import UTC, datetime, timedelta, timezone
+import math
+from datetime import UTC, datetime, timedelta, timezone, tzinfo
 
 import pytest
 
@@ -9,6 +10,19 @@ from qingpu_insight.listing_normalization import normalize_listing
 
 SNAPSHOT_AT = datetime(2026, 7, 21, 12, 0, 0)
 ALT_SNAPSHOT = datetime(2026, 7, 22, 8, 0, 0)
+
+
+class OffsetlessTimezone(tzinfo):
+    """A tzinfo object that intentionally behaves like a naive datetime."""
+
+    def utcoffset(self, dt):
+        return None
+
+    def dst(self, dt):
+        return None
+
+    def tzname(self, dt):
+        return "offsetless"
 
 
 @pytest.fixture
@@ -171,6 +185,46 @@ def test_missing_coordinates_use_zero_default(source_sale):
     assert row.location_reason == "missing_or_invalid_source_coordinates"
 
 
+@pytest.mark.parametrize(
+    ("latitude", "longitude", "is_valid"),
+    [
+        (True, 121.215, False),
+        (25.002, False, False),
+        (math.nan, 121.215, False),
+        (25.002, math.nan, False),
+        (math.inf, 121.215, False),
+        (25.002, -math.inf, False),
+        (20.0, 121.215, False),
+        (30.0, 121.215, False),
+        (25.002, 115.0, False),
+        (25.002, 125.0, False),
+        (20.000_001, 121.215, True),
+        (25.002, 115.000_001, True),
+    ],
+)
+def test_source_coordinate_validation_handles_invalid_values_and_boundaries(
+    source_sale, latitude, longitude, is_valid
+):
+    source = SourceListing(
+        source_listing_id=source_sale.source_listing_id,
+        listing_type=source_sale.listing_type,
+        source_url=source_sale.source_url,
+        payload=dict(source_sale.payload, lat=latitude, lng=longitude),
+    )
+
+    row = normalize_listing(source, SNAPSHOT_AT)
+
+    if is_valid:
+        assert (row.latitude, row.longitude) == (float(latitude), float(longitude))
+        assert row.location_method == "source_coordinates"
+        assert row.location_confidence == "high"
+    else:
+        assert (row.latitude, row.longitude) == (None, None)
+        assert row.location_method == "unknown"
+        assert row.location_confidence == "unknown"
+        assert row.location_reason == "missing_or_invalid_source_coordinates"
+
+
 def test_complete_structured_address_metadata_is_preserved_in_utc(source_sale):
     observed_at = datetime(2026, 7, 21, 20, 0, tzinfo=timezone(timedelta(hours=8)))
     source = SourceListing(
@@ -190,6 +244,66 @@ def test_complete_structured_address_metadata_is_preserved_in_utc(source_sale):
     assert row.structured_address == "桃園市中壢區青埔路 1 號"
     assert row.address_source_url == "https://newhouse.591.com.tw/home/ABC"
     assert row.address_observed_at == datetime(2026, 7, 21, 12, 0, tzinfo=UTC)
+
+
+def test_offsetless_timezone_is_treated_as_utc_for_address_provenance(source_sale):
+    offsetless = SourceListing(
+        source_listing_id=source_sale.source_listing_id,
+        listing_type=source_sale.listing_type,
+        source_url=source_sale.source_url,
+        payload=dict(
+            source_sale.payload,
+            structured_address="桃園市中壢區青埔路 1 號",
+            address_source_url="https://newhouse.591.com.tw/home/ABC",
+            address_observed_at=datetime(2026, 7, 21, 12, 0, tzinfo=OffsetlessTimezone()),
+        ),
+    )
+    naive = SourceListing(
+        source_listing_id=source_sale.source_listing_id,
+        listing_type=source_sale.listing_type,
+        source_url=source_sale.source_url,
+        payload=dict(
+            offsetless.payload,
+            address_observed_at=datetime(2026, 7, 21, 12, 0),
+        ),
+    )
+
+    offsetless_row = normalize_listing(offsetless, SNAPSHOT_AT)
+    naive_row = normalize_listing(naive, SNAPSHOT_AT)
+
+    assert offsetless_row.address_observed_at == datetime(2026, 7, 21, 12, 0, tzinfo=UTC)
+    assert offsetless_row.raw_hash == naive_row.raw_hash
+
+
+def test_same_address_observed_instant_has_the_same_utc_value_and_hash(source_sale):
+    common = dict(
+        source_sale.payload,
+        structured_address="桃園市中壢區青埔路 1 號",
+        address_source_url="https://newhouse.591.com.tw/home/ABC",
+    )
+    utc_source = SourceListing(
+        source_listing_id=source_sale.source_listing_id,
+        listing_type=source_sale.listing_type,
+        source_url=source_sale.source_url,
+        payload=dict(common, address_observed_at=datetime(2026, 7, 21, 12, 0, tzinfo=UTC)),
+    )
+    taipei_source = SourceListing(
+        source_listing_id=source_sale.source_listing_id,
+        listing_type=source_sale.listing_type,
+        source_url=source_sale.source_url,
+        payload=dict(
+            common,
+            address_observed_at=datetime(
+                2026, 7, 21, 20, 0, tzinfo=timezone(timedelta(hours=8))
+            ),
+        ),
+    )
+
+    utc_row = normalize_listing(utc_source, SNAPSHOT_AT)
+    taipei_row = normalize_listing(taipei_source, SNAPSHOT_AT)
+
+    assert utc_row.address_observed_at == taipei_row.address_observed_at
+    assert utc_row.raw_hash == taipei_row.raw_hash
 
 
 @pytest.mark.parametrize(
