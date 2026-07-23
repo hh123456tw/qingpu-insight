@@ -1,5 +1,9 @@
 # 青埔智價 M4 本機產品化與智慧報告設計
 
+> **2026-07-23 範圍更新：** M4.3、M4.4 以
+> [M4.3 Lite／M4.4 Core 設計](2026-07-23-qingpu-insight-m4-3-lite-m4-4-core-design.md)
+> 為準；本文中較廣的漂移平台、排程監控與完整 provider 平台不再屬於這兩個里程碑。
+
 ## 1. 目標
 
 M4 將 M0～M3 的官方成交分析、AI 估價及 591 刊登情報整合成可在 Windows
@@ -13,12 +17,12 @@ M4 將 M0～M3 的官方成交分析、AI 估價及 591 刊登情報整合成可
 ## 2. 成功條件
 
 1. 使用者可在管理頁一鍵完成 591 售屋、新建案及租屋更新，失敗不污染上一版資料。
-2. 官方資料、分析、監控及備份可由 Windows 工作排程器執行並留下可稽核紀錄。
+2. 使用者可手動執行健康檢查、MySQL 備份與隔離還原，並留下可稽核紀錄。
 3. 網站可保存購屋條件、收藏與比較物件，並在新物件或價格變動時建立去重通知。
 4. 個人化報告的價格、樣本數、日期及模型結果全部來自可驗證的 Evidence Pack；LLM
    只負責解讀與表達，不自行計算或改寫事實。
-5. 報告可切換 Mock、Ollama 及 Gemini provider；任何外部服務不可用時仍能產生規則式報告。
-6. Dashboard 可查看資料新鮮度、工作狀態、資料品質、模型版本、漂移、備份及通知狀態。
+5. 報告可使用 Rule、Ollama 及選配 Gemini；任何外部服務不可用時仍能產生規則式報告。
+6. 本機狀態頁可查看 MySQL、資料新鮮度、工作、磁碟、備份及還原結果。
 7. 在乾淨 Windows 環境可依文件完成安裝、啟動、更新、排程安裝／移除及 smoke test。
 
 ## 3. 範圍
@@ -36,19 +40,19 @@ M4 將 M0～M3 的官方成交分析、AI 估價及 591 刊登情報整合成可
 - 官方資料與背景安全工作使用 Windows 工作排程器。
 - 591 預設由管理頁或 PowerShell 手動一鍵更新；提供但預設不安裝自動排程。
 
-### 3.3 M4.3 維運監控
+### 3.3 M4.3 Lite 健康與備份
 
-- 監控資料新鮮度、批次完整性、接受／拒收筆數、爬蟲成功率及欄位缺失率。
-- 監控估價模型版本、效能、輸入分布及資料漂移。
-- 監控 MySQL、磁碟、Ollama、Gemini 設定、排程與最近備份。
-- 備份必須通過隔離環境的實際還原驗證，不能只檢查檔案存在。
+- 顯示 MySQL、官方資料、三類 591、最近工作、備份及磁碟摘要。
+- 提供手動 `backup-create` 與 `backup-restore-drill` CLI。
+- 備份必須通過隔離資料庫的實際還原、核心表、pointer 與筆數驗證。
+- 不建立模型漂移、排程監控、通知、可編輯 threshold 或自動修復。
 
-### 3.4 M4.4 智慧購屋報告
+### 3.4 M4.4 Core 可驗證智慧購屋報告
 
-- 定義共用 `ReportProvider`，實作 Mock、Ollama、Gemini 與規則式 fallback。
-- 建立 Evidence Pack、報告 JSON Schema、輸出驗證、事實核對及 provider fallback。
-- 在 RTX 3080 12GB 主機執行候選本機模型 benchmark，保存品質與效能結果。
-- Gemini 3.5 Flash 作雲端品質基準與選配，不是系統單點依賴。
+- 建立匿名 Evidence Pack、Pydantic report schema、fact／數值驗證及 Rule fallback。
+- Rule provider 永遠可用；Ollama 為本機主要 provider，Gemini 有 key/model 才選配啟用。
+- RTX 3080 12GB 主機只執行一次固定案例 benchmark；GTX 1050 Ti 只做小模型或 fallback smoke。
+- 不建立 profile、收藏、比較、通知、聊天或 provider 管理平台。
 
 ### 3.5 M4.5 使用者功能
 
@@ -263,31 +267,28 @@ Gemini 3.5 Flash 使用相同案例作雲端品質基準；送出前只使用匿
 - 收藏與比較：狀態變化、估值差距、缺失資料及來源連結。
 - 報告：生成、版本、provider、fallback 狀態、Evidence Pack 日期及下載／列印視圖。
 - 通知中心：未讀、已讀、事件來源及偏好設定。
-- 維運：資料新鮮度、漂移、備份還原、Ollama／Gemini 健康及排程狀態。
+- 維運：MySQL、資料新鮮度、最近工作、磁碟、備份與隔離還原結果。
 
 長時間工作採輪詢 job status，不把 Selenium 或 LLM 呼叫阻塞在單一 HTTP request 生命週期中。
 第一版只綁定 localhost；任何未來公開部署必須先加入認證與權限設計。
 
-## 13. 監控、備份與漂移
+## 13. 健康、備份與還原
 
 ### 13.1 健康與新鮮度
 
 每項資料集定義 warning／critical 時效門檻。狀態由資料本身的成功版本計算，不以排程程序退出碼
 代替。Dashboard 顯示最後成功、最後嘗試及目前服務中的版本。
 
-### 13.2 模型監控
+### 13.2 延後的模型監控
 
-- 保存訓練資料版本、程式版本、特徵 schema、評估指標及 artifact hash。
-- 比較最近輸入與訓練基準的缺失率、類別分布及數值分布。
-- 漂移只觸發警示，不自動重新訓練或發布模型。
-- 新模型必須通過既有 M2 release gate 才能切換。
+M4.3 Lite 不實作 PSI、missingness 或輸入分布漂移。M2 評估與 M4.4 一次性 benchmark
+仍保存結果；有足夠模型與資料版本歷史後，再另立漂移里程碑。
 
 ### 13.3 備份與還原
 
-備份包含 MySQL 邏輯備份、模型、必要 artifact 與 raw batch manifest；Parquet 若存在只視為可重建
-匯出物，不是必要還原來源。raw HTML 依保留政策處理。備份寫入日期化目錄、產生 checksum，
-並定期還原至隔離資料庫／暫存目錄後
-執行 row count、manifest、artifact hash 與 smoke query。還原測試不得覆蓋正式資料。
+M4.3 Lite 備份 MySQL 邏輯資料並產生 SHA-256；Parquet 只視為可重建匯出物。
+使用者手動還原至固定安全前綴的隔離資料庫，驗證核心表、published pointer、row count 與
+smoke query，最後刪除隔離資料庫。還原測試不得覆蓋正式資料。
 
 ## 14. 安全與隱私
 
@@ -300,12 +301,12 @@ Gemini 3.5 Flash 使用相同案例作雲端品質基準；送出前只使用匿
 
 ## 15. 測試策略
 
-1. 單元測試：狀態轉移、冪等鍵、Evidence Pack、schema、fact 驗證、通知去重及漂移計算。
-2. Contract tests：Mock、Ollama、Gemini、rule provider 與 notification provider 共用契約。
+1. 單元測試：狀態轉移、冪等鍵、健康門檻、Evidence Pack、schema 與 fact 驗證。
+2. Contract tests：Rule、Ollama、Gemini provider 與 backup process runner。
 3. 整合測試：MySQL staging／publish transaction、失敗保留上一版、報告保存及收藏事件。
-4. CLI／PowerShell 測試：環境檢查、工作觸發、排程安裝／移除、非零錯誤碼與無 secrets 輸出。
-5. Web 測試：一鍵更新 job、進度、profile、收藏、比較、報告、通知及 localhost 管理保護。
-6. E2E：以 fake 來源與 Mock LLM 完成全流程，CI 不連線 591、Ollama 或 Gemini。
+4. CLI 測試：工作、健康、備份、restore drill、報告、非零錯誤碼與無 secrets 輸出。
+5. Web 測試：一鍵更新、健康摘要、報告與 localhost 管理保護。
+6. E2E：以 fake 來源、fake process runner 與 Rule provider 完成全流程；CI 不連線外部服務。
 7. 授權 smoke：手動執行 591 三類最小批次，驗證 raw、品質、發布及通知。
 8. LLM benchmark：只在 RTX 3080 主機執行；結果以 JSON／Markdown artifact 保存。
 9. 弱機 smoke：GTX 1050 Ti 主機只驗證選定小模型與 fallback，不作完整比較。
@@ -322,16 +323,19 @@ Gemini 3.5 Flash 使用相同案例作雲端品質基準；送出前只使用匿
 - 按一次更新可完成三類 591 的取得、驗證、同步與發布。
 - 模擬任一步失敗時 published version 不變，重跑不產生重複事件。
 
-### M4.3
+### M4.3 Lite
 
-- Dashboard 顯示資料新鮮度、工作、錯誤、模型、漂移及備份狀態。
-- 至少一次隔離還原演練成功並保存驗證結果。
+- 本機狀態頁顯示 MySQL、資料新鮮度、三類 591、工作、磁碟、備份與還原結果。
+- 至少一份真實 MySQL dump 通過 SHA-256。
+- 至少一次隔離還原驗證核心表、published pointer 與筆數，且正式資料庫未改變。
 
-### M4.4
+### M4.4 Core
 
-- Mock 完全離線通過；Ollama／Gemini 可切換；rule fallback 在兩者不可用時成功。
+- 無 Ollama、Gemini 或網路時，Rule provider 仍能產生合法報告。
+- Ollama 可產生通過 schema/fact 驗證的報告；Gemini 未設定時不影響功能。
 - 所有報告數值可回指 Evidence Pack，竄改或 hallucinated fact 會被拒絕。
 - RTX 3080 主機完成固定案例 benchmark 並保存可重現設定與結果。
+- GTX 1050 Ti 完成選定小模型或 Rule fallback smoke。
 
 ### M4.5
 

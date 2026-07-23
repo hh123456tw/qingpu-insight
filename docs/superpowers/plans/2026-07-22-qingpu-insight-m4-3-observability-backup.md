@@ -1,290 +1,318 @@
-# 青埔智價 M4.3 維運監控 Implementation Plan
+# 青埔智價 M4.3 Lite 健康與備份 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 讓資料、工作、模型與備份狀態可觀測，並以真正的隔離還原演練證明備份可用。
+**Goal:** 以一個本機健康摘要回答系統是否正常，並以手動 MySQL 備份及隔離還原演練證明資料可恢復。
 
-**Architecture:** 所有 health result 與 threshold 存 MySQL；checks 只回傳固定 `HealthResult`，不直接發通知。漂移由 deterministic pandas 計算、只警示不自動訓練；backup service 封裝 `mysqldump`／`mysql` process runner 並保存 checksum 與 restore evidence。
+**Architecture:** `HealthService` 從 MySQL 已發布版本、工作紀錄、備份 metadata 與本機磁碟產生固定 `HealthSummary`；不建立漂移或通知平台。`BackupService` 透過可替換 `ProcessRunner` 執行 `mysqldump`／`mysql`，保存 SHA-256 與 restore evidence；Web 僅讀狀態，所有破壞性操作只存在 CLI。
 
-**Tech Stack:** Python 3.11、pandas、NumPy、PyMySQL、subprocess、SHA-256、Flask、pytest、PowerShell
+**Tech Stack:** Python 3.11、PyMySQL、Flask、subprocess、SHA-256、pytest、Ruff
 
 ## Global Constraints
 
-- MySQL 是 health、drift、backup metadata 與 runtime 狀態的唯一正式 repository。
-- 健康狀態由最後成功資料版本計算，不以排程程序 exit code 代替。
-- 漂移只能建立 warning／critical，不得自動訓練或發布新模型。
-- 還原演練只能使用明確的隔離 database name，禁止覆蓋 production database。
-- 日誌、健康 detail 與 process command 不得保存密碼或完整連線 URL。
+- 實作前先完成 M4.2 真實 MySQL、可見 Selenium、三類 591 手動驗收並保存結果。
+- MySQL 是健康歷史與備份 metadata 的唯一 runtime repository。
+- M4.3 Lite 不實作模型漂移、通知、Windows Task Scheduler、可編輯 threshold 或自動修復。
+- `backup-create` 與 `backup-restore-drill` 只能由本機 CLI 執行；Web 不得提供對應 POST。
+- MySQL 密碼只經 child-process environment 傳入，不得出現在 args、log、例外、API 或資料表。
+- restore 只能指向 `qingpu_restore_drill_` 前綴的隔離資料庫，永遠不得覆寫 production database。
+- 所有 production code 先新增能因正確原因失敗的 regression test，再寫最小實作。
 
 ## File Map
 
 | File | Responsibility |
 |---|---|
-| `health.py` | Health contracts、thresholds 與 checks |
-| `health_repository.py` | MySQL health history/query |
-| `drift.py` | Deterministic PSI、missingness 與狀態判定 |
-| `drift_repository.py` | MySQL drift report transaction |
-| `backups.py` | mysqldump、checksum、isolated restore drill |
-| `backup_repository.py` | MySQL backup/restore evidence metadata |
-| `cli.py` | 維運 commands 與固定 exit codes |
-| `web.py` | 唯讀 ops APIs；不從 HTTP 執行 restore |
+| `src/qingpu_insight/health.py` | 健康 contracts、門檻與摘要組合 |
+| `src/qingpu_insight/health_repository.py` | MySQL health summary history |
+| `src/qingpu_insight/backups.py` | dump、checksum、restore drill 與 process abstraction |
+| `src/qingpu_insight/backup_repository.py` | MySQL backup／restore metadata |
+| `database/005_m43_health_backup_schema.sql` | health 與 backup metadata schema |
+| `src/qingpu_insight/cli.py` | `health-run`、`backup-create`、`backup-restore-drill` |
+| `src/qingpu_insight/web.py` | 本機唯讀 `/api/ops/health`、`/api/ops/backups` |
+| `tests/test_m43_release_gate.py` | M4.3 Lite deterministic release gate |
 
 ---
 
-### Task 1: Health contract、MySQL repository 與核心 checks
+### Task 1: 固定健康 contract、核心 checks 與 MySQL repository
 
 **Files:**
 - Create: `src/qingpu_insight/health.py`
 - Create: `src/qingpu_insight/health_repository.py`
+- Create: `database/005_m43_health_backup_schema.sql`
 - Create: `tests/test_health.py`
 - Create: `tests/test_health_repository.py`
 
 **Interfaces:**
-- Produces: `HealthResult`, `HealthCheck`, `HealthService.run_all()`, `MySQLHealthRepository.save/latest/history`。
+- Consumes: `JobService.list_recent(limit)`, `MySQLVersionPublisher.current()` 與 listing runtime repository count query。
+- Produces: `HealthStatus = Literal["healthy", "warning", "critical"]`。
+- Produces: `HealthItem(code, status, observed_at, summary, value, unit)`。
+- Produces: `HealthSummary(status, checked_at, items)`。
+- Produces: `HealthProbes.mysql()`, `market_dataset()`, `listing_dataset(listing_type)`, `latest_listing_job()`, `latest_backup()` 與 `disk_free()`；每個方法只回傳 allowlisted observation。
+- Produces: `HealthService.run() -> HealthSummary`。
+- Produces: `MySQLHealthRepository.save(summary)` 與 `latest()`。
 
-- [ ] **Step 1: 寫入新鮮度邊界與 exception isolation 測試**
-
-```python
-def test_freshness_check_uses_last_success_not_last_attempt() -> None:
-    check = FreshnessCheck("listings", warning_after=timedelta(days=7),
-                           critical_after=timedelta(days=14))
-    result = check.run(HealthContext(now=utc(2026, 7, 22),
-                                     last_success=utc(2026, 7, 10),
-                                     last_attempt=utc(2026, 7, 22)))
-    assert result.status == "warning"
-
-
-def test_service_converts_check_exception_to_critical(repository) -> None:
-    results = HealthService(repository, [ExplodingCheck("mysql")]).run_all()
-    assert results[0].status == "critical"
-    assert results[0].code == "check_failed"
-```
-
-- [ ] **Step 2: 驗證測試先失敗**
-
-Run: `python -m pytest tests/test_health.py tests/test_health_repository.py -q`
-Expected: FAIL，health modules 不存在。
-
-- [ ] **Step 3: 實作 contract、checks 與 MySQL table**
+- [ ] **Step 1: 建立失敗的 contract 與狀態聚合測試**
 
 ```python
-HealthStatus = Literal["healthy", "warning", "critical", "unknown"]
-
-@dataclass(frozen=True)
-class HealthResult:
-    check_name: str
-    status: HealthStatus
-    code: str
-    checked_at: datetime
-    summary: str
-    details: dict[str, object]
+def test_summary_uses_worst_item_status() -> None:
+    summary = summarize_health([
+        HealthItem("mysql", "healthy", NOW, "ok", 1, "boolean"),
+        HealthItem("listing_sale_freshness", "warning", NOW, "stale", 30, "hours"),
+    ], checked_at=NOW)
+    assert summary.status == "warning"
 
 
-class HealthCheck(Protocol):
-    name: str
-    def run(self, context: HealthContext) -> HealthResult: ...
+def test_no_successful_listing_version_is_critical() -> None:
+    service = HealthService(probes=FakeProbes(current_listing=None))
+    result = service.run()
+    assert item(result, "listing_dataset").status == "critical"
 ```
 
-實作 `FreshnessCheck`、`MySQLCheck(SELECT 1)`、`DiskSpaceCheck`、`LastJobCheck`；
-`MySQLHealthRepository` 建立 `health_results`，JSON detail 使用 MySQL JSON 欄位，所有時間為 UTC。
-details 只保存數值、版本與安全 reason code。
+- [ ] **Step 2: 執行 RED**
 
-- [ ] **Step 4: 執行測試**
+Run:
 
-Run: `python -m pytest tests/test_health.py tests/test_health_repository.py -q`
-Expected: PASS。
-
-- [ ] **Step 5: 提交**
-
-```bash
-git add src/qingpu_insight/health.py src/qingpu_insight/health_repository.py tests/test_health.py tests/test_health_repository.py
-git commit -m "feat(m4): add operational health checks"
+```powershell
+$env:PYTHONPATH=(Resolve-Path 'src').Path
+.\.venv\Scripts\python.exe -m pytest tests/test_health.py -q
 ```
 
-### Task 2: 資料與模型漂移報告
+Expected: collection fails because `qingpu_insight.health` does not exist.
 
-**Files:**
-- Create: `src/qingpu_insight/drift.py`
-- Create: `src/qingpu_insight/drift_repository.py`
-- Create: `tests/test_drift.py`
-- Create: `tests/test_drift_repository.py`
+- [ ] **Step 3: 實作最小 contract 與固定門檻**
 
-**Interfaces:**
-- Produces: `DriftBaseline`, `FeatureDrift`, `DriftReport`, `compute_drift(baseline, current)`、`MySQLDriftRepository`。
-
-- [ ] **Step 1: 寫入 deterministic drift 測試**
+固定檢查：
 
 ```python
-def test_numeric_shift_and_missingness_raise_warning() -> None:
-    baseline = pd.DataFrame({"building_area_ping": [20, 21, 22, 23],
-                             "station_code": ["A17", "A18", "A19", "A18"]})
-    current = pd.DataFrame({"building_area_ping": [40, 41, None, 43],
-                            "station_code": ["A17", "A17", "A17", "A17"]})
-    report = compute_drift(baseline, current, DriftThresholds(psi_warning=0.2,
-                                                              missing_delta_warning=0.1))
-    assert report.status in {"warning", "critical"}
-    assert {item.feature for item in report.features} == {
-        "building_area_ping", "station_code"
-    }
+DEFAULT_THRESHOLDS = {
+    "market_freshness_warning_hours": 24 * 45,
+    "listing_freshness_warning_hours": 24 * 7,
+    "disk_warning_bytes": 10 * 1024**3,
+    "disk_critical_bytes": 2 * 1024**3,
+}
 ```
 
-- [ ] **Step 2: 驗證測試先失敗**
+檢查項目只包含 `mysql`、`market_dataset`、三類 listing、`latest_listing_job`、`latest_backup`、`disk_free`。probe 失敗回固定安全摘要，不保存 DB URL 或原始 SQL。
 
-Run: `python -m pytest tests/test_drift.py tests/test_drift_repository.py -q`
-Expected: FAIL，drift contract 尚不存在。
+- [ ] **Step 4: 建立 repository 與 migration RED**
 
-- [ ] **Step 3: 實作 PSI、類別分布與 missing delta**
+測試 migration 包含 `health_runs`、`health_items`、`backup_records`，並驗證：
 
 ```python
-@dataclass(frozen=True)
-class FeatureDrift:
-    feature: str
-    kind: Literal["numeric", "categorical"]
-    psi: float
-    missing_rate_baseline: float
-    missing_rate_current: float
-    status: Literal["healthy", "warning", "critical"]
-
-
-@dataclass(frozen=True)
-class DriftReport:
-    model_version: str
-    dataset_version: str
-    computed_at: datetime
-    status: Literal["healthy", "warning", "critical"]
-    features: tuple[FeatureDrift, ...]
+saved = repository.save(summary)
+assert repository.latest() == saved
+assert connection.commits == 1
+assert connection.rollbacks == 0
+assert connection.closed is True
 ```
 
-Numeric bins 由 baseline quantile 固定，零機率以 `1e-6` 平滑；categorical 包含 `__OTHER__` 與
-`__MISSING__`。Repository 建立 `drift_reports`／`drift_features`，一份 report 在同一 transaction 保存。
+- [ ] **Step 5: 實作 transaction-safe repository**
 
-- [ ] **Step 4: 執行測試**
+repository 接受 connection factory，每次操作建立並關閉一條連線。`health_runs.run_id` 使用 UUID，`health_items` 以 `(run_id, code)` 為主鍵；JSON detail 只保存 allowlisted safe fields。
 
-Run: `python -m pytest tests/test_drift.py tests/test_drift_repository.py -q`
-Expected: PASS；相同輸入重跑結果一致。
+- [ ] **Step 6: 執行 GREEN 與 lint**
 
-- [ ] **Step 5: 提交**
-
-```bash
-git add src/qingpu_insight/drift.py src/qingpu_insight/drift_repository.py tests/test_drift.py tests/test_drift_repository.py
-git commit -m "feat(m4): monitor valuation data drift"
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_health.py tests/test_health_repository.py -q
+.\.venv\Scripts\python.exe -m ruff check src/qingpu_insight/health.py src/qingpu_insight/health_repository.py tests/test_health.py tests/test_health_repository.py
 ```
 
-### Task 3: MySQL backup、checksum 與隔離還原 drill
+- [ ] **Step 7: 提交**
+
+```powershell
+git add database/005_m43_health_backup_schema.sql src/qingpu_insight/health.py src/qingpu_insight/health_repository.py tests/test_health.py tests/test_health_repository.py
+git commit -m "feat(m43): add local health summary"
+```
+
+### Task 2: 手動 MySQL dump、checksum 與 metadata
 
 **Files:**
 - Create: `src/qingpu_insight/backups.py`
 - Create: `src/qingpu_insight/backup_repository.py`
 - Create: `tests/test_backups.py`
 - Create: `tests/test_backup_repository.py`
+- Modify: `database/005_m43_health_backup_schema.sql`
 
 **Interfaces:**
-- Produces: `ProcessRunner.run(args, env)`, `BackupService.create()`, `BackupService.restore_drill()`、`BackupRecord`、`MySQLBackupRepository`。
+- Consumes: Task 1 migration 與 connection factory。
+- Produces: `ProcessResult(returncode, stdout, stderr)`。
+- Produces: `ProcessRunner.run(args: Sequence[str], env: Mapping[str, str]) -> ProcessResult`。
+- Produces: `BackupRecord(backup_id, status, path, sha256, size_bytes, created_at, restore_status, restore_checked_at)`。
+- Produces: `BackupService.create() -> BackupRecord`。
+- Produces: `MySQLBackupRepository.create(record)`、`mark_restore(...)`、`latest()`、`list_recent(limit)`。
 
-- [ ] **Step 1: 寫入 command safety 與 production guard 測試**
+- [ ] **Step 1: 建立 dump 命令與 secret RED**
 
 ```python
-def test_backup_password_is_environment_not_command(tmp_path, fake_runner) -> None:
-    BackupService(fake_runner, settings(tmp_path)).create()
-    args, env = fake_runner.calls[0]
-    assert all("password" not in value.lower() for value in args)
-    assert env["MYSQL_PWD"] == "secret"
+def test_backup_uses_env_password_and_argument_array(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    service = BackupService(config=CONFIG, runner=runner, repository=REPO, backup_dir=tmp_path)
+    record = service.create()
+    assert runner.args[0] == "mysqldump"
+    assert "--result-file" in runner.args
+    assert all("password" not in arg.lower() for arg in runner.args)
+    assert runner.env["MYSQL_PWD"] == "secret"
+    assert "secret" not in repr(record)
+```
 
+- [ ] **Step 2: 執行 RED**
 
-def test_restore_drill_rejects_production_database(fake_runner, tmp_path) -> None:
-    service = BackupService(fake_runner, settings(tmp_path, database="qingpu_insight"))
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_backups.py tests/test_backup_repository.py -q
+```
+
+Expected: FAIL because backup service and repository do not exist.
+
+- [ ] **Step 3: 實作 dump 與 SHA-256**
+
+使用 `subprocess.run(args, env=..., capture_output=True, text=True, shell=False)`。dump 先寫 f-string `f"{backup_id}.sql.partial"`，process 成功且檔案非空後計算 SHA-256，再以 `os.replace` 發布為 `f"{backup_id}.sql"`。失敗時刪除 partial，保存固定 `dump_failed`，不保存 raw stderr。
+
+- [ ] **Step 4: 實作 metadata transaction**
+
+`backup_records` 保存 path 的 project-relative 值、hash、size、status 與 restore evidence，不保存 password、完整 database URL 或 process command。exact duplicate `backup_id` 必須拒絕，不使用 upsert 改寫 provenance。
+
+- [ ] **Step 5: 補 checksum mismatch、空 dump 與 process failure 測試**
+
+測試必須證明失敗不留下 ready backup，repository rollback 並關閉連線。
+
+- [ ] **Step 6: 執行 GREEN、lint 與提交**
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_backups.py tests/test_backup_repository.py -q
+.\.venv\Scripts\python.exe -m ruff check src/qingpu_insight/backups.py src/qingpu_insight/backup_repository.py tests/test_backups.py tests/test_backup_repository.py
+git add database/005_m43_health_backup_schema.sql src/qingpu_insight/backups.py src/qingpu_insight/backup_repository.py tests/test_backups.py tests/test_backup_repository.py
+git commit -m "feat(m43): create verified mysql backups"
+```
+
+### Task 3: 隔離還原演練與安全邊界
+
+**Files:**
+- Modify: `src/qingpu_insight/backups.py`
+- Modify: `src/qingpu_insight/backup_repository.py`
+- Modify: `tests/test_backups.py`
+- Modify: `tests/test_backup_repository.py`
+
+**Interfaces:**
+- Consumes: Task 2 `BackupRecord` 與 `ProcessRunner`。
+- Produces: `RestoreEvidence(database_name, table_names, row_counts, published_versions, checked_at)`。
+- Produces: `BackupService.restore_drill(backup_id: str) -> RestoreEvidence`。
+
+- [ ] **Step 1: 建立安全名稱與 production protection RED**
+
+```python
+def test_restore_rejects_non_drill_database() -> None:
     with pytest.raises(UnsafeRestoreTarget):
-        service.restore_drill(tmp_path / "dump.sql", target_database="qingpu_insight")
+        validate_restore_database("qingpu_insight")
+
+
+def test_restore_database_has_fixed_prefix() -> None:
+    assert build_restore_database("abc").startswith("qingpu_restore_drill_")
 ```
 
-- [ ] **Step 2: 驗證測試先失敗**
+- [ ] **Step 2: 建立完整 restore flow RED**
 
-Run: `python -m pytest tests/test_backups.py tests/test_backup_repository.py -q`
-Expected: FAIL，backup service 尚不存在。
+Recording runner 必須觀察到依序執行：
 
-- [ ] **Step 3: 實作不經 shell 的 process runner 與 drill**
+1. `CREATE DATABASE` 加上 `build_restore_database(backup_id)` 的已驗證結果
+2. `mysql` 加上同一個 `drill_database` 參數匯入 dump
+3. 使用 PyMySQL 連到 drill database 執行 table／count／pointer smoke queries
+4. 在 `finally` 對同一個 `drill_database` 執行 `DROP DATABASE`
 
-`ProcessRunner` 必須使用 `subprocess.run(args: list[str], shell=False, check=True, capture_output=True)`；
-dump command 為 `mysqldump --single-transaction --routines --triggers --host ... --user ... db`，stdout
-直接寫日期化 `.sql` artifact，另建 SHA-256。Restore target 必須匹配
-`qingpu_insight_restore_[0-9]{8}_[0-9]{6}`，流程為 create database、import、執行固定 row-count／
-published-version／smoke queries、drop database；`finally` 保證嘗試清理。
+任何步驟失敗也必須嘗試安全清除；production database name 不得出現在 restore/drop target。
 
-```python
-@dataclass(frozen=True)
-class BackupRecord:
-    backup_id: str
-    created_at: datetime
-    artifact_path: str
-    sha256: str
-    size_bytes: int
-    restore_status: Literal["not_tested", "passed", "failed"]
-    restored_at: datetime | None
-```
+- [ ] **Step 3: 實作 restore drill**
 
-- [ ] **Step 4: 執行測試**
+驗證 checksum 後才能 restore。核心表至少包含 `job_runs`、`dataset_versions`、`published_datasets`、`listing_current`；保存每表 row count 與 published pointer。DROP 使用程式生成且經正規表示式 `\Aqingpu_restore_drill_[a-f0-9]{12}\Z` 驗證的 identifier，不接受外部任意字串。
 
-Run: `python -m pytest tests/test_backups.py tests/test_backup_repository.py -q`
-Expected: PASS，fake runner 證明沒有 shell string 或 command-line password。
+- [ ] **Step 4: 補失敗清理與 metadata 測試**
 
-- [ ] **Step 5: 提交**
+涵蓋 checksum mismatch、import failure、missing table、pointer query failure、DROP failure。restore status 只能是 `succeeded`、`failed`、`cleanup_failed`。
 
-```bash
+- [ ] **Step 5: 執行 GREEN、lint 與提交**
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_backups.py tests/test_backup_repository.py -q
+.\.venv\Scripts\python.exe -m ruff check src/qingpu_insight/backups.py src/qingpu_insight/backup_repository.py tests/test_backups.py tests/test_backup_repository.py
 git add src/qingpu_insight/backups.py src/qingpu_insight/backup_repository.py tests/test_backups.py tests/test_backup_repository.py
-git commit -m "feat(m4): verify MySQL backups by restore drill"
+git commit -m "feat(m43): verify backups with isolated restore"
 ```
 
-### Task 4: 維運 CLI、API 與 Dashboard
+### Task 4: 維運 CLI、唯讀 Web 摘要與 M4.3 gate
 
 **Files:**
 - Modify: `src/qingpu_insight/cli.py`
 - Modify: `src/qingpu_insight/web.py`
 - Modify: `src/qingpu_insight/templates/index.html`
 - Modify: `src/qingpu_insight/static/app.js`
-- Modify: `src/qingpu_insight/static/app.css`
-- Test: `tests/test_cli.py`
-- Test: `tests/test_web.py`
+- Modify: `README.md`
+- Modify: `tests/test_cli.py`
+- Modify: `tests/test_web.py`
+- Create: `tests/test_m43_release_gate.py`
 
 **Interfaces:**
-- Produces: `health-run`、`drift-run`、`backup-create`、`backup-restore-drill` CLI；`GET /api/ops/health`、`GET /api/ops/drift`、`GET /api/ops/backups`。
+- Consumes: Tasks 1–3 services/repositories。
+- Produces: CLI `health-run`、`backup-create`、`backup-restore-drill --backup-id ID`。
+- Produces: trusted-local GET `/api/ops/health`、GET `/api/ops/backups?limit=N`。
+- Produces: simple ops card；不產生 backup／restore HTTP route。
 
-- [ ] **Step 1: 寫入安全 API 與 CLI exit-code 測試**
+- [ ] **Step 1: 建立 CLI RED**
+
+驗證成功 JSON、固定 exit code、未知 backup、checksum mismatch、unsafe target 及 secret-bearing process failure。CLI stdout/stderr 不得包含 DB URL、password、raw SQL 或 raw stderr。
+
+- [ ] **Step 2: 建立 Web contract RED**
 
 ```python
-def test_health_endpoint_returns_latest_per_check(client) -> None:
-    response = client.get("/api/ops/health")
-    assert response.status_code == 200
-    assert response.json["overall_status"] == "warning"
-    assert {item["check_name"] for item in response.json["items"]} >= {"mysql", "listings"}
-
-
-def test_health_run_returns_two_for_critical(monkeypatch) -> None:
-    monkeypatch.setattr(cli, "run_health", lambda *_: "critical")
-    assert cli.main(["health-run"]) == 2
+assert client.get("/api/ops/health").status_code == 200
+assert client.get("/api/ops/backups?limit=101").status_code == 400
+assert client.post("/api/ops/backups").status_code == 405
+assert client.post("/api/ops/restore").status_code == 404
 ```
 
-- [ ] **Step 2: 驗證測試先失敗**
+兩個 GET 沿用 M4.2 loopback＋trusted Host 保護，repository 失敗回固定安全 `503 ops_unavailable`。
 
-Run: `python -m pytest tests/test_cli.py tests/test_web.py -q`
-Expected: FAIL，commands/routes 尚不存在。
+- [ ] **Step 3: 實作 CLI 與唯讀頁面**
 
-- [ ] **Step 3: 接上 services 與唯讀 dashboard**
+健康卡只顯示總狀態、check 摘要、最後備份與還原狀態；不加入圖表、threshold editor、通知或自動按鈕。
 
-CLI exit code 固定為 0=healthy、1=warning／操作失敗、2=critical；`backup-restore-drill` 必須要求
-`--confirm-isolated-target`。Web routes 只讀 repository，不從 request 執行 backup 或 drift；畫面顯示
-最後成功、最後嘗試、serving version、threshold 與安全 reason，不顯示 DB URL 或 artifact 絕對路徑。
+- [ ] **Step 4: 建立 M4.3 deterministic gate**
 
-- [ ] **Step 4: 執行 M4.3 gate**
+使用 fake process runner 與 stateful repository 證明：
 
-Run: `python -m pytest tests/test_health.py tests/test_drift.py tests/test_backups.py tests/test_cli.py tests/test_web.py -q`
-Expected: PASS。
+- health 聚合可區分 healthy/warning/critical；
+- dump 產生非空檔與正確 checksum；
+- restore drill 驗證核心表／pointer 並清除隔離 DB；
+- import 或 smoke query 失敗仍保留原 backup metadata 並嘗試清除；
+- Web 沒有任何 restore mutation route。
 
-Run: `python -m pytest -q && python -m ruff check . && git diff --check`
-Expected: 全部 PASS。
+- [ ] **Step 5: 執行自動驗收**
 
-- [ ] **Step 5: 提交**
-
-```bash
-git add src/qingpu_insight/cli.py src/qingpu_insight/web.py src/qingpu_insight/templates/index.html src/qingpu_insight/static/app.js src/qingpu_insight/static/app.css tests/test_cli.py tests/test_web.py
-git commit -m "feat(m4): expose local operations dashboard"
+```powershell
+$env:PYTHONPATH=(Resolve-Path 'src').Path
+.\.venv\Scripts\python.exe -m pytest tests/test_health.py tests/test_health_repository.py tests/test_backups.py tests/test_backup_repository.py tests/test_m43_release_gate.py tests/test_cli.py tests/test_web.py -q
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m ruff check .
+git diff --check
 ```
+
+- [ ] **Step 6: 執行手動真實 MySQL release gate**
+
+只使用 placeholder 環境變數文件，不提交實值：
+
+```powershell
+.\.venv\Scripts\qingpu-data.exe health-run
+$backup = .\.venv\Scripts\qingpu-data.exe backup-create | ConvertFrom-Json
+.\.venv\Scripts\qingpu-data.exe backup-restore-drill --backup-id $backup.backup_id
+```
+
+保存不含 secrets 的日期、backup ID、checksum、restore database、核心 row counts 與 cleanup 結果到 `outputs/m43-acceptance/`。
+
+- [ ] **Step 7: 提交**
+
+```powershell
+git add README.md src/qingpu_insight/cli.py src/qingpu_insight/web.py src/qingpu_insight/templates/index.html src/qingpu_insight/static/app.js tests/test_cli.py tests/test_web.py tests/test_m43_release_gate.py
+git commit -m "feat(m43): expose local health and backup status"
+```
+
+## M4.3 Lite 停止條件
+
+完成 Task 4、真實隔離還原與獨立 review 後停止。不要開始模型漂移、排程、通知或 M4.4；先由使用者驗收健康頁、備份檔及 restore evidence。
