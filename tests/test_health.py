@@ -34,9 +34,10 @@ class FakeProbes:
         return HealthItem("market_dataset", "healthy", NOW, "ok", 1, "boolean")
 
     def listing_dataset(self, listing_type: str) -> HealthItem:
+        code = f"listing_{listing_type}"
         if self._current_listing is None:
-            return HealthItem("listing_dataset", "critical", NOW, "no listing data", None, None)
-        return HealthItem(f"listing_{listing_type}", "healthy", NOW, "ok", 1, "boolean")
+            return HealthItem(code, "critical", NOW, "no listing data", None, None)
+        return HealthItem(code, "healthy", NOW, "ok", 1, "boolean")
 
     def latest_listing_job(self) -> HealthItem:
         return HealthItem("latest_listing_job", "healthy", NOW, "ok", None, None)
@@ -130,7 +131,7 @@ def test_summary_empty_items_is_healthy() -> None:
 def test_no_successful_listing_version_is_critical() -> None:
     service = HealthService(probes=FakeProbes(current_listing=None))
     result = service.run()
-    assert item(result, "listing_dataset").status == "critical"
+    assert item(result, "listing_sale").status == "critical"
 
 
 def test_service_run_returns_summary_with_all_item_codes() -> None:

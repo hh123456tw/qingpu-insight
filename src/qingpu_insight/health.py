@@ -4,9 +4,10 @@ import shutil
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
-import pymysql
+if TYPE_CHECKING:
+    import pymysql
 
 from qingpu_insight.jobs import JobService
 from qingpu_insight.publishing import MySQLVersionPublisher
