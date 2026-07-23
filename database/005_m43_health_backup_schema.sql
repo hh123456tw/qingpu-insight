@@ -17,11 +17,12 @@ CREATE TABLE IF NOT EXISTS health_items (
     PRIMARY KEY (run_id, code)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE TABLE IF NOT EXISTS backup_records (
+DROP TABLE IF EXISTS backup_records;
+CREATE TABLE backup_records (
     backup_id VARCHAR(36) NOT NULL PRIMARY KEY,
     status VARCHAR(32) NOT NULL,
     path VARCHAR(1024) NOT NULL,
-    sha256 VARCHAR(64) NOT NULL,
+    sha256 CHAR(64) NOT NULL,
     size_bytes BIGINT UNSIGNED NOT NULL,
     created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     restore_status VARCHAR(32) NULL,

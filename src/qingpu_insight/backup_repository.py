@@ -72,7 +72,7 @@ class MySQLBackupRepository:
 
     def mark_restore(
         self, backup_id: str, status: str, checked_at: datetime,
-    ) -> None:
+    ) -> bool:
         with self._connection() as conn:
             try:
                 with conn.cursor() as cursor:
@@ -82,7 +82,9 @@ class MySQLBackupRepository:
                            WHERE backup_id = %s""",
                         (status, checked_at, backup_id),
                     )
+                    found = cursor.rowcount > 0
                 conn.commit()
+                return found
             except Exception:
                 conn.rollback()
                 raise
@@ -93,6 +95,7 @@ class MySQLBackupRepository:
                 with conn.cursor(pymysql.cursors.DictCursor) as cursor:
                     cursor.execute(
                         "SELECT * FROM backup_records"
+                        " WHERE status = 'completed'"
                         " ORDER BY created_at DESC LIMIT 1",
                     )
                     row = cursor.fetchone()
