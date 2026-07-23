@@ -77,3 +77,19 @@ class BuyerReportDraft(BaseModel):
         if not 1 <= len(self.negotiation) <= 3:
             raise ValueError("negotiation must have 1 to 3 items")
         return self
+
+
+class SavedBuyerReport(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    report_id: str = Field(max_length=64)
+    request_hash: str = Field(max_length=64)
+    dataset_version: str = Field(max_length=64)
+    evidence_pack_id: str = Field(max_length=64)
+    provider: str = Field(max_length=32)
+    model: str = Field(max_length=64)
+    content: dict
+    fallback_reason: str | None = None
+    validation_codes: tuple[str, ...] = ()
+    latency_ms: float = 0
+    created_at: str = Field(max_length=32)
