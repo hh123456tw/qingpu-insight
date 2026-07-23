@@ -64,6 +64,14 @@ class AdminServices:
 
 
 @dataclass(frozen=True)
+class ReportServices:
+    """Immutable injected dependencies for buyer report generation."""
+
+    service: object  # ReportService duck type
+    repository: object  # ReportRepository duck type
+
+
+@dataclass(frozen=True)
 class OpsServices:
     """Immutable production/injected dependencies for ops endpoints."""
 
@@ -410,6 +418,9 @@ def create_app(
     job_executor: LocalJobExecutor | None = None,
     admin_services: AdminServices | None = None,
     ops_services: OpsServices | None = None,
+    report_services: ReportServices | None = None,
+    report_service: object | None = None,
+    report_repository: object | None = None,
 ) -> Flask:
     app = Flask(__name__)
     app.json.default = _json_default
@@ -718,6 +729,140 @@ def create_app(
             )
         except Exception:
             app.logger.warning("ops services composition failed")
+
+    # ------------------------------------------------------------------
+    # Report API (M4.4)
+    # ------------------------------------------------------------------
+
+    if report_services is None and report_service is not None and report_repository is not None:
+        report_services = ReportServices(service=report_service, repository=report_repository)
+
+    _REPORT_ALLOWED_FIELDS = frozenset({"candidate_ids", "budget_twd", "intended_use", "provider"})
+
+    def _parse_report_request() -> dict:
+        if request.mimetype != "application/json":
+            raise ApiInputError("Request body must be JSON.", {"body": "application_json"})
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            raise ApiInputError("Request body must be a JSON object.", {"body": "object"})
+
+        fields: dict[str, str] = {}
+
+        extra = set(payload.keys()) - _REPORT_ALLOWED_FIELDS
+        if extra:
+            for k in extra:
+                fields[k] = "not_allowed"
+
+        candidate_ids = payload.get("candidate_ids")
+        if not isinstance(candidate_ids, list) or not candidate_ids:
+            fields["candidate_ids"] = "required"
+        elif len(candidate_ids) > 5:
+            fields["candidate_ids"] = "max_5"
+        elif not all(isinstance(c, str) for c in candidate_ids):
+            fields["candidate_ids"] = "string_items"
+
+        provider = payload.get("provider")
+        if not provider:
+            fields["provider"] = "required"
+        elif provider not in ("rule", "ollama", "gemini"):
+            fields["provider"] = "unsupported"
+
+        intended_use = payload.get("intended_use")
+        if not intended_use:
+            fields["intended_use"] = "required"
+        elif intended_use not in ("self_use", "rental_reference"):
+            fields["intended_use"] = "unsupported"
+
+        budget_twd = payload.get("budget_twd")
+        if budget_twd is not None and (not isinstance(budget_twd, int) or budget_twd < 0):
+            fields["budget_twd"] = "invalid"
+
+        if fields:
+            raise ApiInputError("Request validation failed.", fields)
+
+        return {
+            "candidate_ids": tuple(candidate_ids),
+            "budget_twd": budget_twd,
+            "intended_use": intended_use,
+            "provider": provider,
+        }
+
+    @app.post("/api/reports")
+    def create_report():
+        if not _is_trusted_local_request():
+            return jsonify({"error": {"code": "forbidden", "message": "僅允許本機存取。"}}), 403
+        if report_services is None:
+            return jsonify(
+                {"error": {"code": "report_unavailable", "message": "報告功能未啟用。"}}
+            ), 503
+
+        try:
+            parsed = _parse_report_request()
+        except ApiInputError:
+            raise
+
+        from qingpu_insight.report_contracts import ReportRequest
+
+        try:
+            request = ReportRequest(**parsed)
+        except Exception as exc:
+            return jsonify(
+                {
+                    "error": {
+                        "code": "invalid_request",
+                        "message": "Request validation failed.",
+                        "fields": {"_schema": str(exc)},
+                    }
+                }
+            ), 400
+
+        try:
+            saved = report_services.service.generate(request)
+        except Exception:
+            return jsonify(
+                {"error": {"code": "report_failed", "message": "報告產生失敗。"}}
+            ), 503
+
+        return jsonify(
+            {
+                "report_id": saved.report_id,
+                "provider": saved.provider,
+                "model": saved.model,
+                "dataset_version": saved.dataset_version,
+                "evidence_pack_id": saved.evidence_pack_id,
+                "fallback_reason": saved.fallback_reason,
+                "content": saved.content,
+                "created_at": saved.created_at,
+            }
+        ), 201
+
+    @app.get("/api/reports/<report_id>")
+    def get_report(report_id: str):
+        if not _is_trusted_local_request():
+            return jsonify({"error": {"code": "forbidden", "message": "僅允許本機存取。"}}), 403
+        if report_services is None:
+            return jsonify(
+                {"error": {"code": "report_unavailable", "message": "報告功能未啟用。"}}
+            ), 503
+
+        record = report_services.repository.get(report_id)
+        if record is None:
+            return jsonify(
+                {"error": {"code": "not_found", "message": "報告不存在。"}}
+            ), 404
+
+        return jsonify(
+            {
+                "report_id": record.report_id,
+                "provider": record.provider,
+                "model": record.model,
+                "dataset_version": record.dataset_version,
+                "evidence_pack_id": record.evidence_pack_id,
+                "fallback_reason": record.fallback_reason,
+                "content": record.content,
+                "created_at": record.created_at,
+            }
+        )
 
     @app.get("/api/ops/health")
     def ops_health():

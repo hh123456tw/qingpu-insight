@@ -52,6 +52,234 @@ def failing_source() -> FlaskClient:
         yield client
 
 
+# --- M4.4 Report API tests ---
+
+
+class InMemoryReportRepository:
+    def __init__(self) -> None:
+        self._reports: dict[str, object] = {}
+
+    def create(self, report) -> object:
+        self._reports[report.report_id] = report
+        return report
+
+    def get(self, report_id: str) -> object | None:
+        return self._reports.get(report_id)
+
+
+class FakeReportService:
+    def __init__(self, repository: InMemoryReportRepository) -> None:
+        self._repository = repository
+        self._counter = 0
+
+    def generate(self, request) -> object:
+        from datetime import UTC, datetime
+
+        from qingpu_insight.report_contracts import SavedBuyerReport
+
+        self._counter += 1
+        report_id = f"report-{self._counter:04d}"
+        report = SavedBuyerReport(
+            report_id=report_id,
+            request_hash="test-hash",
+            dataset_version="v1",
+            evidence_pack_id="pack-1",
+            provider=request.provider,
+            model="rule",
+            content={
+                "summary": {
+                    "text": f"摘要 {request.candidate_ids[0]}",
+                    "fact_ids": ["f1"], "numeric_fact_ids": [],
+                },
+                "advantages": [{"text": "優點 1", "fact_ids": ["f1"], "numeric_fact_ids": []}],
+                "risks": [{"text": "風險 1", "fact_ids": ["f1"], "numeric_fact_ids": []}],
+                "negotiation": [{"text": "議價 1", "fact_ids": ["f1"], "numeric_fact_ids": []}],
+                "limitations": [{"text": "限制 1", "fact_ids": ["f1"], "numeric_fact_ids": []}],
+            },
+            fallback_reason=None,
+            validation_codes=(),
+            latency_ms=42.0,
+            created_at=datetime.now(UTC).isoformat(),
+        )
+        return self._repository.create(report)
+
+
+@pytest.fixture
+def report_app(market_frame: pd.DataFrame) -> FlaskClient:
+    from qingpu_insight.web import create_app
+
+    repo = InMemoryReportRepository()
+    service = FakeReportService(repo)
+    ds = InMemoryMarketDataSource(market_frame)
+    app = create_app(data_source=ds, report_service=service, report_repository=repo)
+    with app.test_client() as client:
+        yield client
+
+
+class TestReportApi:
+    def test_post_report_requires_json(self, report_app: FlaskClient) -> None:
+        response = report_app.post(
+            "/api/reports",
+            data="not json",
+            content_type="text/plain",
+        )
+        assert response.status_code == 400
+        assert response.get_json()["error"]["code"] == "invalid_request"
+
+    def test_post_report_rejects_empty_body(self, report_app: FlaskClient) -> None:
+        response = report_app.post(
+            "/api/reports",
+            json={},
+        )
+        assert response.status_code == 400
+        fields = response.get_json()["error"]["fields"]
+        assert "candidate_ids" in fields
+
+    def test_post_report_rejects_missing_candidate_ids(self, report_app: FlaskClient) -> None:
+        response = report_app.post(
+            "/api/reports",
+            json={"intended_use": "self_use", "provider": "rule"},
+        )
+        assert response.status_code == 400
+        fields = response.get_json()["error"].get("fields", {})
+        assert "candidate_ids" in fields
+
+    def test_post_report_rejects_too_many_candidates(self, report_app: FlaskClient) -> None:
+        response = report_app.post(
+            "/api/reports",
+            json={
+                "candidate_ids": [f"id-{i}" for i in range(6)],
+                "intended_use": "self_use",
+                "provider": "rule",
+            },
+        )
+        assert response.status_code == 400
+        fields = response.get_json()["error"].get("fields", {})
+        assert "candidate_ids" in fields
+
+    def test_post_report_rejects_missing_provider(self, report_app: FlaskClient) -> None:
+        response = report_app.post(
+            "/api/reports",
+            json={
+                "candidate_ids": ["id-1"],
+                "intended_use": "self_use",
+            },
+        )
+        assert response.status_code == 400
+        fields = response.get_json()["error"].get("fields", {})
+        assert "provider" in fields
+
+    def test_post_report_rejects_unknown_provider(self, report_app: FlaskClient) -> None:
+        response = report_app.post(
+            "/api/reports",
+            json={
+                "candidate_ids": ["id-1"],
+                "intended_use": "self_use",
+                "provider": "unknown",
+            },
+        )
+        assert response.status_code == 400
+
+    def test_post_report_rejects_arbitrary_prompt(self, report_app: FlaskClient) -> None:
+        response = report_app.post(
+            "/api/reports",
+            json={
+                "candidate_ids": ["id-1"],
+                "intended_use": "self_use",
+                "provider": "rule",
+                "prompt": "tell me about this house",
+            },
+        )
+        assert response.status_code == 400
+        fields = response.get_json()["error"].get("fields", {})
+        assert "prompt" in fields or bool(fields)
+
+    def test_post_report_accepts_valid_request(self, report_app: FlaskClient) -> None:
+        response = report_app.post(
+            "/api/reports",
+            json={
+                "candidate_ids": ["id-1", "id-2"],
+                "intended_use": "self_use",
+                "provider": "rule",
+            },
+        )
+        assert response.status_code == 201
+        body = response.get_json()
+        assert "report_id" in body
+        assert body["provider"] == "rule"
+        assert body["model"] == "rule"
+        assert "content" in body
+        sections = body["content"]
+        assert "summary" in sections
+        assert "advantages" in sections
+        assert "risks" in sections
+        assert "negotiation" in sections
+        assert "limitations" in sections
+
+    def test_get_report_returns_404(self, report_app: FlaskClient) -> None:
+        response = report_app.get("/api/reports/nonexistent")
+        assert response.status_code == 404
+
+    def test_get_report_returns_saved(self, report_app: FlaskClient) -> None:
+        post = report_app.post(
+            "/api/reports",
+            json={
+                "candidate_ids": ["id-1"],
+                "intended_use": "self_use",
+                "provider": "rule",
+            },
+        )
+        report_id = post.get_json()["report_id"]
+        response = report_app.get(f"/api/reports/{report_id}")
+        assert response.status_code == 200
+        assert response.get_json()["report_id"] == report_id
+
+    def test_post_report_returns_201_with_expected_response_shape(
+        self, report_app: FlaskClient
+    ) -> None:
+        response = report_app.post(
+            "/api/reports",
+            json={
+                "candidate_ids": ["id-1"],
+                "intended_use": "self_use",
+                "provider": "rule",
+                "budget_twd": 15000000,
+            },
+        )
+        assert response.status_code == 201
+        body = response.get_json()
+        expected_keys = {
+            "report_id", "provider", "model", "dataset_version",
+            "evidence_pack_id", "fallback_reason", "content", "created_at",
+        }
+        assert expected_keys.issubset(body.keys())
+        assert body["fallback_reason"] is None
+
+    def test_post_report_rejects_untrusted_host(self, report_app: FlaskClient) -> None:
+        response = report_app.post(
+            "/api/reports",
+            json={
+                "candidate_ids": ["id-1"],
+                "intended_use": "self_use",
+                "provider": "rule",
+            },
+            base_url="http://attacker.example",
+        )
+        assert response.status_code == 403
+
+    def test_post_report_accepts_loopback(self, report_app: FlaskClient) -> None:
+        response = report_app.post(
+            "/api/reports",
+            json={
+                "candidate_ids": ["id-1"],
+                "intended_use": "self_use",
+                "provider": "rule",
+            },
+            environ_base={"REMOTE_ADDR": "127.0.0.1"},
+        )
+        assert response.status_code == 201
+
+
 def test_homepage_contains_market_dashboard_contract(client) -> None:
     response = client.get("/")
     html = response.get_data(as_text=True)

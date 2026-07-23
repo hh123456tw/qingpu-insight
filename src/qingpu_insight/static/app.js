@@ -637,6 +637,182 @@ document.addEventListener("DOMContentLoaded", function () {
   setInterval(fetchOps, 60000);
 })();
 
+// --- Report (M4.4) ---
+
+(function () {
+  const form = document.getElementById("report-form");
+  const candidateInput = document.getElementById("report-candidate-ids");
+  const providerSelect = document.getElementById("report-provider");
+  const geminiNotice = document.getElementById("gemini-notice");
+  const intendedUseSelect = document.getElementById("report-intended-use");
+  const budgetInput = document.getElementById("report-budget");
+  const statusEl = document.getElementById("report-status");
+  const resultSection = document.getElementById("report-result");
+
+  providerSelect.addEventListener("change", function () {
+    geminiNotice.hidden = providerSelect.value !== "gemini";
+  });
+
+  function getCSRFToken() {
+    var meta = document.querySelector('meta[name="csrf-token"]');
+    return meta ? meta.getAttribute("content") : "";
+  }
+
+  function el(tag, attrs, children) {
+    var node = document.createElement(tag);
+    if (attrs) {
+      Object.keys(attrs).forEach(function (k) { node.setAttribute(k, attrs[k]); });
+    }
+    if (children) {
+      (Array.isArray(children) ? children : [children]).forEach(function (c) {
+        if (typeof c === "string") { node.appendChild(document.createTextNode(c)); }
+        else if (c) { node.appendChild(c); }
+      });
+    }
+    return node;
+  }
+
+  function renderReport(report) {
+    resultSection.replaceChildren();
+
+    if (report.fallback_reason) {
+      resultSection.appendChild(
+        el("div", { "class": "report-card fallback" }, [
+          el("p", {}, ["⚠ 使用備援模式：" + report.fallback_reason]),
+        ])
+      );
+    }
+
+    var content = report.content;
+    if (!content) return;
+
+    // Summary
+    if (content.summary) {
+      resultSection.appendChild(
+        el("div", { "class": "report-card" }, [
+          el("h3", {}, ["摘要"]),
+          el("p", {}, [content.summary.text || ""]),
+        ])
+      );
+    }
+
+    // Advantages
+    if (content.advantages && content.advantages.length) {
+      var advDiv = el("div", { "class": "report-card" }, [el("h3", {}, ["優點"])]);
+      var advList = el("ul");
+      content.advantages.forEach(function (a) {
+        advList.appendChild(el("li", {}, [a.text || ""]));
+      });
+      advDiv.appendChild(advList);
+      resultSection.appendChild(advDiv);
+    }
+
+    // Risks
+    if (content.risks && content.risks.length) {
+      var riskDiv = el("div", { "class": "report-card" }, [el("h3", {}, ["風險"])]);
+      var riskList = el("ul");
+      content.risks.forEach(function (r) {
+        riskList.appendChild(el("li", {}, [r.text || ""]));
+      });
+      riskDiv.appendChild(riskList);
+      resultSection.appendChild(riskDiv);
+    }
+
+    // Negotiation
+    if (content.negotiation && content.negotiation.length) {
+      var negoDiv = el("div", { "class": "report-card" }, [el("h3", {}, ["議價建議"])]);
+      var negoList = el("ul");
+      content.negotiation.forEach(function (n) {
+        negoList.appendChild(el("li", {}, [n.text || ""]));
+      });
+      negoDiv.appendChild(negoList);
+      resultSection.appendChild(negoDiv);
+    }
+
+    // Limitations
+    if (content.limitations && content.limitations.length) {
+      var limDiv = el("div", { "class": "report-card limitation" }, [el("h3", {}, ["限制"])]);
+      var limList = el("ul");
+      content.limitations.forEach(function (l) {
+        limList.appendChild(el("li", {}, [l.text || ""]));
+      });
+      limDiv.appendChild(limList);
+      resultSection.appendChild(limDiv);
+    }
+
+    // Metadata
+    resultSection.appendChild(
+      el("div", { "class": "report-card disclosure" }, [
+        el("p", {}, ["Provider: " + report.provider + " | Model: " + report.model]),
+        el("p", {}, ["資料版本: " + report.dataset_version]),
+        report.evidence_pack_id ? el("p", {}, ["證據包: " + report.evidence_pack_id]) : null,
+      ].filter(Boolean))
+    );
+
+    resultSection.hidden = false;
+  }
+
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    statusEl.textContent = "產生報告中…";
+    resultSection.hidden = true;
+
+    var raw = candidateInput.value.trim();
+    if (!raw) {
+      statusEl.textContent = "請輸入至少一個候選物件 ID";
+      return;
+    }
+    var candidateIds = raw.split(",").map(function (s) { return s.trim(); }).filter(Boolean);
+    if (candidateIds.length === 0) {
+      statusEl.textContent = "請輸入至少一個候選物件 ID";
+      return;
+    }
+    if (candidateIds.length > 5) {
+      statusEl.textContent = "最多 5 個候選物件";
+      return;
+    }
+
+    var payload = {
+      candidate_ids: candidateIds,
+      intended_use: intendedUseSelect.value,
+      provider: providerSelect.value,
+    };
+    var budgetVal = budgetInput.value;
+    if (budgetVal) payload.budget_twd = parseInt(budgetVal);
+
+    fetch("/api/reports", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Qingpu-CSRF": getCSRFToken(),
+      },
+      body: JSON.stringify(payload),
+    })
+      .then(function (r) {
+        if (!r.ok) {
+          return r.json().then(function (err) {
+            throw new Error(
+              (err.error && err.error.fields
+                ? Object.keys(err.error.fields).join("、") + " 欄位錯誤"
+                : err.error && err.error.message
+                ? err.error.message
+                : "報告產生失敗")
+            );
+          });
+        }
+        return r.json();
+      })
+      .then(function (report) {
+        statusEl.textContent = "";
+        renderReport(report);
+      })
+      .catch(function (err) {
+        statusEl.textContent = err.message;
+        resultSection.hidden = true;
+      });
+  });
+})();
+
 // --- Job Center (M4.2) ---
 
 (function () {

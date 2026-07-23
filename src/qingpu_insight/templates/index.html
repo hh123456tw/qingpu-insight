@@ -136,6 +136,34 @@
       <article><span>最近備份</span><strong id="ops-latest-backup">—</strong></article>
     </div>
   </section>
+  <section class="report-panel" aria-labelledby="report-title">
+    <h2 id="report-title">智慧購屋報告</h2>
+    <form id="report-form">
+      <label>候選物件 ID
+        <input id="report-candidate-ids" type="text" placeholder="請輸入物件 ID（多個請以逗號分隔）" required>
+      </label>
+      <label>Provider
+        <select id="report-provider" required>
+          <option value="rule">Rule（離線規則）</option>
+          <option value="ollama">Ollama（本機 LLM）</option>
+          <option value="gemini">Gemini（Google AI）</option>
+        </select>
+        <span id="gemini-notice" class="external-notice" hidden>⚠ Gemini 會將資料傳送至外部伺服器</span>
+      </label>
+      <label>用途
+        <select id="report-intended-use" required>
+          <option value="self_use">自住參考</option>
+          <option value="rental_reference">出租評估</option>
+        </select>
+      </label>
+      <label>預算（選填）
+        <input id="report-budget" type="number" min="0" step="10000" placeholder="例如 15000000">
+      </label>
+      <button type="submit">產生報告</button>
+    </form>
+    <div id="report-status" role="status" aria-live="polite"></div>
+    <section id="report-result" hidden></section>
+  </section>
   <aside class="method-note">成交來自官方實價登錄；座標為門牌比對結果。僅供市場研究，不構成估價、投資或購屋建議。</aside>
 
   <section class="valuation-panel" aria-labelledby="valuation-title">

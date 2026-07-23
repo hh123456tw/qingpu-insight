@@ -87,6 +87,8 @@ from qingpu_insight.model_training import (
 from qingpu_insight.moi import read_moi_csv
 from qingpu_insight.mysql_loader import load_market_rows
 from qingpu_insight.publishing import MySQLVersionPublisher
+from qingpu_insight.report_contracts import ReportRequest
+from qingpu_insight.report_service import ReportService
 from qingpu_insight.reporting import write_report
 from qingpu_insight.valuation import ModelRegistry, ValuationBundle, train_artifact
 from qingpu_insight.valuation_reporting import write_evaluation, write_model_card
@@ -1449,6 +1451,232 @@ def _safe_job_payload(run) -> dict[str, object]:
     }
 
 
+def _create_report_service(root: Path) -> ReportService:
+    from qingpu_insight.evidence import EvidenceBuilder
+    from qingpu_insight.report_providers import RuleReportProvider
+    from qingpu_insight.report_repository import MySQLReportRepository
+    from qingpu_insight.report_validation import validate_report
+
+    # Use SQL-based evidence repository when available
+    database_url = os.environ.get("QINGPU_DATABASE_URL")
+    if database_url:
+        factory = create_mysql_connection_factory()
+        from qingpu_insight.evidence import EvidenceRepository
+
+        class MySQLEvidenceRepository:
+            def current_dataset_version(self) -> str:
+                conn = factory()
+                try:
+                    with conn.cursor() as cursor:
+                        cursor.execute(
+                            "SELECT version FROM published_versions "
+                            "WHERE dataset_key = 'market' "
+                            "ORDER BY published_at DESC LIMIT 1"
+                        )
+                        row = cursor.fetchone()
+                    conn.commit()
+                    return str(row[0]) if row else "unknown"
+                finally:
+                    conn.close()
+
+            def load_candidates(self, candidate_ids):
+                import pandas as pd
+                conn = factory()
+                try:
+                    query = "SELECT * FROM listing_current WHERE source_listing_id IN ({})".format(
+                        ",".join("%s" for _ in candidate_ids)
+                    )
+                    df = pd.read_sql(query, conn, params=list(candidate_ids))
+                    return df
+                finally:
+                    conn.close()
+
+            def load_market_evidence(self, candidate_ids):
+                import pandas as pd
+                conn = factory()
+                try:
+                    query = "SELECT * FROM market_transactions WHERE listing_id IN ({})".format(
+                        ",".join("%s" for _ in candidate_ids)
+                    )
+                    df = pd.read_sql(query, conn, params=list(candidate_ids))
+                    return df
+                finally:
+                    conn.close()
+
+        evidence_repo: EvidenceRepository = MySQLEvidenceRepository()
+    else:
+        evidence_repo = _create_fallback_evidence_repository(root)
+
+    evidence_builder = EvidenceBuilder(evidence_repo)
+    if database_url:
+        repository = MySQLReportRepository(create_mysql_connection_factory())
+    else:
+        repository = _create_fallback_report_repository(root)
+    return ReportService(
+        evidence_builder=evidence_builder,
+        providers={},
+        rule_provider=RuleReportProvider(),
+        validator=validate_report,
+        repository=repository,
+    )
+
+
+def _create_fallback_evidence_repository(root: Path):
+    import json
+
+    processed = root / "data" / "processed"
+
+    class ParquetEvidenceRepository:
+        def current_dataset_version(self) -> str:
+            return "local"
+
+        def load_candidates(self, candidate_ids):
+            import pandas as pd
+            try:
+                df = pd.read_parquet(processed / "listing_snapshots.parquet")
+                filtered = df[df["source_listing_id"].isin(candidate_ids)].copy()
+                if not filtered.empty:
+                    filtered["listing_id"] = filtered["source_listing_id"]
+                    filtered["price"] = filtered.get("asking_price_twd", None)
+                    filtered["price_per_ping"] = filtered.get(
+                        "asking_unit_price_low_twd_per_ping", None
+                    )
+                    filtered["building_age_years"] = filtered.get("building_age_years", None)
+                    filtered["station_code"] = filtered.get("station_code", None)
+                    filtered["station_distance_m"] = filtered.get("station_distance_m", None)
+                    filtered["valuation_low"] = None
+                    filtered["valuation_high"] = None
+                    model_ev = filtered.get("model_evidence")
+                    if model_ev is not None:
+                        for idx in filtered.index:
+                            val = model_ev[idx]
+                            if isinstance(val, str) and val:
+                                try:
+                                    ev = json.loads(val)
+                                    filtered.at[idx, "valuation_low"] = (
+                                        ev.get("low") or ev.get("min")
+                                    )
+                                    filtered.at[idx, "valuation_high"] = (
+                                        ev.get("high") or ev.get("max")
+                                    )
+                                except (json.JSONDecodeError, TypeError, ValueError):
+                                    pass
+                filtered["listing_type"] = filtered.get("listing_type", "sale")
+                filtered["snapshot_at"] = filtered.get("snapshot_at", "")
+                return filtered
+            except (FileNotFoundError, ValueError):
+                return pd.DataFrame()
+
+        def load_market_evidence(self, candidate_ids):
+            import pandas as pd
+            try:
+                df = pd.read_parquet(processed / "market_transactions.parquet")
+                if "listing_id" in df.columns:
+                    return df[df["listing_id"].isin(candidate_ids)].copy()
+                return pd.DataFrame()
+            except (FileNotFoundError, ValueError):
+                return pd.DataFrame()
+
+    return ParquetEvidenceRepository()
+
+
+def _create_fallback_report_repository(root: Path):
+    import json
+
+    from qingpu_insight.report_contracts import SavedBuyerReport
+
+    reports_dir = root / "outputs" / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    reports_file = reports_dir / "buyer_reports.json"
+
+    class FileReportRepository:
+        def __init__(self):
+            self._reports: dict[str, SavedBuyerReport] = {}
+            if reports_file.exists():
+                try:
+                    data = json.loads(reports_file.read_text(encoding="utf-8"))
+                    for rid, rdata in data.items():
+                        self._reports[rid] = SavedBuyerReport(**rdata)
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    pass
+
+        def _save(self):
+            data = {rid: r.model_dump(mode="json") for rid, r in self._reports.items()}
+            reports_file.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+
+        def create(self, report):
+            self._reports[report.report_id] = report
+            self._save()
+            return report
+
+        def get(self, report_id):
+            return self._reports.get(report_id)
+
+    return FileReportRepository()
+
+
+def report_generate(root: Path, args) -> int:
+    try:
+        service = _create_report_service(root)
+    except Exception as exc:
+        print(
+            json.dumps(
+                {"status": "failed", "error_code": "service_unavailable", "message": str(exc)},
+                ensure_ascii=False,
+            )
+        )
+        return 1
+
+    try:
+        request = ReportRequest(
+            candidate_ids=tuple(args.candidate),
+            budget_twd=args.budget,
+            intended_use=args.intended_use,
+            provider=args.provider,
+        )
+    except Exception as exc:
+        print(
+            json.dumps(
+                {"status": "failed", "error_code": "invalid_request", "message": str(exc)},
+                ensure_ascii=False,
+            )
+        )
+        return 1
+
+    try:
+        saved = service.generate(request)
+        print(
+            json.dumps(
+                {
+                    "report_id": saved.report_id,
+                    "provider": saved.provider,
+                    "model": saved.model,
+                    "dataset_version": saved.dataset_version,
+                    "evidence_pack_id": saved.evidence_pack_id,
+                    "fallback_reason": saved.fallback_reason,
+                    "content": saved.content,
+                    "created_at": saved.created_at,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    except Exception as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "failed",
+                    "error_code": str(exc) if hasattr(exc, "code") else "generation_failed",
+                    "message": str(exc),
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 1
+
+
 def job_status(root: Path, args) -> int:
     try:
         service = _create_listing_update_service(root)
@@ -1586,6 +1814,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     restore_parser.add_argument("--backup-id", required=True)
 
+    report_parser = subparsers.add_parser(
+        "report-generate",
+        help="generate a verified buyer report from published evidence",
+    )
+    report_parser.add_argument(
+        "--candidate", action="append", required=True,
+        help="candidate listing ID (may be specified multiple times)",
+    )
+    report_parser.add_argument(
+        "--provider", choices=("rule", "ollama", "gemini"), default="rule",
+        help="report provider (default: rule)",
+    )
+    report_parser.add_argument(
+        "--budget", type=int, default=None,
+        help="buyer budget in TWD",
+    )
+    report_parser.add_argument(
+        "--intended-use", choices=("self_use", "rental_reference"), required=True,
+        help="intended use of the report",
+    )
+
     return parser
 
 
@@ -1625,6 +1874,8 @@ def main(argv: list[str] | None = None) -> int:
         return backup_create(root)
     if args.command == "backup-restore-drill":
         return backup_restore_drill(root, args.backup_id)
+    if args.command == "report-generate":
+        return report_generate(root, args)
     return 0
 
 

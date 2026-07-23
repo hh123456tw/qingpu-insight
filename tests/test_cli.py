@@ -1724,6 +1724,107 @@ def test_backup_restore_drill_unsafe_target(tmp_path: Path, monkeypatch, capsys)
     assert output["error_code"] == "unsafe_target"
 
 
+# --- M4.4 Report CLI tests ---
+
+
+def test_report_generate_parser_requires_candidate() -> None:
+    parser = cli.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["report-generate"])
+
+
+def test_report_generate_parser_requires_intended_use() -> None:
+    parser = cli.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["report-generate", "--candidate", "id-1", "--provider", "rule"])
+
+
+def test_report_generate_parser_accepts_valid_args() -> None:
+    args = cli.build_parser().parse_args(
+        [
+            "report-generate",
+            "--candidate", "id-1", "--candidate", "id-2",
+            "--provider", "rule",
+            "--intended-use", "self_use",
+        ]
+    )
+    assert args.candidate == ["id-1", "id-2"]
+    assert args.provider == "rule"
+    assert args.intended_use == "self_use"
+
+
+def test_report_generate_parser_accepts_budget() -> None:
+    args = cli.build_parser().parse_args(
+        [
+            "report-generate",
+            "--candidate", "id-1",
+            "--provider", "rule",
+            "--intended-use", "self_use",
+            "--budget", "15000000",
+        ]
+    )
+    assert args.budget == 15000000
+
+
+def test_report_generate_without_service_fails_gracefully(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    exit_code = cli.main(
+        [
+            "report-generate", "--candidate", "id-1",
+            "--provider", "rule", "--intended-use", "self_use",
+        ]
+    )
+    assert exit_code == 1
+    raw = capsys.readouterr().out
+    payload = json.loads(raw)
+    assert payload["status"] == "failed"
+    assert payload["error_code"]
+
+
+def test_report_generate_success(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    class FakeService:
+        def generate(self, request):
+            from qingpu_insight.report_contracts import SavedBuyerReport
+            return SavedBuyerReport(
+                report_id="test-report-id",
+                request_hash="hash123",
+                dataset_version="v1",
+                evidence_pack_id="pack-1",
+                provider=request.provider,
+                model="rule",
+                content={
+                    "summary": {"text": "test", "fact_ids": ["f1"], "numeric_fact_ids": []},
+                    "advantages": [{"text": "adv", "fact_ids": ["f1"], "numeric_fact_ids": []}],
+                    "risks": [{"text": "risk", "fact_ids": ["f1"], "numeric_fact_ids": []}],
+                    "negotiation": [{"text": "nego", "fact_ids": ["f1"], "numeric_fact_ids": []}],
+                    "limitations": [{"text": "lim", "fact_ids": ["f1"], "numeric_fact_ids": []}],
+                },
+                fallback_reason=None,
+                validation_codes=(),
+                latency_ms=42.0,
+                created_at="2026-07-23T00:00:00Z",
+            )
+
+    monkeypatch.setattr(cli, "_create_report_service", lambda root: FakeService())
+    exit_code = cli.main(
+        [
+            "report-generate", "--candidate", "id-1",
+            "--provider", "rule", "--intended-use", "self_use",
+        ]
+    )
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["report_id"] == "test-report-id"
+    assert output["provider"] == "rule"
+
+
+# --- Listing Repository tests ---
+
+
 def test_listing_repository_factory_uses_mysql_url(tmp_path, monkeypatch):
     sentinel = object()
     captured = {}
