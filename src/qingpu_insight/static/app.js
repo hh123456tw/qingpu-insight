@@ -588,6 +588,55 @@ document.addEventListener("DOMContentLoaded", function () {
   controls.addEventListener("change", fetchListingData);
 })();
 
+// --- Ops (M4.3) ---
+
+(function () {
+  const statusEl = document.getElementById("ops-status");
+  const checkedAtEl = document.getElementById("ops-checked-at");
+  const itemsCountEl = document.getElementById("ops-items-count");
+  const latestBackupEl = document.getElementById("ops-latest-backup");
+
+  function fetchOps() {
+    fetch("/api/ops/health")
+      .then(function (r) {
+        if (!r.ok) throw new Error("health " + r.status);
+        return r.json();
+      })
+      .then(function (data) {
+        statusEl.textContent = data.status;
+        checkedAtEl.textContent = data.checked_at
+          ? data.checked_at.slice(0, 19).replace("T", " ")
+          : "—";
+        itemsCountEl.textContent =
+          data.items && data.items.length != null ? data.items.length : "—";
+      })
+      .catch(function () {
+        statusEl.textContent = "無法取得";
+      });
+
+    fetch("/api/ops/backups?limit=1")
+      .then(function (r) {
+        if (!r.ok) return null;
+        return r.json();
+      })
+      .then(function (data) {
+        if (data && data.items && data.items.length > 0) {
+          var b = data.items[0];
+          latestBackupEl.textContent =
+            b.status + "（" + b.created_at.slice(0, 10) + "）";
+        } else {
+          latestBackupEl.textContent = "無";
+        }
+      })
+      .catch(function () {
+        latestBackupEl.textContent = "—";
+      });
+  }
+
+  fetchOps();
+  setInterval(fetchOps, 60000);
+})();
+
 // --- Job Center (M4.2) ---
 
 (function () {

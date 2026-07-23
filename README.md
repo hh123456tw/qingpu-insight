@@ -321,7 +321,49 @@ code/message；不包含 DB URL、SQL、traceback、HTML、電話或內部 repos
 - executor 由 app/main process 擁有；正常離開會走 idempotent shutdown 並等待 worker，測試也必須明確 shutdown，
   不遺留 thread。
 
-### M4.2 acceptance
+## M4.3 維運 CLI 與唯讀 Web 摘要
+
+### CLI 命令
+
+```powershell
+# 執行本機健康檢查（MySQL 連線、資料集、備份等）
+.\.venv\Scripts\qingpu-data.exe health-run
+
+# 建立 MySQL dump 備份
+.\.venv\Scripts\qingpu-data.exe backup-create
+
+# 在隔離資料庫驗證備份
+.\.venv\Scripts\qingpu-data.exe backup-restore-drill --backup-id <uuid>
+```
+
+### 環境變數
+
+| 變數 | 用途 | 預設值 |
+|------|------|--------|
+| `QINGPU_DATABASE_URL` | MySQL 連線字串（mysql+pymysql://user:pass@host:port/db） | —（必要） |
+
+`backup-create` 產出 `.sql` 檔案至 `outputs/backups/`，僅透過 child process 環境傳遞密碼。
+
+### Web 維運端點
+
+| 路由 | 方法 | 說明 |
+|------|------|------|
+| `/api/ops/health` | GET | 執行健康檢查（限本機） |
+| `/api/ops/backups?limit=N` | GET | 列出最近備份記錄（限本機） |
+
+兩個 GET 端點沿用 M4.2 的 loopback + trusted Host 保護。無任何 backup／restore HTTP mutation route。
+
+### M4.3 acceptance
+
+```powershell
+$env:PYTHONPATH = (Resolve-Path "src").Path
+.\.venv\Scripts\python.exe -m pytest tests/test_health.py tests/test_health_repository.py tests/test_backups.py tests/test_backup_repository.py tests/test_m43_release_gate.py tests/test_cli.py tests/test_web.py -q
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m ruff check .
+git diff --check
+```
+
+## M4.2 acceptance
 
 Deterministic release gate 不連真實 591、Selenium 或 MySQL，仍會用真實 Task-1/2/3 services、executor 與
 transactional state fakes 驗證 v1 → v2、active dedupe、事件重試去重，以及 preparation/artifact/stage/runtime/

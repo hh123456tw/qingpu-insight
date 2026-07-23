@@ -1563,6 +1563,167 @@ class TestListingBuild:
         assert "rejection_reasons=missing_price:1" in capsys.readouterr().out
 
 
+# --- M4.3 ops CLI tests ---
+
+
+class FakeHealthProbes:
+    def __init__(self) -> None:
+        self._now = datetime.now(UTC)
+
+    def mysql(self):
+        from qingpu_insight.health import HealthItem
+        return HealthItem("mysql", "healthy", self._now, "ok", 1, "boolean")
+
+    def market_dataset(self):
+        from qingpu_insight.health import HealthItem
+        return HealthItem("market_dataset", "healthy", self._now, "ok", 1, "boolean")
+
+    def listing_dataset(self, listing_type: str):
+        from qingpu_insight.health import HealthItem
+        return HealthItem(f"listing_{listing_type}", "healthy", self._now, "ok", 1, "count")
+
+    def latest_listing_job(self):
+        from qingpu_insight.health import HealthItem
+        return HealthItem("latest_listing_job", "healthy", self._now, "ok", None, None)
+
+    def latest_backup(self):
+        from qingpu_insight.health import HealthItem
+        return HealthItem("latest_backup", "healthy", self._now, "backup exists", None, None)
+
+    def disk_free(self):
+        from qingpu_insight.health import HealthItem
+        return HealthItem("disk_free", "healthy", self._now, "ok", 100 * 1024 ** 3, "bytes")
+
+
+def test_health_run_success(tmp_path: Path, monkeypatch, capsys) -> None:
+
+    now = datetime.now(UTC)
+    monkeypatch.setattr(
+        cli, "_create_health_service", lambda root: FakeHealthService(now)
+    )
+    exit_code = main(["health-run"])
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["status"] == "healthy"
+    assert "checked_at" in output
+    assert output["items_count"] == 2
+
+
+class FakeHealthService:
+    def __init__(self, now: datetime) -> None:
+        self._now = now
+        from qingpu_insight.health import HealthItem
+        self._items = (
+            HealthItem("mysql", "healthy", now, "ok", 1, "boolean"),
+            HealthItem("market_dataset", "healthy", now, "ok", 1, "boolean"),
+        )
+
+    def run(self):
+        from qingpu_insight.health import HealthSummary
+        return HealthSummary("healthy", self._now, self._items)
+
+
+def test_health_run_service_failure_redacts_secrets(tmp_path: Path, monkeypatch, capsys) -> None:
+    def failing(_root):
+        raise RuntimeError("mysql://admin:password@localhost/db SELECT * FROM secrets")
+    monkeypatch.setattr(cli, "_create_health_service", failing)
+    exit_code = main(["health-run"])
+    assert exit_code == 1
+    raw = capsys.readouterr().out + capsys.readouterr().err
+    assert "password" not in raw
+    assert "SELECT" not in raw
+
+
+def test_backup_create_success(tmp_path: Path, monkeypatch, capsys) -> None:
+    from qingpu_insight.backups import BackupRecord
+
+    now = datetime.now(UTC)
+
+    class FakeService:
+        def create(self) -> BackupRecord:
+            return BackupRecord(
+                backup_id="test-backup-id",
+                status="completed",
+                path="test-backup-id.sql",
+                sha256="abc123",
+                size_bytes=1000,
+                created_at=now,
+            )
+    monkeypatch.setattr(cli, "_create_backup_service", lambda root: FakeService())
+    exit_code = main(["backup-create"])
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["backup_id"] == "test-backup-id"
+    assert output["status"] == "completed"
+
+
+def test_backup_create_service_failure_redacts_secrets(tmp_path: Path, monkeypatch, capsys) -> None:
+    def failing(_root):
+        raise RuntimeError("mysql://admin:password@localhost/db secret_token=abc")
+    monkeypatch.setattr(cli, "_create_backup_service", failing)
+    exit_code = main(["backup-create"])
+    assert exit_code == 1
+    raw = capsys.readouterr().out + capsys.readouterr().err
+    assert "password" not in raw
+
+
+def test_backup_restore_drill_success(tmp_path: Path, monkeypatch, capsys) -> None:
+    from qingpu_insight.backups import RestoreEvidence
+
+    now = datetime.now(UTC)
+
+    class FakeService:
+        def restore_drill(self, backup_id: str) -> RestoreEvidence:
+            return RestoreEvidence(
+                database_name="qingpu_restore_drill_abc123def456",
+                table_names=["job_runs", "listing_current"],
+                row_counts=[5, 10],
+                published_versions={"listings": "v2"},
+                checked_at=now,
+            )
+    monkeypatch.setattr(cli, "_create_backup_service", lambda root: FakeService())
+    exit_code = main(["backup-restore-drill", "--backup-id", "test-id"])
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["backup_id"] == "test-id"
+    assert output["table_names"] == ["job_runs", "listing_current"]
+
+
+def test_backup_restore_drill_unknown_backup(tmp_path: Path, monkeypatch, capsys) -> None:
+    class FakeService:
+        def restore_drill(self, backup_id: str) -> None:
+            raise ValueError("Backup unknown-id not found")
+    monkeypatch.setattr(cli, "_create_backup_service", lambda root: FakeService())
+    exit_code = main(["backup-restore-drill", "--backup-id", "unknown-id"])
+    assert exit_code == 1
+    output = json.loads(capsys.readouterr().out)
+    assert output["error_code"] == "restore_failed"
+
+
+def test_backup_restore_drill_checksum_mismatch(tmp_path: Path, monkeypatch, capsys) -> None:
+    class FakeService:
+        def restore_drill(self, backup_id: str) -> None:
+            raise ValueError("Checksum mismatch")
+    monkeypatch.setattr(cli, "_create_backup_service", lambda root: FakeService())
+    exit_code = main(["backup-restore-drill", "--backup-id", "test-id"])
+    assert exit_code == 1
+    output = json.loads(capsys.readouterr().out)
+    assert "Checksum" in output["message"]
+
+
+def test_backup_restore_drill_unsafe_target(tmp_path: Path, monkeypatch, capsys) -> None:
+    from qingpu_insight.backups import UnsafeRestoreTarget
+
+    class FakeService:
+        def restore_drill(self, backup_id: str) -> None:
+            raise UnsafeRestoreTarget("Unsafe database name")
+    monkeypatch.setattr(cli, "_create_backup_service", lambda root: FakeService())
+    exit_code = main(["backup-restore-drill", "--backup-id", "test-id"])
+    assert exit_code == 1
+    output = json.loads(capsys.readouterr().out)
+    assert output["error_code"] == "unsafe_target"
+
+
 def test_listing_repository_factory_uses_mysql_url(tmp_path, monkeypatch):
     sentinel = object()
     captured = {}

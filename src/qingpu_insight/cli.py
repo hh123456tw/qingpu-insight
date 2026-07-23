@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from math import isfinite
 from numbers import Real
 from pathlib import Path
+from types import SimpleNamespace
 
 import joblib
 import pandas as pd
@@ -18,6 +19,12 @@ import pymysql
 
 from qingpu_insight.addresses import build_doorplate_frame, match_addresses
 from qingpu_insight.archives import extract_taoyuan_tables
+from qingpu_insight.backup_repository import MySQLBackupRepository
+from qingpu_insight.backups import (
+    BackupService,
+    RealRunner,
+    UnsafeRestoreTarget,
+)
 from qingpu_insight.config import get_settings
 from qingpu_insight.downloads import (
     download_current_table,
@@ -27,6 +34,8 @@ from qingpu_insight.downloads import (
 )
 from qingpu_insight.feasibility import evaluate_feasibility
 from qingpu_insight.geo import assign_life_circle, station_points
+from qingpu_insight.health import HealthService, ProductionHealthProbes
+from qingpu_insight.health_repository import MySQLHealthRepository
 from qingpu_insight.job_repository import MySQLJobRepository
 from qingpu_insight.jobs import JobService
 from qingpu_insight.listing_591 import (
@@ -1181,6 +1190,179 @@ def _create_listing_update_service(
     )
 
 
+# --- M4.3 ops helpers ---
+
+
+def _backup_dir(root: Path) -> Path:
+    p = root / "outputs" / "backups"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _parse_mysql_url_to_config() -> SimpleNamespace:
+    url = os.environ.get("QINGPU_DATABASE_URL")
+    if not url:
+        raise RuntimeError("QINGPU_DATABASE_URL is required")
+    parsed = urllib.parse.urlparse(url)
+    return SimpleNamespace(
+        mysql_host=parsed.hostname or "localhost",
+        mysql_port=parsed.port or 3306,
+        mysql_user=urllib.parse.unquote(parsed.username or ""),
+        mysql_password=urllib.parse.unquote(parsed.password or ""),
+        mysql_database=parsed.path.lstrip("/"),
+    )
+
+
+def _create_backup_service(root: Path) -> BackupService:
+    config = _parse_mysql_url_to_config()
+    runner = RealRunner()
+    factory = create_mysql_connection_factory()
+    repository = MySQLBackupRepository(factory)
+    return BackupService(config, runner, repository, _backup_dir(root))
+
+
+def _create_health_service(root: Path) -> HealthService:
+    factory = create_mysql_connection_factory()
+    job_repo = MySQLJobRepository(factory)
+    job_service = JobService(job_repo)
+    publisher = MySQLVersionPublisher(factory, dataset_key="market")
+    probes = ProductionHealthProbes(factory, job_service, publisher)
+    return HealthService(probes)
+
+
+def _backup_record_json(record) -> dict[str, object]:
+    return {
+        "backup_id": record.backup_id,
+        "status": record.status,
+        "sha256": record.sha256,
+        "size_bytes": record.size_bytes,
+        "created_at": record.created_at.isoformat(),
+        "path": record.path,
+        "restore_status": record.restore_status,
+        "restore_checked_at": (
+            record.restore_checked_at.isoformat() if record.restore_checked_at else None
+        ),
+    }
+
+
+def health_run(root: Path) -> int:
+    try:
+        service = _create_health_service(root)
+    except Exception:
+        print(
+            json.dumps(
+                {"status": "failed", "error_code": "service_unavailable"},
+                ensure_ascii=False,
+            )
+        )
+        return 1
+    try:
+        summary = service.run()
+        try:
+            factory = create_mysql_connection_factory()
+            repo = MySQLHealthRepository(factory)
+            repo.save(summary)
+        except Exception:
+            pass
+        print(
+            json.dumps(
+                {
+                    "status": summary.status,
+                    "checked_at": summary.checked_at.isoformat(),
+                    "items_count": len(summary.items),
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    except Exception:
+        print(
+            json.dumps(
+                {"status": "failed", "error_code": "check_failed"},
+                ensure_ascii=False,
+            )
+        )
+        return 1
+
+
+def backup_create(root: Path) -> int:
+    try:
+        service = _create_backup_service(root)
+    except Exception:
+        print(
+            json.dumps(
+                {"status": "failed", "error_code": "service_unavailable"},
+                ensure_ascii=False,
+            )
+        )
+        return 1
+    try:
+        record = service.create()
+        print(json.dumps(_backup_record_json(record), ensure_ascii=False))
+        return 0 if record.status == "completed" else 1
+    except Exception:
+        print(
+            json.dumps(
+                {"status": "failed", "error_code": "backup_failed"},
+                ensure_ascii=False,
+            )
+        )
+        return 1
+
+
+def backup_restore_drill(root: Path, backup_id: str) -> int:
+    try:
+        service = _create_backup_service(root)
+    except Exception:
+        print(
+            json.dumps(
+                {"status": "failed", "error_code": "service_unavailable"},
+                ensure_ascii=False,
+            )
+        )
+        return 1
+    try:
+        evidence = service.restore_drill(backup_id)
+        print(
+            json.dumps(
+                {
+                    "backup_id": backup_id,
+                    "database_name": evidence.database_name,
+                    "table_names": evidence.table_names,
+                    "row_counts": evidence.row_counts,
+                    "published_versions": evidence.published_versions,
+                    "checked_at": evidence.checked_at.isoformat(),
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    except UnsafeRestoreTarget as e:
+        print(
+            json.dumps(
+                {"status": "failed", "error_code": "unsafe_target", "message": str(e)},
+                ensure_ascii=False,
+            )
+        )
+        return 1
+    except ValueError as e:
+        print(
+            json.dumps(
+                {"status": "failed", "error_code": "restore_failed", "message": str(e)},
+                ensure_ascii=False,
+            )
+        )
+        return 1
+    except Exception:
+        print(
+            json.dumps(
+                {"status": "failed", "error_code": "restore_failed"},
+                ensure_ascii=False,
+            )
+        )
+        return 1
+
+
 class _ForegroundJobExecutor:
     """Synchronous CLI executor that owns the pending-to-running transition."""
 
@@ -1388,6 +1570,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     job_status_parser.add_argument("--run-id", required=True)
 
+    _health_parser = subparsers.add_parser(
+        "health-run",
+        help="run local health check and print summary",
+    )
+
+    _backup_create_parser = subparsers.add_parser(
+        "backup-create",
+        help="create a MySQL dump backup",
+    )
+
+    restore_parser = subparsers.add_parser(
+        "backup-restore-drill",
+        help="restore a backup to an isolated database for verification",
+    )
+    restore_parser.add_argument("--backup-id", required=True)
+
     return parser
 
 
@@ -1421,6 +1619,12 @@ def main(argv: list[str] | None = None) -> int:
         return listing_update(root, args)
     if args.command == "job-status":
         return job_status(root, args)
+    if args.command == "health-run":
+        return health_run(root)
+    if args.command == "backup-create":
+        return backup_create(root)
+    if args.command == "backup-restore-drill":
+        return backup_restore_drill(root, args.backup_id)
     return 0
 
 

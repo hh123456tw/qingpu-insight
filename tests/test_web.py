@@ -1232,6 +1232,218 @@ def test_production_admin_accepts_generated_secret_formats() -> None:
     assert all(web._strong_admin_secret(value) for value in generated)
 
 
+# --- M4.3 Ops API tests ---
+
+
+class FakeOpsProbes:
+    def __init__(self) -> None:
+        self._now = datetime.now(UTC)
+
+    def mysql(self):
+        from qingpu_insight.health import HealthItem
+        return HealthItem("mysql", "healthy", self._now, "ok", 1, "boolean")
+
+    def market_dataset(self):
+        from qingpu_insight.health import HealthItem
+        return HealthItem("market_dataset", "healthy", self._now, "ok", 1, "boolean")
+
+    def listing_dataset(self, listing_type: str):
+        from qingpu_insight.health import HealthItem
+        return HealthItem(f"listing_{listing_type}", "healthy", self._now, "ok", 1, "count")
+
+    def latest_listing_job(self):
+        from qingpu_insight.health import HealthItem
+        return HealthItem("latest_listing_job", "healthy", self._now, "ok", None, None)
+
+    def latest_backup(self):
+        from qingpu_insight.health import HealthItem
+        return HealthItem("latest_backup", "healthy", self._now, "backup exists", None, None)
+
+    def disk_free(self):
+        from qingpu_insight.health import HealthItem
+        return HealthItem("disk_free", "healthy", self._now, "ok", 100 * 1024 ** 3, "bytes")
+
+
+@pytest.fixture
+def ops_app(market_frame: pd.DataFrame):
+    from qingpu_insight.health import HealthService
+    from qingpu_insight.web import OpsServices, create_app
+
+    now = datetime.now(UTC)
+    probes = FakeOpsProbes()
+    health_service = HealthService(probes)
+
+    class FakeHealthRepo:
+        def save(self, summary):
+            self.saved = summary
+
+    from qingpu_insight.backups import BackupRecord
+
+    class FakeBackupRepo:
+        def list_recent(self, limit):
+            return [
+                BackupRecord(
+                    backup_id="backup-1",
+                    status="completed",
+                    path="backup-1.sql",
+                    sha256="abc",
+                    size_bytes=100,
+                    created_at=now,
+                    restore_status=None,
+                    restore_checked_at=None,
+                )
+            ]
+
+    ops = OpsServices(
+        health_service=health_service,
+        health_repository=FakeHealthRepo(),
+        backup_repository=FakeBackupRepo(),
+    )
+    app = create_app(
+        data_source=InMemoryMarketDataSource(market_frame),
+        ops_services=ops,
+    )
+    with app.test_client() as client:
+        yield client
+
+
+def test_ops_health_returns_200_and_contract(ops_app) -> None:
+    response = ops_app.get("/api/ops/health")
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["status"] in ("healthy", "warning", "critical")
+    assert "checked_at" in body
+    assert isinstance(body["items"], list)
+
+
+def test_ops_backups_returns_items(ops_app) -> None:
+    response = ops_app.get("/api/ops/backups?limit=10")
+    assert response.status_code == 200
+    body = response.get_json()
+    assert "items" in body
+    assert body["limit"] == 10
+    assert len(body["items"]) == 1
+    assert body["items"][0]["backup_id"] == "backup-1"
+    assert body["items"][0]["status"] == "completed"
+
+
+def test_ops_backups_rejects_invalid_limit(ops_app) -> None:
+    response = ops_app.get("/api/ops/backups?limit=101")
+    assert response.status_code == 400
+    assert response.get_json()["error"]["fields"] == {"limit": "integer_1_to_100"}
+
+
+def test_ops_backups_rejects_post(ops_app) -> None:
+    response = ops_app.post("/api/ops/backups")
+    assert response.status_code == 405
+
+
+def test_ops_restore_returns_404(ops_app) -> None:
+    response = ops_app.post("/api/ops/restore")
+    assert response.status_code == 404
+
+
+def test_ops_health_rejects_non_loopback(ops_app) -> None:
+    response = ops_app.get("/api/ops/health", environ_base={"REMOTE_ADDR": "10.0.0.2"})
+    assert response.status_code == 403
+
+
+def test_ops_backups_rejects_non_loopback(ops_app) -> None:
+    response = ops_app.get("/api/ops/backups", environ_base={"REMOTE_ADDR": "10.0.0.2"})
+    assert response.status_code == 403
+
+
+def test_ops_health_rejects_untrusted_host(ops_app) -> None:
+    response = ops_app.get("/api/ops/health", base_url="http://attacker.example")
+    assert response.status_code == 403
+
+
+def test_ops_backups_rejects_untrusted_host(ops_app) -> None:
+    response = ops_app.get("/api/ops/backups", base_url="http://attacker.example")
+    assert response.status_code == 403
+
+
+def test_ops_unavailable_returns_503(client) -> None:
+    assert client.get("/api/ops/health").status_code == 503
+    assert client.get("/api/ops/backups").status_code == 503
+
+
+def test_ops_health_repository_failure_returns_safe_503(market_frame) -> None:
+    from qingpu_insight.health import HealthService
+    from qingpu_insight.web import OpsServices, create_app
+
+    probes = FakeOpsProbes()
+    health_service = HealthService(probes)
+
+    class FailingHealthRepo:
+        def save(self, summary):
+            raise RuntimeError("mysql://admin:password@localhost/db")
+
+    ops = OpsServices(
+        health_service=health_service,
+        health_repository=FailingHealthRepo(),
+        backup_repository=None,
+    )
+    app = create_app(
+        data_source=InMemoryMarketDataSource(market_frame),
+        ops_services=ops,
+    )
+    with app.test_client() as c:
+        response = c.get("/api/ops/health")
+        assert response.status_code == 503
+        assert response.get_json()["error"]["code"] == "ops_unavailable"
+
+
+def test_ops_backups_repository_failure_returns_safe_503(market_frame) -> None:
+    from qingpu_insight.web import OpsServices, create_app
+
+    class FailingBackupRepo:
+        def list_recent(self, limit):
+            raise RuntimeError("mysql://admin:password@localhost/db")
+
+    ops = OpsServices(
+        health_service=None,
+        health_repository=None,
+        backup_repository=FailingBackupRepo(),
+    )
+    app = create_app(
+        data_source=InMemoryMarketDataSource(market_frame),
+        ops_services=ops,
+    )
+    with app.test_client() as c:
+        response = c.get("/api/ops/backups")
+        body = response.get_data(as_text=True)
+        assert response.status_code == 503
+        assert response.get_json()["error"]["code"] == "ops_unavailable"
+        assert "password" not in body
+        assert "/db" not in body
+
+
+def test_ops_health_error_does_not_leak_secrets(market_frame) -> None:
+    from qingpu_insight.web import OpsServices, create_app
+
+    class FailingHealthService:
+        def run(self):
+            raise RuntimeError("mysql://admin:password@localhost/db SELECT * FROM health")
+
+    ops = OpsServices(
+        health_service=FailingHealthService(),
+        health_repository=None,
+        backup_repository=None,
+    )
+    app = create_app(
+        data_source=InMemoryMarketDataSource(market_frame),
+        ops_services=ops,
+    )
+    with app.test_client() as c:
+        response = c.get("/api/ops/health")
+        body = response.get_data(as_text=True)
+        assert response.status_code == 503
+        assert response.get_json()["error"]["code"] == "ops_unavailable"
+        assert "password" not in body
+        assert "SELECT" not in body
+
+
 def test_market_composition_error_starts_with_fixed_safe_response(
     monkeypatch, tmp_path: Path,
 ) -> None:

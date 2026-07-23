@@ -18,6 +18,9 @@ from flask import Flask, jsonify, render_template, request, session
 from werkzeug.datastructures import MultiDict
 from werkzeug.exceptions import HTTPException
 
+from qingpu_insight.backup_repository import MySQLBackupRepository
+from qingpu_insight.health import HealthService
+from qingpu_insight.health_repository import MySQLHealthRepository
 from qingpu_insight.job_executor import LocalJobExecutor
 from qingpu_insight.jobs import JobRun, JobService, redact_job_message
 from qingpu_insight.listing_metrics import (
@@ -58,6 +61,15 @@ class AdminServices:
     job_service: JobService
     listing_update_service: ListingUpdateService
     executor: LocalJobExecutor
+
+
+@dataclass(frozen=True)
+class OpsServices:
+    """Immutable production/injected dependencies for ops endpoints."""
+
+    health_service: HealthService | None = None
+    health_repository: MySQLHealthRepository | None = None
+    backup_repository: MySQLBackupRepository | None = None
 
 
 class _UnavailableMarketDataSource:
@@ -397,6 +409,7 @@ def create_app(
     listing_update_service: ListingUpdateService | None = None,
     job_executor: LocalJobExecutor | None = None,
     admin_services: AdminServices | None = None,
+    ops_services: OpsServices | None = None,
 ) -> Flask:
     app = Flask(__name__)
     app.json.default = _json_default
@@ -689,6 +702,104 @@ def create_app(
                 {"error": {"code": "job_unavailable", "message": "工作歷史暫時無法取得。"}}
             ), 503
         return jsonify({"items": [_public_job(run) for run in runs], "limit": limit})
+
+    # ------------------------------------------------------------------
+    # Ops API (M4.3)
+    # ------------------------------------------------------------------
+
+    if ops_services is None and root is not None and os.environ.get("QINGPU_DATABASE_URL"):
+        try:
+            from qingpu_insight.cli import create_mysql_connection_factory
+
+            factory = create_mysql_connection_factory()
+            ops_services = OpsServices(
+                health_repository=MySQLHealthRepository(factory),
+                backup_repository=MySQLBackupRepository(factory),
+            )
+        except Exception:
+            app.logger.warning("ops services composition failed")
+
+    @app.get("/api/ops/health")
+    def ops_health():
+        if not _is_trusted_local_request():
+            return jsonify({"error": {"code": "forbidden", "message": "僅允許本機存取。"}}), 403
+        if ops_services is None or ops_services.health_service is None:
+            return jsonify(
+                {"error": {"code": "ops_unavailable", "message": "維運功能未啟用。"}}
+            ), 503
+        try:
+            summary = ops_services.health_service.run()
+            if ops_services.health_repository is not None:
+                ops_services.health_repository.save(summary)
+            return jsonify(
+                {
+                    "status": summary.status,
+                    "checked_at": summary.checked_at.isoformat(),
+                    "items": [
+                        {
+                            "code": item.code,
+                            "status": item.status,
+                            "summary": item.summary,
+                            "value": item.value,
+                            "unit": item.unit,
+                        }
+                        for item in summary.items
+                    ],
+                }
+            )
+        except Exception:
+            return jsonify(
+                {"error": {"code": "ops_unavailable", "message": "維運功能暫時無法使用。"}}
+            ), 503
+
+    @app.get("/api/ops/backups")
+    def ops_backups():
+        if not _is_trusted_local_request():
+            return jsonify({"error": {"code": "forbidden", "message": "僅允許本機存取。"}}), 403
+        if ops_services is None or ops_services.backup_repository is None:
+            return jsonify(
+                {"error": {"code": "ops_unavailable", "message": "維運功能未啟用。"}}
+            ), 503
+        raw_limit = request.args.get("limit", "20")
+        try:
+            limit = int(raw_limit)
+        except (TypeError, ValueError):
+            return _invalid_request({"limit": "integer_1_to_100"})
+        if str(limit) != raw_limit or not 1 <= limit <= 100:
+            return _invalid_request({"limit": "integer_1_to_100"})
+        try:
+            records = ops_services.backup_repository.list_recent(limit)
+        except Exception:
+            return jsonify(
+                {"error": {"code": "ops_unavailable", "message": "備份記錄暫時無法取得。"}}
+            ), 503
+        return jsonify(
+            {
+                "items": [
+                    {
+                        "backup_id": r.backup_id,
+                        "status": r.status,
+                        "sha256": r.sha256,
+                        "size_bytes": r.size_bytes,
+                        "created_at": r.created_at.isoformat(),
+                        "restore_status": r.restore_status,
+                        "restore_checked_at": (
+                            r.restore_checked_at.isoformat() if r.restore_checked_at else None
+                        ),
+                    }
+                    for r in records
+                ],
+                "limit": limit,
+            }
+        )
+
+    @app.post("/api/ops/backups")
+    def ops_backups_post():
+        return jsonify({"error": {"code": "method_not_allowed", "message": "不支援此操作。"}}), 405
+
+    @app.route("/api/ops/restore", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    def ops_restore():
+        return jsonify({"error": {"code": "not_found", "message": "路由不存在。"}}), 404
 
     return app
 
