@@ -5,6 +5,7 @@ import os
 import re
 import stat
 import tempfile
+import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -301,7 +302,14 @@ def _atomic_write(path: Path, html: str) -> None:
             handle.write(html)
             handle.flush()
             os.fsync(handle.fileno())
-        temporary.replace(path)
+        for attempt in range(3):
+            try:
+                temporary.replace(path)
+                break
+            except PermissionError:
+                if attempt == 2:
+                    raise
+                time.sleep(0.05)
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
