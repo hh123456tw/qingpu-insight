@@ -24,6 +24,12 @@ class UnsafeRestoreTarget(ValueError):
     """Raised when a database name fails safety validation for restore drill."""
 
 
+class RestoreCleanupFailed(RuntimeError):
+    def __init__(self, database_name: str) -> None:
+        super().__init__(f"restore cleanup failed: {database_name}")
+        self.database_name = database_name
+
+
 @dataclass(frozen=True)
 class RestoreEvidence:
     database_name: str
@@ -34,27 +40,54 @@ class RestoreEvidence:
 
 
 def validate_restore_database(name: str) -> None:
-    if not re.match(r"\Aqingpu_restore_drill_[a-f0-9]{12}\Z", name):
+    if not re.match(r"\Aqingpu_restore_drill_[a-f0-9]{16}\Z", name):
         raise UnsafeRestoreTarget(
             f"Database name {name!r} is not a safe restore target",
         )
 
 
-def build_restore_database(backup_id: str) -> str:
-    return f"qingpu_restore_drill_{backup_id[:12]}"
+def build_restore_database(backup_id: str, attempt_id: str) -> str:
+    backup_hex = uuid.UUID(backup_id).hex[:8]
+    attempt_hex = uuid.UUID(attempt_id).hex[:8]
+    return f"qingpu_restore_drill_{backup_hex}{attempt_hex}"
+
+
+def resolve_backup_path(backup_dir: Path, stored_path: str, backup_id: str) -> Path:
+    root = backup_dir.resolve()
+    candidate = (root / stored_path).resolve()
+    candidate.relative_to(root)
+    if candidate.name != f"{backup_id}.sql":
+        raise ValueError(f"Backup file name mismatch: {candidate.name}")
+    return candidate
+
+
+def hash_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(chunk_size), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 class ProcessRunner(Protocol):
     def run(self, args: Sequence[str], env: Mapping[str, str],
-            stdin: str | None = None) -> ProcessResult: ...
+            stdin: str | None = None,
+            stdin_path: Path | None = None) -> ProcessResult: ...
 
 
 class RealRunner:
     def run(self, args: Sequence[str], env: Mapping[str, str],
-            stdin: str | None = None) -> ProcessResult:
-        result = subprocess.run(
-            args, env=env, input=stdin, capture_output=True, text=True, shell=False,
-        )
+            stdin: str | None = None,
+            stdin_path: Path | None = None) -> ProcessResult:
+        if stdin_path is not None:
+            with stdin_path.open("rb") as stream:
+                result = subprocess.run(
+                    args, env=env, stdin=stream, capture_output=True, shell=False,
+                )
+        else:
+            result = subprocess.run(
+                args, env=env, input=stdin, capture_output=True, text=True, shell=False,
+            )
         return ProcessResult(result.returncode, result.stdout, result.stderr)
 
 
@@ -77,12 +110,15 @@ class RecordingRunner:
         self.args: list[str] = []
         self.env: dict[str, str] = {}
         self.calls: list[list[str]] = []
+        self.stdin_paths: list[Path | None] = []
 
     def run(self, args: Sequence[str], env: Mapping[str, str],
-            stdin: str | None = None) -> ProcessResult:
+            stdin: str | None = None,
+            stdin_path: Path | None = None) -> ProcessResult:
         self.args = list(args)
         self.env = dict(env)
         self.calls.append(list(args))
+        self.stdin_paths.append(stdin_path)
         if self._dump_content is not None:
             for i, arg in enumerate(args):
                 if arg == "--result-file" and i + 1 < len(args):
@@ -186,7 +222,7 @@ class BackupService:
             self._repository.create(record)
             return record
 
-        sha256 = hashlib.sha256(partial_path.read_bytes()).hexdigest()
+        sha256 = hash_file(partial_path)
         os.replace(str(partial_path), str(final_path))
 
         record = BackupRecord(
@@ -205,11 +241,12 @@ class BackupService:
         record = self._repository.get(backup_id)
         if record is None:
             raise ValueError(f"Backup {backup_id} not found")
-        backup_path = self._backup_dir / record.path
+        backup_path = resolve_backup_path(self._backup_dir, record.path, backup_id)
         if not backup_path.exists():
             raise ValueError(f"Backup file {backup_path} not found")
-        actual_sha = hashlib.sha256(backup_path.read_bytes()).hexdigest()
-        drill_db = build_restore_database(backup_id)
+        actual_sha = hash_file(backup_path)
+        attempt_id = str(uuid.uuid4())
+        drill_db = build_restore_database(backup_id, attempt_id)
         validate_restore_database(drill_db)
         checked_at = datetime.now(UTC)
         if actual_sha != record.sha256:
@@ -229,7 +266,7 @@ class BackupService:
                            f"--port={self._config.mysql_port}",
                            f"--user={self._config.mysql_user}",
                            drill_db]
-            result = self._runner.run(import_args, env, stdin=backup_path.read_text())
+            result = self._runner.run(import_args, env, stdin_path=backup_path)
             if result.returncode != 0:
                 self._repository.mark_restore(backup_id, "failed", checked_at)
                 raise RuntimeError("Import failed")
@@ -276,9 +313,11 @@ class BackupService:
             result = self._runner.run(drop_args, env)
             if result.returncode != 0:
                 self._repository.mark_restore(backup_id, "cleanup_failed", checked_at)
-                return evidence
+                raise RestoreCleanupFailed(drill_db)
             self._repository.mark_restore(backup_id, "succeeded", checked_at)
             return evidence
+        except RestoreCleanupFailed:
+            raise
         except Exception:
             self._repository.mark_restore(backup_id, "failed", checked_at)
             try:

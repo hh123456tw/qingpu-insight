@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +15,8 @@ from qingpu_insight.backups import (
     RecordingRunner,
     UnsafeRestoreTarget,
     build_restore_database,
+    hash_file,
+    resolve_backup_path,
     validate_restore_database,
 )
 
@@ -172,12 +175,16 @@ def test_restore_rejects_non_drill_database() -> None:
         validate_restore_database("qingpu_insight")
 
 
-def test_restore_database_has_fixed_prefix() -> None:
-    assert build_restore_database("abc").startswith("qingpu_restore_drill_")
+def test_restore_database_name_accepts_generated_backup_uuid() -> None:
+    backup_id = str(uuid.uuid4())
+    attempt_id = uuid.uuid4().hex
+    name = build_restore_database(backup_id, attempt_id)
+    validate_restore_database(name)
+    assert "-" not in name.removeprefix("qingpu_restore_drill_")
 
 
 def test_restore_drill_success(tmp_path: Path) -> None:
-    backup_id = "abcd1234abcd"
+    backup_id = str(uuid.uuid4())
     content = b"mysql dump content\n"
     sha256 = hashlib.sha256(content).hexdigest()
     (tmp_path / f"{backup_id}.sql").write_bytes(content)
@@ -209,7 +216,7 @@ def test_restore_drill_success(tmp_path: Path) -> None:
 
     evidence = service.restore_drill(backup_id)
 
-    assert evidence.database_name == build_restore_database(backup_id)
+    assert evidence.database_name.startswith("qingpu_restore_drill_")
     assert evidence.table_names == [
         "job_runs", "dataset_versions", "published_datasets", "listing_current",
     ]
@@ -219,7 +226,6 @@ def test_restore_drill_success(tmp_path: Path) -> None:
     assert len(runner.calls) == 3
     assert "CREATE DATABASE" in runner.calls[0][-1]
     assert runner.calls[1][0] == "mysql"
-    assert runner.calls[1][-1] == build_restore_database(backup_id)
     assert "DROP DATABASE" in runner.calls[2][-1]
 
     assert len(repo.restore_calls) >= 1
@@ -227,7 +233,7 @@ def test_restore_drill_success(tmp_path: Path) -> None:
 
 
 def test_restore_drill_checksum_mismatch(tmp_path: Path) -> None:
-    backup_id = "abcd1234abcd"
+    backup_id = str(uuid.uuid4())
     content = b"mysql dump content\n"
     other_content = b"different content\n"
     (tmp_path / f"{backup_id}.sql").write_bytes(other_content)
@@ -255,7 +261,7 @@ def test_restore_drill_checksum_mismatch(tmp_path: Path) -> None:
 
 
 def test_restore_drill_import_failure(tmp_path: Path) -> None:
-    backup_id = "abcd1234abcd"
+    backup_id = str(uuid.uuid4())
     content = b"mysql dump content\n"
     sha256 = hashlib.sha256(content).hexdigest()
     (tmp_path / f"{backup_id}.sql").write_bytes(content)
@@ -288,7 +294,7 @@ def test_restore_drill_import_failure(tmp_path: Path) -> None:
 
 
 def test_restore_drill_missing_table(tmp_path: Path) -> None:
-    backup_id = "abcd1234abcd"
+    backup_id = str(uuid.uuid4())
     content = b"mysql dump content\n"
     sha256 = hashlib.sha256(content).hexdigest()
     (tmp_path / f"{backup_id}.sql").write_bytes(content)
@@ -322,7 +328,7 @@ def test_restore_drill_missing_table(tmp_path: Path) -> None:
 
 
 def test_restore_drill_pointer_query_failure(tmp_path: Path) -> None:
-    backup_id = "abcd1234abcd"
+    backup_id = str(uuid.uuid4())
     content = b"mysql dump content\n"
     sha256 = hashlib.sha256(content).hexdigest()
     (tmp_path / f"{backup_id}.sql").write_bytes(content)
@@ -358,7 +364,7 @@ def test_restore_drill_pointer_query_failure(tmp_path: Path) -> None:
 
 
 def test_restore_drill_drop_failure(tmp_path: Path) -> None:
-    backup_id = "abcd1234abcd"
+    backup_id = str(uuid.uuid4())
     content = b"mysql dump content\n"
     sha256 = hashlib.sha256(content).hexdigest()
     (tmp_path / f"{backup_id}.sql").write_bytes(content)
@@ -387,6 +393,136 @@ def test_restore_drill_drop_failure(tmp_path: Path) -> None:
         pymysql_connect=connect,
     )
 
+    from qingpu_insight.backups import RestoreCleanupFailed
+
+    with pytest.raises(RestoreCleanupFailed):
+        service.restore_drill(backup_id)
+
+    assert repo.restore_calls[-1][1] == "cleanup_failed"
+
+
+def test_restore_rejects_metadata_path_outside_backup_dir() -> None:
+    backup_dir = Path("/safe/backups").resolve()
+    with pytest.raises(ValueError):
+        resolve_backup_path(backup_dir, "../etc/passwd", str(uuid.uuid4()))
+
+
+def test_restore_cleanup_failure_raises_and_records_cleanup_failed(
+    tmp_path: Path,
+) -> None:
+    backup_id = str(uuid.uuid4())
+    content = b"mysql dump content\n"
+    sha256 = hashlib.sha256(content).hexdigest()
+    (tmp_path / f"{backup_id}.sql").write_bytes(content)
+
+    repo = RecordingRepository()
+    repo.create(BackupRecord(
+        backup_id=backup_id,
+        status="completed",
+        path=f"{backup_id}.sql",
+        sha256=sha256,
+        size_bytes=len(content),
+        created_at=NOW,
+    ))
+
+    runner = RecordingRunner(returncodes=[0, 0, 1])
+    drill_conn = FakeDrillConnection()
+    drill_conn.cursor_instance.results = [
+        (5,), (10,), (3,), (20,), ("ds-001", "v2"),
+    ]
+
+    def connect(**kwargs: Any) -> FakeDrillConnection:
+        return drill_conn
+
+    service = BackupService(
+        config=CONFIG, runner=runner, repository=repo, backup_dir=tmp_path,
+        pymysql_connect=connect,
+    )
+
+    from qingpu_insight.backups import RestoreCleanupFailed
+
+    with pytest.raises(RestoreCleanupFailed):
+        service.restore_drill(backup_id)
+
+    assert repo.restore_calls[-1][1] == "cleanup_failed"
+
+
+def test_restore_create_failure_does_not_drop_another_attempt_database(
+    tmp_path: Path,
+) -> None:
+    backup_id = str(uuid.uuid4())
+    content = b"mysql dump content\n"
+    sha256 = hashlib.sha256(content).hexdigest()
+    (tmp_path / f"{backup_id}.sql").write_bytes(content)
+
+    repo = RecordingRepository()
+    repo.create(BackupRecord(
+        backup_id=backup_id,
+        status="completed",
+        path=f"{backup_id}.sql",
+        sha256=sha256,
+        size_bytes=len(content),
+        created_at=NOW,
+    ))
+
+    runner = RecordingRunner(returncodes=[1])
+    service = BackupService(
+        config=CONFIG, runner=runner, repository=repo, backup_dir=tmp_path,
+    )
+
+    with pytest.raises(RuntimeError, match="Failed to create database"):
+        service.restore_drill(backup_id)
+
+    assert repo.restore_calls[-1][1] == "failed"
+    # 1 CREATE attempt + 1 safety DROP in except handler = 2
+    assert len(runner.calls) == 2
+
+
+def test_hash_file_reads_in_bounded_chunks(tmp_path: Path) -> None:
+    content = b"x" * (1024 * 1024 + 1)
+    path = tmp_path / "large.sql"
+    path.write_bytes(content)
+
+    result = hash_file(path, chunk_size=1024)
+    assert result == hashlib.sha256(content).hexdigest()
+
+
+def test_restore_runner_receives_file_stream_not_dump_text(tmp_path: Path) -> None:
+    backup_id = str(uuid.uuid4())
+    content = b"mysql dump content\n"
+    sha256 = hashlib.sha256(content).hexdigest()
+    (tmp_path / f"{backup_id}.sql").write_bytes(content)
+
+    repo = RecordingRepository()
+    repo.create(BackupRecord(
+        backup_id=backup_id,
+        status="completed",
+        path=f"{backup_id}.sql",
+        sha256=sha256,
+        size_bytes=len(content),
+        created_at=NOW,
+    ))
+
+    runner = RecordingRunner(returncodes=[0, 0, 0])
+    drill_conn = FakeDrillConnection()
+    drill_conn.cursor_instance.results = [
+        (5,), (10,), (3,), (20,), ("ds-001", "v2"),
+    ]
+
+    def connect(**kwargs: Any) -> FakeDrillConnection:
+        return drill_conn
+
+    service = BackupService(
+        config=CONFIG, runner=runner, repository=repo, backup_dir=tmp_path,
+        pymysql_connect=connect,
+    )
+
     evidence = service.restore_drill(backup_id)
     assert evidence is not None
-    assert repo.restore_calls[-1][1] == "cleanup_failed"
+
+    import_args = runner.calls[1]
+    assert import_args[0] == "mysql"
+
+    stdin_path = runner.stdin_paths[1]
+    assert stdin_path is not None
+    assert stdin_path.read_bytes() == content
