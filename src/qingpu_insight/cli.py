@@ -1806,17 +1806,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--cases", required=True,
         help="path to JSON file with case EvidencePacks",
     )
-    benchmark_parser.add_argument(
-        "--models", nargs="+", required=True,
+    models_group = benchmark_parser.add_mutually_exclusive_group(required=True)
+    models_group.add_argument(
+        "--models", nargs="+",
         help="model name(s) to benchmark",
+    )
+    models_group.add_argument(
+        "--models-env",
+        help="environment variable containing comma-separated model IDs",
+    )
+    benchmark_parser.add_argument(
+        "--provider", choices=("ollama", "gemini"), default=None,
+        help="report provider for benchmark (default: auto-detect from model)",
     )
     benchmark_parser.add_argument(
         "--output-dir", default="outputs/m44-benchmark",
         help="output directory for benchmark artifacts",
-    )
-    benchmark_parser.add_argument(
-        "--models-env",
-        help="environment variable containing comma-separated model IDs",
     )
 
     smoke_parser = subparsers.add_parser(
@@ -1824,8 +1829,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="quick smoke test for a single model",
     )
     smoke_parser.add_argument(
-        "--provider", choices=("ollama", "gemini"), default="ollama",
-        help="report provider (default: ollama)",
+        "--provider", choices=("rule", "ollama", "gemini"), default="rule",
+        help="report provider (default: rule)",
     )
     smoke_parser.add_argument(
         "--model", default=None,
@@ -1869,14 +1874,34 @@ def llm_benchmark(root: Path, args) -> int:
     from qingpu_insight.report_providers import RuleReportProvider
 
     providers: dict[str, Any] = {}
+    ollama_base_url = os.environ.get("QINGPU_OLLAMA_BASE_URL", "http://127.0.0.1:11434")
     for model_name in models:
-        providers[model_name] = RuleReportProvider()
+        if args.provider == "gemini":
+            key = os.environ.get("QINGPU_GEMINI_API_KEY", "")
+            gm = os.environ.get("QINGPU_GEMINI_MODEL", model_name)
+            if key and gm:
+                from qingpu_insight.gemini_report_provider import GeminiReportProvider
+                providers[model_name] = GeminiReportProvider(api_key=key, model=gm)
+            else:
+                providers[model_name] = RuleReportProvider()
+        elif args.provider == "ollama" or not args.provider:
+            from qingpu_insight.ollama_report_provider import OllamaReportProvider
+            providers[model_name] = OllamaReportProvider(
+                base_url=ollama_base_url, model=model_name,
+            )
+        else:
+            providers[model_name] = RuleReportProvider()
 
     output_dir = Path(args.output_dir)
     try:
         results, summaries = run_benchmark(cases, providers, output_dir)
     except Exception as exc:
         print(f"benchmark failed: {exc}", file=sys.stderr)
+        return 1
+
+    all_failed = all(not r.schema_success for r in results) if results else True
+    if all_failed and results:
+        print("benchmark failed: all results are failures", file=sys.stderr)
         return 1
 
     print(f"Benchmark complete: {len(results)} results, {len(summaries)} model(s)")
@@ -1890,9 +1915,6 @@ def llm_benchmark(root: Path, args) -> int:
 
 
 def llm_smoke(root: Path, args) -> int:
-    from qingpu_insight.report_providers import RuleReportProvider
-
-    provider = RuleReportProvider()
     from qingpu_insight.evidence import EvidenceBuilder
 
     builder = _create_fallback_evidence_repository(root)
@@ -1902,12 +1924,13 @@ def llm_smoke(root: Path, args) -> int:
         req = ReportRequest(
             candidate_ids=("smoke",),
             intended_use="self_use",
-            provider="rule",
+            provider=args.provider,
         )
         pack = eb.build(req)
     except Exception:
         from qingpu_insight.report_contracts import (
             EvidenceCandidate,
+            EvidenceFact,
         )
 
         pack = EvidencePack(
@@ -1915,22 +1938,71 @@ def llm_smoke(root: Path, args) -> int:
             dataset_version="local",
             generated_at=datetime.now(UTC).isoformat(),
             candidates=(EvidenceCandidate(candidate_id="smoke", listing_type="sale"),),
-            facts=(),
+            facts=(EvidenceFact(
+                fact_id="smoke-fact-001",
+                kind="data_freshness",
+                label="Smoke Test",
+                value="2026-01-01",
+                unit="iso",
+                source_type="smoke",
+                source_version="local",
+                observed_at=datetime.now(UTC).isoformat(),
+            ),),
             limitations=("smoke: no local data available",),
         )
+
+    actual_provider_name = args.provider
+    actual_model = args.model or args.provider
+    fallback_reason = None
+
+    try:
+        if args.provider == "ollama":
+            from qingpu_insight.ollama_report_provider import OllamaReportProvider
+            provider = OllamaReportProvider(
+                base_url=os.environ.get("QINGPU_OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
+                model=actual_model,
+            )
+        elif args.provider == "gemini":
+            key = os.environ.get("QINGPU_GEMINI_API_KEY", "")
+            gm = os.environ.get("QINGPU_GEMINI_MODEL", actual_model)
+            if not key or not gm:
+                fallback_reason = "gemini_not_configured"
+                from qingpu_insight.report_providers import RuleReportProvider
+                provider = RuleReportProvider()
+                actual_provider_name = "rule"
+                actual_model = "rule"
+            else:
+                from qingpu_insight.gemini_report_provider import GeminiReportProvider
+                provider = GeminiReportProvider(api_key=key, model=gm)
+        else:
+            from qingpu_insight.report_providers import RuleReportProvider
+            provider = RuleReportProvider()
+    except Exception as exc:
+        print(f"smoke test failed: provider init error - {exc}", file=sys.stderr)
+        return 1
 
     try:
         result = provider.generate(pack)
     except Exception as exc:
-        print(f"smoke test failed: {exc}", file=sys.stderr)
+        print(json.dumps({
+            "provider": actual_provider_name,
+            "model": actual_model,
+            "actual_provider": actual_provider_name,
+            "actual_model": actual_model,
+            "fallback_reason": fallback_reason or str(exc),
+            "success": False,
+        }, ensure_ascii=False))
         return 1
 
     from qingpu_insight.llm_benchmark import score_result
 
     br = score_result(result, pack)
     print(json.dumps({
-        "provider": result.provider,
-        "model": result.model,
+        "provider": actual_provider_name,
+        "model": actual_model,
+        "actual_provider": result.provider,
+        "actual_model": result.model,
+        "fallback_reason": fallback_reason,
         "schema_success": br.schema_success,
         "fact_accuracy": br.fact_accuracy,
         "coverage": br.required_section_coverage,

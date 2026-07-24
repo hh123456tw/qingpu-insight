@@ -361,7 +361,7 @@ class TestRunBenchmark:
         assert (tmp_path / "benchmark_results.json").exists()
         assert (tmp_path / "benchmark_results.md").exists()
 
-    def test_provider_error_skipped(self, tmp_path: Path) -> None:
+    def test_provider_error_recorded(self, tmp_path: Path) -> None:
         class FailingProvider:
             def generate(self, pack, repair_codes=()):
                 raise RuntimeError("fail")
@@ -369,4 +369,6 @@ class TestRunBenchmark:
         results, _ = run_benchmark(
             [PACK], {"fail": FailingProvider()}, tmp_path,
         )
-        assert len(results) == 0
+        assert len(results) == 1
+        assert not results[0].success
+        assert results[0].error_code == "provider_failed"

@@ -1,0 +1,219 @@
+[
+  {
+    "pack_id": "sale-owner-occupied-001",
+    "dataset_version": "v1",
+    "generated_at": "2026-07-24T00:00:00+00:00",
+    "candidates": [
+      {"candidate_id": "c-sale-001", "listing_type": "sale"}
+    ],
+    "facts": [
+      {
+        "fact_id": "fact-sale-001-a",
+        "kind": "asking_price",
+        "label": "Asking Price",
+        "value": "15800000",
+        "unit": "twd",
+        "source_type": "listing",
+        "source_version": "v1",
+        "observed_at": "2026-07-01T00:00:00+00:00"
+      },
+      {
+        "fact_id": "fact-sale-001-b",
+        "kind": "area",
+        "label": "Building Area",
+        "value": "32.50",
+        "unit": "ping",
+        "source_type": "listing",
+        "source_version": "v1",
+        "observed_at": "2026-07-01T00:00:00+00:00"
+      },
+      {
+        "fact_id": "fact-sale-001-c",
+        "kind": "building_age",
+        "label": "Building Age",
+        "value": "8.0",
+        "unit": "years",
+        "source_type": "listing",
+        "source_version": "v1",
+        "observed_at": "2026-07-01T00:00:00+00:00"
+      },
+      {
+        "fact_id": "fact-sale-001-d",
+        "kind": "station_distance",
+        "label": "Station Distance",
+        "value": "A18 350m",
+        "unit": "m",
+        "source_type": "listing",
+        "source_version": "v1",
+        "observed_at": "2026-07-01T00:00:00+00:00"
+      },
+      {
+        "fact_id": "fact-sale-001-e",
+        "kind": "model_interval",
+        "label": "Model Valuation Interval",
+        "value": "13500000-16500000",
+        "unit": "twd",
+        "source_type": "valuation",
+        "source_version": "v1",
+        "observed_at": "2026-07-01T00:00:00+00:00"
+      },
+      {
+        "fact_id": "fact-sale-001-f",
+        "kind": "data_freshness",
+        "label": "Data Freshness",
+        "value": "2026-07-01T00:00:00+00:00",
+        "unit": "iso",
+        "source_type": "listing",
+        "source_version": "v1",
+        "observed_at": "2026-07-01T00:00:00+00:00"
+      },
+      {
+        "fact_id": "fact-sale-001-g",
+        "kind": "location_evidence",
+        "label": "Location Method",
+        "value": "structured_address",
+        "unit": "method",
+        "source_type": "listing",
+        "source_version": "v1",
+        "observed_at": "2026-07-01T00:00:00+00:00"
+      }
+    ],
+    "limitations": []
+  },
+  {
+    "pack_id": "newhouse-presale-001",
+    "dataset_version": "v1",
+    "generated_at": "2026-07-24T00:00:00+00:00",
+    "candidates": [
+      {"candidate_id": "c-newhouse-001", "listing_type": "newhouse"}
+    ],
+    "facts": [
+      {
+        "fact_id": "fact-newhouse-001-a",
+        "kind": "asking_price",
+        "label": "Asking Price",
+        "value": "22000000",
+        "unit": "twd",
+        "source_type": "listing",
+        "source_version": "v1",
+        "observed_at": "2026-07-01T00:00:00+00:00"
+      },
+      {
+        "fact_id": "fact-newhouse-001-b",
+        "kind": "area",
+        "label": "Building Area",
+        "value": "40.00",
+        "unit": "ping",
+        "source_type": "listing",
+        "source_version": "v1",
+        "observed_at": "2026-07-01T00:00:00+00:00"
+      },
+      {
+        "fact_id": "fact-newhouse-001-c",
+        "kind": "station_distance",
+        "label": "Station Distance",
+        "value": "A19 200m",
+        "unit": "m",
+        "source_type": "listing",
+        "source_version": "v1",
+        "observed_at": "2026-07-01T00:00:00+00:00"
+      },
+      {
+        "fact_id": "fact-newhouse-001-d",
+        "kind": "model_interval",
+        "label": "Model Valuation Interval",
+        "value": "19000000-24000000",
+        "unit": "twd",
+        "source_type": "valuation",
+        "source_version": "v1",
+        "observed_at": "2026-07-01T00:00:00+00:00"
+      },
+      {
+        "fact_id": "fact-newhouse-001-e",
+        "kind": "data_freshness",
+        "label": "Data Freshness",
+        "value": "2026-07-01T00:00:00+00:00",
+        "unit": "iso",
+        "source_type": "listing",
+        "source_version": "v1",
+        "observed_at": "2026-07-01T00:00:00+00:00"
+      },
+      {
+        "fact_id": "fact-newhouse-001-f",
+        "kind": "location_evidence",
+        "label": "Location Method",
+        "value": "source_coordinates",
+        "unit": "method",
+        "source_type": "listing",
+        "source_version": "v1",
+        "observed_at": "2026-07-01T00:00:00+00:00"
+      }
+    ],
+    "limitations": ["c-newhouse-001: no building age for new construction"]
+  },
+  {
+    "pack_id": "rental-reference-001",
+    "dataset_version": "v1",
+    "generated_at": "2026-07-24T00:00:00+00:00",
+    "candidates": [
+      {"candidate_id": "c-rental-001", "listing_type": "rental"}
+    ],
+    "facts": [
+      {
+        "fact_id": "fact-rental-001-a",
+        "kind": "asking_price",
+        "label": "Asking Price",
+        "value": "25000",
+        "unit": "twd",
+        "source_type": "listing",
+        "source_version": "v1",
+        "observed_at": "2026-07-01T00:00:00+00:00"
+      },
+      {
+        "fact_id": "fact-rental-001-b",
+        "kind": "area",
+        "label": "Building Area",
+        "value": "20.00",
+        "unit": "ping",
+        "source_type": "listing",
+        "source_version": "v1",
+        "observed_at": "2026-07-01T00:00:00+00:00"
+      },
+      {
+        "fact_id": "fact-rental-001-c",
+        "kind": "station_distance",
+        "label": "Station Distance",
+        "value": "A17 500m",
+        "unit": "m",
+        "source_type": "listing",
+        "source_version": "v1",
+        "observed_at": "2026-07-01T00:00:00+00:00"
+      },
+      {
+        "fact_id": "fact-rental-001-d",
+        "kind": "data_freshness",
+        "label": "Data Freshness",
+        "value": "2026-07-01T00:00:00+00:00",
+        "unit": "iso",
+        "source_type": "listing",
+        "source_version": "v1",
+        "observed_at": "2026-07-01T00:00:00+00:00"
+      },
+      {
+        "fact_id": "fact-rental-001-e",
+        "kind": "location_evidence",
+        "label": "Location Method",
+        "value": "manual",
+        "unit": "method",
+        "source_type": "listing",
+        "source_version": "v1",
+        "observed_at": "2026-07-01T00:00:00+00:00"
+      }
+    ],
+    "limitations": [
+      "c-rental-001: no model valuation for rentals",
+      "c-rental-001: no building age for rentals",
+      "c-rental-001: no nearby transactions for rentals"
+    ]
+  }
+]
