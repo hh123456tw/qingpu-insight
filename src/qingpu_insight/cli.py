@@ -24,6 +24,7 @@ from qingpu_insight.backup_repository import MySQLBackupRepository
 from qingpu_insight.backups import (
     BackupService,
     RealRunner,
+    RestoreCleanupFailed,
     UnsafeRestoreTarget,
 )
 from qingpu_insight.config import get_settings
@@ -1347,6 +1348,18 @@ def backup_restore_drill(root: Path, backup_id: str) -> int:
         print(
             json.dumps(
                 {"status": "failed", "error_code": "unsafe_target", "message": str(e)},
+                ensure_ascii=False,
+            )
+        )
+        return 1
+    except RestoreCleanupFailed as e:
+        print(
+            json.dumps(
+                {
+                    "status": "failed",
+                    "error_code": "restore_cleanup_failed",
+                    "database_name": e.database_name,
+                },
                 ensure_ascii=False,
             )
         )

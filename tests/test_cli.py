@@ -1711,6 +1711,20 @@ def test_backup_restore_drill_checksum_mismatch(tmp_path: Path, monkeypatch, cap
     assert "Checksum" in output["message"]
 
 
+def test_backup_restore_drill_cleanup_failed(tmp_path: Path, monkeypatch, capsys) -> None:
+    from qingpu_insight.backups import RestoreCleanupFailed
+
+    class FakeService:
+        def restore_drill(self, backup_id: str) -> None:
+            raise RestoreCleanupFailed("qingpu_restore_drill_abc123def456")
+    monkeypatch.setattr(cli, "_create_backup_service", lambda root: FakeService())
+    exit_code = main(["backup-restore-drill", "--backup-id", "test-id"])
+    assert exit_code == 1
+    output = json.loads(capsys.readouterr().out)
+    assert output["error_code"] == "restore_cleanup_failed"
+    assert output["database_name"] == "qingpu_restore_drill_abc123def456"
+
+
 def test_backup_restore_drill_unsafe_target(tmp_path: Path, monkeypatch, capsys) -> None:
     from qingpu_insight.backups import UnsafeRestoreTarget
 

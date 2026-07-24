@@ -30,6 +30,10 @@ class RestoreCleanupFailed(RuntimeError):
         self.database_name = database_name
 
 
+class RepositoryError(RuntimeError):
+    """Raised when repository metadata operations fail."""
+
+
 @dataclass(frozen=True)
 class RestoreEvidence:
     database_name: str
@@ -76,18 +80,26 @@ class ProcessRunner(Protocol):
 
 
 class RealRunner:
+    def __init__(self, timeout_seconds: int = 300) -> None:
+        self._timeout_seconds = timeout_seconds
+
     def run(self, args: Sequence[str], env: Mapping[str, str],
             stdin: str | None = None,
             stdin_path: Path | None = None) -> ProcessResult:
-        if stdin_path is not None:
-            with stdin_path.open("rb") as stream:
+        try:
+            if stdin_path is not None:
+                with stdin_path.open("rb") as stream:
+                    result = subprocess.run(
+                        args, env=env, stdin=stream, capture_output=True, shell=False,
+                        timeout=self._timeout_seconds,
+                    )
+            else:
                 result = subprocess.run(
-                    args, env=env, stdin=stream, capture_output=True, shell=False,
+                    args, env=env, input=stdin, capture_output=True, text=True, shell=False,
+                    timeout=self._timeout_seconds,
                 )
-        else:
-            result = subprocess.run(
-                args, env=env, input=stdin, capture_output=True, text=True, shell=False,
-            )
+        except subprocess.TimeoutExpired:
+            return ProcessResult(124, "", "process_timeout")
         return ProcessResult(result.returncode, result.stdout, result.stderr)
 
 
@@ -160,6 +172,12 @@ class BackupService:
         self._repository = repository
         self._backup_dir = backup_dir
         self._pymysql_connect = pymysql_connect
+
+    def _safe_mark_restore(self, backup_id: str, status: str, checked_at: datetime) -> None:
+        try:
+            self._repository.mark_restore(backup_id, status, checked_at)
+        except Exception:
+            pass
 
     def create(self) -> BackupRecord:
         backup_id = str(uuid.uuid4())
@@ -252,23 +270,24 @@ class BackupService:
         if actual_sha != record.sha256:
             self._repository.mark_restore(backup_id, "failed", checked_at)
             raise ValueError("Checksum mismatch")
+        env = {"MYSQL_PWD": self._config.mysql_password}
+        created = False
+        primary_error: Exception | None = None
         try:
             create_args = ["mysql", f"--host={self._config.mysql_host}",
                            f"--port={self._config.mysql_port}",
                            f"--user={self._config.mysql_user}",
                            "-e", f"CREATE DATABASE `{drill_db}`"]
-            env = {"MYSQL_PWD": self._config.mysql_password}
             result = self._runner.run(create_args, env)
             if result.returncode != 0:
-                self._repository.mark_restore(backup_id, "failed", checked_at)
                 raise RuntimeError("Failed to create database")
+            created = True
             import_args = ["mysql", f"--host={self._config.mysql_host}",
                            f"--port={self._config.mysql_port}",
                            f"--user={self._config.mysql_user}",
                            drill_db]
             result = self._runner.run(import_args, env, stdin_path=backup_path)
             if result.returncode != 0:
-                self._repository.mark_restore(backup_id, "failed", checked_at)
                 raise RuntimeError("Import failed")
             drill_conn = self._pymysql_connect(
                 host=self._config.mysql_host,
@@ -306,29 +325,23 @@ class BackupService:
                 published_versions=versions or None,
                 checked_at=checked_at,
             )
-            drop_args = ["mysql", f"--host={self._config.mysql_host}",
-                         f"--port={self._config.mysql_port}",
-                         f"--user={self._config.mysql_user}",
-                         "-e", f"DROP DATABASE IF EXISTS `{drill_db}`"]
-            result = self._runner.run(drop_args, env)
-            if result.returncode != 0:
-                self._repository.mark_restore(backup_id, "cleanup_failed", checked_at)
-                raise RestoreCleanupFailed(drill_db)
-            self._repository.mark_restore(backup_id, "succeeded", checked_at)
-            return evidence
-        except RestoreCleanupFailed:
-            raise
-        except Exception:
-            self._repository.mark_restore(backup_id, "failed", checked_at)
-            try:
+        except Exception as exc:
+            primary_error = exc
+        finally:
+            if created:
                 drop_args = ["mysql", f"--host={self._config.mysql_host}",
                              f"--port={self._config.mysql_port}",
                              f"--user={self._config.mysql_user}",
                              "-e", f"DROP DATABASE IF EXISTS `{drill_db}`"]
-                self._runner.run(drop_args, env)
-            except Exception:
-                pass
-            raise
+                drop_result = self._runner.run(drop_args, env)
+                if drop_result.returncode != 0:
+                    self._safe_mark_restore(backup_id, "cleanup_failed", checked_at)
+                    raise RestoreCleanupFailed(drill_db) from primary_error
+        if primary_error is not None:
+            self._repository.mark_restore(backup_id, "failed", checked_at)
+            raise primary_error
+        self._repository.mark_restore(backup_id, "succeeded", checked_at)
+        return evidence
 
 
 def _cleanup(path: str) -> None:

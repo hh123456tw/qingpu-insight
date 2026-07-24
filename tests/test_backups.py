@@ -13,6 +13,7 @@ from qingpu_insight.backups import (
     BackupRecord,
     BackupService,
     RecordingRunner,
+    RepositoryError,
     UnsafeRestoreTarget,
     build_restore_database,
     hash_file,
@@ -36,6 +37,8 @@ class RecordingRepository:
         self.records: list[BackupRecord] = []
         self.created: list[BackupRecord] = []
         self.restore_calls: list[tuple[str, str, datetime]] = []
+        self.restore_status: str | None = None
+        self.fail_mark_restore = False
 
     def create(self, record: BackupRecord) -> None:
         self.created.append(record)
@@ -55,6 +58,9 @@ class RecordingRepository:
 
     def mark_restore(self, backup_id: str, status: str, checked_at: datetime) -> None:
         self.restore_calls.append((backup_id, status, checked_at))
+        self.restore_status = status
+        if self.fail_mark_restore:
+            raise RepositoryError("Simulated mark_restore failure")
 
 
 REPO = RecordingRepository()
@@ -474,8 +480,101 @@ def test_restore_create_failure_does_not_drop_another_attempt_database(
         service.restore_drill(backup_id)
 
     assert repo.restore_calls[-1][1] == "failed"
-    # 1 CREATE attempt + 1 safety DROP in except handler = 2
-    assert len(runner.calls) == 2
+    # 1 CREATE attempt only — no DROP since database was never created
+    assert len(runner.calls) == 1
+
+
+def test_create_failure_never_drops_database(tmp_path: Path) -> None:
+    backup_id = str(uuid.uuid4())
+    content = b"mysql dump content\n"
+    sha256 = hashlib.sha256(content).hexdigest()
+    (tmp_path / f"{backup_id}.sql").write_bytes(content)
+
+    repo = RecordingRepository()
+    repo.create(BackupRecord(
+        backup_id=backup_id,
+        status="completed",
+        path=f"{backup_id}.sql",
+        sha256=sha256,
+        size_bytes=len(content),
+        created_at=NOW,
+    ))
+
+    runner = RecordingRunner(returncodes=[1])
+    service = BackupService(
+        config=CONFIG, runner=runner, repository=repo, backup_dir=tmp_path,
+    )
+
+    with pytest.raises(RuntimeError, match="Failed to create database"):
+        service.restore_drill(backup_id)
+
+    assert len(runner.calls) == 1
+
+
+def test_import_and_drop_failure_records_cleanup_failed(tmp_path: Path) -> None:
+    from qingpu_insight.backups import RestoreCleanupFailed
+
+    backup_id = str(uuid.uuid4())
+    content = b"mysql dump content\n"
+    sha256 = hashlib.sha256(content).hexdigest()
+    (tmp_path / f"{backup_id}.sql").write_bytes(content)
+
+    repo = RecordingRepository()
+    repo.create(BackupRecord(
+        backup_id=backup_id,
+        status="completed",
+        path=f"{backup_id}.sql",
+        sha256=sha256,
+        size_bytes=len(content),
+        created_at=NOW,
+    ))
+
+    runner = RecordingRunner(returncodes=[0, 1, 1])
+    service = BackupService(
+        config=CONFIG, runner=runner, repository=repo, backup_dir=tmp_path,
+    )
+
+    with pytest.raises(RestoreCleanupFailed):
+        service.restore_drill(backup_id)
+
+    assert repo.restore_status == "cleanup_failed"
+
+
+def test_metadata_failure_does_not_skip_drop(tmp_path: Path) -> None:
+    backup_id = str(uuid.uuid4())
+    content = b"mysql dump content\n"
+    sha256 = hashlib.sha256(content).hexdigest()
+    (tmp_path / f"{backup_id}.sql").write_bytes(content)
+
+    repo = RecordingRepository()
+    repo.create(BackupRecord(
+        backup_id=backup_id,
+        status="completed",
+        path=f"{backup_id}.sql",
+        sha256=sha256,
+        size_bytes=len(content),
+        created_at=NOW,
+    ))
+    repo.fail_mark_restore = True
+
+    runner = RecordingRunner(returncodes=[0, 0, 0])
+    drill_conn = FakeDrillConnection()
+    drill_conn.cursor_instance.results = [
+        (5,), (10,), (3,), (20,), ("ds-001", "v2"),
+    ]
+
+    def connect(**kwargs: Any) -> FakeDrillConnection:
+        return drill_conn
+
+    service = BackupService(
+        config=CONFIG, runner=runner, repository=repo, backup_dir=tmp_path,
+        pymysql_connect=connect,
+    )
+
+    with pytest.raises(RepositoryError):
+        service.restore_drill(backup_id)
+
+    assert runner.calls[-1][-1].startswith("DROP DATABASE")
 
 
 def test_hash_file_reads_in_bounded_chunks(tmp_path: Path) -> None:
