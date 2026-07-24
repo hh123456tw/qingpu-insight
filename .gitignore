@@ -16,3 +16,5 @@ outputs/reports/
 
 artifacts/
 outputs/valuations/
+/data/locks/
+/outputs/backups/

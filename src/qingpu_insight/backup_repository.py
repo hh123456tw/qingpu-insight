@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import datetime
+from typing import Any
 
 import pymysql
 
@@ -45,6 +46,18 @@ class MySQLBackupRepository:
                 conn.rollback()
                 raise
 
+    def _to_record(self, row: dict[str, Any]) -> BackupRecord:
+        return BackupRecord(
+            backup_id=str(row["backup_id"]),
+            status=str(row["status"]),
+            path=str(row["path"]),
+            sha256=str(row["sha256"]),
+            size_bytes=int(row["size_bytes"]),
+            created_at=row["created_at"],
+            restore_status=row.get("restore_status"),
+            restore_checked_at=row.get("restore_checked_at"),
+        )
+
     def create(self, record: BackupRecord) -> None:
         with self._connection() as conn:
             try:
@@ -69,6 +82,21 @@ class MySQLBackupRepository:
             except Exception:
                 conn.rollback()
                 raise
+
+    def get(self, backup_id: str) -> BackupRecord | None:
+        with self._connection() as conn:
+            try:
+                with conn.cursor(pymysql.cursors.DictCursor) as cursor:
+                    cursor.execute(
+                        "SELECT * FROM backup_records WHERE backup_id = %s",
+                        (backup_id,),
+                    )
+                    row = cursor.fetchone()
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return None if row is None else self._to_record(row)
 
     def mark_restore(
         self, backup_id: str, status: str, checked_at: datetime,
@@ -103,18 +131,7 @@ class MySQLBackupRepository:
             except Exception:
                 conn.rollback()
                 raise
-        if row is None:
-            return None
-        return BackupRecord(
-            backup_id=str(row["backup_id"]),
-            status=str(row["status"]),
-            path=str(row["path"]),
-            sha256=str(row["sha256"]),
-            size_bytes=int(row["size_bytes"]),
-            created_at=row["created_at"],
-            restore_status=row.get("restore_status"),
-            restore_checked_at=row.get("restore_checked_at"),
-        )
+        return None if row is None else self._to_record(row)
 
     def list_recent(self, limit: int) -> list[BackupRecord]:
         with self._connection() as conn:
@@ -130,16 +147,4 @@ class MySQLBackupRepository:
             except Exception:
                 conn.rollback()
                 raise
-        return [
-            BackupRecord(
-                backup_id=str(r["backup_id"]),
-                status=str(r["status"]),
-                path=str(r["path"]),
-                sha256=str(r["sha256"]),
-                size_bytes=int(r["size_bytes"]),
-                created_at=r["created_at"],
-                restore_status=r.get("restore_status"),
-                restore_checked_at=r.get("restore_checked_at"),
-            )
-            for r in rows
-        ]
+        return [self._to_record(r) for r in rows]

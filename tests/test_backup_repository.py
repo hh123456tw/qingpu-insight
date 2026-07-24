@@ -177,3 +177,59 @@ def test_list_recent_returns_ordered_records() -> None:
     results = repo.list_recent(5)
     assert len(results) == 1
     assert results[0].backup_id == "test-003"
+
+
+def test_get_returns_record() -> None:
+    conn = FakeConnection()
+    conn.cursor_instance.fetch_rows = [
+        {
+            "backup_id": "test-001",
+            "status": "completed",
+            "path": "test-001.sql",
+            "sha256": "abc123",
+            "size_bytes": 1024,
+            "created_at": NOW,
+            "restore_status": None,
+            "restore_checked_at": None,
+        },
+    ]
+
+    def factory() -> FakeConnection:
+        return conn
+
+    repo = MySQLBackupRepository(factory)
+    result = repo.get("test-001")
+    assert result is not None
+    assert result.backup_id == "test-001"
+    assert result.sha256 == "abc123"
+
+
+def test_get_returns_none_when_missing() -> None:
+    conn = FakeConnection()
+
+    def factory() -> FakeConnection:
+        return conn
+
+    repo = MySQLBackupRepository(factory)
+    result = repo.get("nonexistent")
+    assert result is None
+
+
+def test_get_rolls_back_when_select_fails() -> None:
+    class FailingCursor(FakeCursor):
+        def execute(self, sql: str, params: tuple[Any, ...] = ()) -> int:
+            self.executed.append((sql, params))
+            if sql.strip().upper().startswith("SELECT"):
+                raise Exception("DB error")
+            return self.rowcount
+
+    conn = FakeConnection()
+    conn.cursor_instance = FailingCursor()
+
+    def factory() -> FakeConnection:
+        return conn
+
+    repo = MySQLBackupRepository(factory)
+    with pytest.raises(Exception, match="DB error"):
+        repo.get("fail-001")
+    assert conn.rollbacks > 0
