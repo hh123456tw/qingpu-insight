@@ -19,6 +19,7 @@ from werkzeug.datastructures import MultiDict
 from werkzeug.exceptions import HTTPException
 
 from qingpu_insight.backup_repository import MySQLBackupRepository
+from qingpu_insight.evidence import UnknownCandidateError
 from qingpu_insight.health import HealthService
 from qingpu_insight.health_repository import MySQLHealthRepository
 from qingpu_insight.job_executor import LocalJobExecutor
@@ -43,6 +44,7 @@ from qingpu_insight.market_metrics import (
 )
 from qingpu_insight.market_repository import MarketDataSource, repository_from_env
 from qingpu_insight.model_features import ValuationInput, build_model_frame
+from qingpu_insight.report_composition import create_report_runtime
 from qingpu_insight.report_repository import CorruptReportError
 from qingpu_insight.valuation import ModelRegistry, valuate
 from qingpu_insight.valuation_store import FileValuationStore
@@ -733,8 +735,23 @@ def create_app(
     # Report API (M4.4)
     # ------------------------------------------------------------------
 
+    if report_services is None and root is not None and os.environ.get("QINGPU_DATABASE_URL"):
+        try:
+            from qingpu_insight.cli import create_mysql_connection_factory
+
+            factory = create_mysql_connection_factory()
+            runtime = create_report_runtime(factory, root, os.environ)
+            report_services = ReportServices(
+                service=runtime.service,
+                repository=runtime.repository,
+            )
+        except Exception:
+            app.logger.warning("report services composition failed")
+
     if report_services is None and report_service is not None and report_repository is not None:
         report_services = ReportServices(service=report_service, repository=report_repository)
+
+    app.extensions["qingpu_report_services"] = report_services
 
     _REPORT_SEMAPHORE = BoundedSemaphore(1)
 
@@ -831,6 +848,10 @@ def create_app(
             ), 429
         try:
             saved = report_services.service.generate(request)
+        except UnknownCandidateError:
+            return jsonify(
+                {"error": {"code": "candidate_not_found", "message": "找不到指定物件。"}}
+            ), 404
         except Exception:
             return jsonify(
                 {"error": {"code": "report_failed", "message": "報告產生失敗。"}}

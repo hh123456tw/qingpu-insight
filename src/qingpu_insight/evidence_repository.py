@@ -6,12 +6,6 @@ import pandas as pd
 import pymysql
 
 
-class UnknownCandidateError(ValueError):
-    def __init__(self, missing: tuple[str, ...]) -> None:
-        super().__init__(f"unknown candidate IDs: {missing}")
-        self.missing = missing
-
-
 class MySQLEvidenceRepository:
     def __init__(self, connection_factory: Callable[[], pymysql.Connection]) -> None:
         self._factory = connection_factory

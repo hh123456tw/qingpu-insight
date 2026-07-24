@@ -33,6 +33,7 @@ from qingpu_insight.downloads import (
     download_season,
     write_manifest,
 )
+from qingpu_insight.evidence import UnknownCandidateError
 from qingpu_insight.feasibility import evaluate_feasibility
 from qingpu_insight.geo import assign_life_circle, station_points
 from qingpu_insight.health import HealthService, ProductionHealthProbes
@@ -89,6 +90,7 @@ from qingpu_insight.model_training import (
 from qingpu_insight.moi import read_moi_csv
 from qingpu_insight.mysql_loader import load_market_rows
 from qingpu_insight.publishing import MySQLVersionPublisher
+from qingpu_insight.report_composition import create_report_runtime
 from qingpu_insight.report_contracts import EvidencePack, ReportRequest
 from qingpu_insight.report_service import ReportService
 from qingpu_insight.reporting import write_report
@@ -1454,27 +1456,19 @@ def _safe_job_payload(run) -> dict[str, object]:
 
 
 def _create_report_service(root: Path) -> ReportService:
-    from qingpu_insight.evidence import EvidenceBuilder
-    from qingpu_insight.report_providers import RuleReportProvider
-    from qingpu_insight.report_repository import MySQLReportRepository
-    from qingpu_insight.report_validation import validate_report
-
-    # Use SQL-based evidence repository when available
     database_url = os.environ.get("QINGPU_DATABASE_URL")
     if database_url:
         factory = create_mysql_connection_factory()
-        from qingpu_insight.evidence import EvidenceRepository
-        from qingpu_insight.evidence_repository import MySQLEvidenceRepository
+        runtime = create_report_runtime(factory, root, os.environ)
+        return runtime.service
 
-        evidence_repo: EvidenceRepository = MySQLEvidenceRepository(factory)
-    else:
-        evidence_repo = _create_fallback_evidence_repository(root)
+    from qingpu_insight.evidence import EvidenceBuilder
+    from qingpu_insight.report_providers import RuleReportProvider
+    from qingpu_insight.report_validation import validate_report
 
+    evidence_repo = _create_fallback_evidence_repository(root)
     evidence_builder = EvidenceBuilder(evidence_repo)
-    if database_url:
-        repository = MySQLReportRepository(create_mysql_connection_factory())
-    else:
-        repository = _create_fallback_report_repository(root)
+    repository = _create_fallback_report_repository(root)
     return ReportService(
         evidence_builder=evidence_builder,
         providers={},
@@ -1626,6 +1620,18 @@ def report_generate(root: Path, args) -> int:
             )
         )
         return 0
+    except UnknownCandidateError:
+        print(
+            json.dumps(
+                {
+                    "status": "failed",
+                    "error_code": "candidate_not_found",
+                    "message": "找不到指定物件。",
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 1
     except Exception as exc:
         print(
             json.dumps(

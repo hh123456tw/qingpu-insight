@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 from qingpu_insight.evidence import EvidenceBuilder
@@ -29,19 +30,25 @@ def create_provider_registry(env: Mapping[str, str]) -> dict[str, ReportProvider
     return providers
 
 
-def create_report_service(
+@dataclass(frozen=True)
+class ReportRuntime:
+    service: ReportService
+    repository: MySQLReportRepository
+    providers: Mapping[str, ReportProvider]
+
+
+def create_report_runtime(
     connection_factory,
     root: Path,
     env: Mapping[str, str],
-) -> ReportService:
-    evidence_repo = MySQLEvidenceRepository(connection_factory)
-    evidence_builder = EvidenceBuilder(evidence_repo)
+) -> ReportRuntime:
     repository = MySQLReportRepository(connection_factory)
     providers = create_provider_registry(env)
-    return ReportService(
-        evidence_builder=evidence_builder,
-        providers=providers,
-        rule_provider=RuleReportProvider(),
+    service = ReportService(
+        evidence_builder=EvidenceBuilder(MySQLEvidenceRepository(connection_factory)),
+        providers=dict(providers),
+        rule_provider=providers["rule"],
         validator=validate_report,
         repository=repository,
     )
+    return ReportRuntime(service=service, repository=repository, providers=providers)
