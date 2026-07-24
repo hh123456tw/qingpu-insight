@@ -271,6 +271,28 @@ class TestValidateReport:
         assert not result.valid
         assert any(i.code == "sensitive_content" for i in result.issues)
 
+    def test_sensitive_db_url_with_driver_suffix(self) -> None:
+        claim = ReportClaim(
+            text="mysql+pymysql://user:pass@localhost:3306/db",
+            fact_ids=(_C1_LOC,),
+            numeric_fact_ids=(),
+        )
+        draft = _valid_draft(summary=claim)
+        result = validate_report(draft, PACK)
+        assert not result.valid
+        assert any(i.code == "sensitive_content" for i in result.issues)
+
+    def test_sensitive_db_url_postgres(self) -> None:
+        claim = ReportClaim(
+            text="postgresql://user:pass@localhost:5432/db",
+            fact_ids=(_C1_LOC,),
+            numeric_fact_ids=(),
+        )
+        draft = _valid_draft(summary=claim)
+        result = validate_report(draft, PACK)
+        assert not result.valid
+        assert any(i.code == "sensitive_content" for i in result.issues)
+
     def test_limitation_without_numbers_passes(self) -> None:
         claim = ReportClaim(
             text="資料僅供參考",
@@ -309,3 +331,14 @@ class TestValidateReport:
         assert isinstance(result, ValidationResult)
         assert result.valid is True
         assert isinstance(result.issues, tuple)
+
+    def test_number_without_numeric_fact_id_is_rejected(self) -> None:
+        claim = ReportClaim(
+            text="總價99999999元",
+            fact_ids=(_C1_ASKING,),
+            numeric_fact_ids=(),
+        )
+        draft = _valid_draft(summary=claim)
+        result = validate_report(draft, PACK)
+        assert not result.valid
+        assert any(i.code == "missing_numeric_fact_reference" for i in result.issues)

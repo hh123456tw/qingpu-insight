@@ -29,7 +29,7 @@ SENSITIVE_PATTERNS: dict[str, re.Pattern] = {
     "email": re.compile(r"\S+@\S+\.\S+"),
     "html_tag": re.compile(r"<[^>]+>"),
     "db_url": re.compile(
-        r"(?:mysql|postgresql|sqlite|mongodb|redis)://\S+"
+        r"(?:mysql(?:\+pymysql)?|postgres(?:ql)?|sqlite|mongodb|redis)://\S+"
     ),
 }
 
@@ -115,10 +115,15 @@ def _check_numbers(
     facts_by_id: dict[str, EvidenceFact],
     issues: list[ValidationIssue],
 ) -> None:
-    if not claim.numeric_fact_ids:
-        return
     text_numbers = _normalize_number(claim.text)
     text_numbers = _expand_with_wan_yi(text_numbers, claim.text)
+    if text_numbers and not claim.numeric_fact_ids:
+        issues.append(
+            ValidationIssue(code="missing_numeric_fact_reference", path=path)
+        )
+        return
+    if not claim.numeric_fact_ids:
+        return
     if not text_numbers:
         return
     allowed_values: set[float] = set()

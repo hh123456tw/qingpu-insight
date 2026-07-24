@@ -8,7 +8,7 @@ import pymysql
 import pytest
 
 from qingpu_insight.report_contracts import SavedBuyerReport
-from qingpu_insight.report_repository import MySQLReportRepository
+from qingpu_insight.report_repository import CorruptReportError, MySQLReportRepository
 
 _NOW = datetime.now(UTC).isoformat()
 
@@ -152,6 +152,29 @@ class TestMySQLReportRepository:
             repo.create(_SAMPLE_REPORT)
         conn.rollback.assert_called_once()
         conn.close.assert_called_once()
+
+    def test_get_raises_corrupt_on_invalid_content(self) -> None:
+        conn = _make_mock_conn()
+        cursor = conn.cursor.return_value.__enter__.return_value
+        cursor.fetchone.return_value = {
+            "report_id": "rep-bad",
+            "request_hash": "hash123",
+            "dataset_version": "v1",
+            "evidence_pack_id": "pack-001",
+            "provider": "rule",
+            "model": "rule",
+            "content": '{"invalid": "not a valid draft"}',
+            "fallback_reason": None,
+            "validation_codes": "[]",
+            "latency_ms": 0.0,
+            "created_at": _NOW,
+        }
+
+        factory = MagicMock(return_value=conn)
+        repo = MySQLReportRepository(factory)
+
+        with pytest.raises(CorruptReportError):
+            repo.get("rep-bad")
 
     def test_duplicate_create(self) -> None:
         conn = _make_mock_conn()

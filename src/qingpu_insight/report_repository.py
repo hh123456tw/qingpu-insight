@@ -12,6 +12,10 @@ from qingpu_insight.report_contracts import SavedBuyerReport
 ConnectionFactory = Callable[[], pymysql.Connection]
 
 
+class CorruptReportError(ValueError):
+    """Raised when a persisted report cannot be validated as BuyerReportDraft."""
+
+
 class MySQLReportRepository:
     def __init__(self, connection_factory: ConnectionFactory) -> None:
         self._connection_factory = connection_factory
@@ -67,6 +71,16 @@ class MySQLReportRepository:
         if row is None:
             return None
 
+        from qingpu_insight.report_contracts import BuyerReportDraft
+
+        try:
+            draft = BuyerReportDraft.model_validate(json.loads(row["content"]))
+            content = draft.model_dump(mode="json")
+        except Exception as e:
+            raise CorruptReportError(
+                f"report {report_id} validation failed: {e}"
+            ) from e
+
         return SavedBuyerReport(
             report_id=str(row["report_id"]),
             request_hash=str(row["request_hash"]),
@@ -74,7 +88,7 @@ class MySQLReportRepository:
             evidence_pack_id=str(row["evidence_pack_id"]),
             provider=str(row["provider"]),
             model=str(row["model"]),
-            content=json.loads(row["content"]),
+            content=content,
             fallback_reason=row["fallback_reason"],
             validation_codes=tuple(json.loads(row["validation_codes"])),
             latency_ms=float(row["latency_ms"]),
