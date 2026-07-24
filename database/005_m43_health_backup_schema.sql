@@ -29,7 +29,16 @@ CREATE TABLE IF NOT EXISTS backup_records (
     restore_checked_at DATETIME(3) NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Migrate from old schema: if checksum column exists, backfill sha256
+-- Migrate from old schema: add sha256 if missing, then backfill from checksum
+SET @has_sha256 = (SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'backup_records' AND COLUMN_NAME = 'sha256');
+SET @add_sql = IF(@has_sha256 = 0,
+    'ALTER TABLE backup_records ADD COLUMN sha256 CHAR(64) NOT NULL DEFAULT \'\' AFTER path',
+    'SELECT 1');
+PREPARE stmt FROM @add_sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
 SET @has_checksum = (SELECT COUNT(*) FROM information_schema.COLUMNS
     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'backup_records' AND COLUMN_NAME = 'checksum');
 SET @migrate_sql = IF(@has_checksum > 0,
