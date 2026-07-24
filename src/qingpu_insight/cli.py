@@ -1464,48 +1464,9 @@ def _create_report_service(root: Path) -> ReportService:
     if database_url:
         factory = create_mysql_connection_factory()
         from qingpu_insight.evidence import EvidenceRepository
+        from qingpu_insight.evidence_repository import MySQLEvidenceRepository
 
-        class MySQLEvidenceRepository:
-            def current_dataset_version(self) -> str:
-                conn = factory()
-                try:
-                    with conn.cursor() as cursor:
-                        cursor.execute(
-                            "SELECT version FROM published_versions "
-                            "WHERE dataset_key = 'market' "
-                            "ORDER BY published_at DESC LIMIT 1"
-                        )
-                        row = cursor.fetchone()
-                    conn.commit()
-                    return str(row[0]) if row else "unknown"
-                finally:
-                    conn.close()
-
-            def load_candidates(self, candidate_ids):
-                import pandas as pd
-                conn = factory()
-                try:
-                    query = "SELECT * FROM listing_current WHERE source_listing_id IN ({})".format(
-                        ",".join("%s" for _ in candidate_ids)
-                    )
-                    df = pd.read_sql(query, conn, params=list(candidate_ids))
-                    return df
-                finally:
-                    conn.close()
-
-            def load_market_evidence(self, candidate_ids):
-                import pandas as pd
-                conn = factory()
-                try:
-                    query = "SELECT * FROM market_transactions WHERE listing_id IN ({})".format(
-                        ",".join("%s" for _ in candidate_ids)
-                    )
-                    df = pd.read_sql(query, conn, params=list(candidate_ids))
-                    return df
-                finally:
-                    conn.close()
-
-        evidence_repo: EvidenceRepository = MySQLEvidenceRepository()
+        evidence_repo: EvidenceRepository = MySQLEvidenceRepository(factory)
     else:
         evidence_repo = _create_fallback_evidence_repository(root)
 

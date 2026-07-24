@@ -30,6 +30,12 @@ ALLOWLISTED_FACT_KINDS = frozenset({
 PII_COLUMNS = frozenset({"phone", "contact", "email", "structured_address"})
 
 
+class UnknownCandidateError(ValueError):
+    def __init__(self, missing: tuple[str, ...]) -> None:
+        super().__init__(f"unknown candidate IDs: {missing}")
+        self.missing = missing
+
+
 class EvidenceRepository(Protocol):
     def current_dataset_version(self) -> str: ...
 
@@ -61,6 +67,12 @@ class EvidenceBuilder:
 
         if "dataset_version" in candidates_df.columns:
             candidates_df = candidates_df[candidates_df["dataset_version"] == version]
+
+        requested = set(request.candidate_ids)
+        found = set(candidates_df["listing_id"].astype(str))
+        missing = sorted(requested - found)
+        if missing:
+            raise UnknownCandidateError(tuple(missing))
 
         candidates_df = _strip_pii(candidates_df)
         market_df = _strip_pii(market_df)

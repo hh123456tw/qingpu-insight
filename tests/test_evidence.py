@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 import pandas as pd
 import pytest
 
-from qingpu_insight.evidence import EvidenceBuilder
+from qingpu_insight.evidence import EvidenceBuilder, UnknownCandidateError
 from qingpu_insight.report_contracts import (
     EvidencePack,
     ReportRequest,
@@ -198,10 +198,24 @@ class TestEvidenceBuilderDataQuality:
         req = ReportRequest(
             candidate_ids=("c1", "c3"), intended_use="self_use", provider="rule"
         )
-        pack = builder.build(req)
-        cids = {c.candidate_id for c in pack.candidates}
-        assert "c3" not in cids
-        assert "c1" in cids
+        with pytest.raises(UnknownCandidateError) as exc:
+            builder.build(req)
+        assert "c3" in str(exc.value)
+        assert "c1" not in str(exc.value)
+
+    def test_unknown_candidate_raises_error(
+        self, base_candidates: pd.DataFrame, base_market: pd.DataFrame
+    ) -> None:
+        repo = FakeEvidenceRepository(
+            version="v1", candidates=base_candidates, market_evidence=base_market,
+        )
+        builder = EvidenceBuilder(repo)
+        req = ReportRequest(
+            candidate_ids=("nonexistent",), intended_use="self_use", provider="rule"
+        )
+        with pytest.raises(UnknownCandidateError) as exc:
+            builder.build(req)
+        assert "nonexistent" in str(exc.value)
 
     def test_no_pii_in_output(
         self, base_candidates: pd.DataFrame, base_market: pd.DataFrame
@@ -283,7 +297,7 @@ class TestEvidenceBuilderIntegration:
         assert isinstance(pack, EvidencePack)
         assert len(pack.candidates) == 1
 
-    def test_empty_candidates_still_builds(
+    def test_empty_candidates_raises_error(
         self, base_candidates: pd.DataFrame, base_market: pd.DataFrame
     ) -> None:
         empty_candidates = pd.DataFrame(
@@ -301,6 +315,5 @@ class TestEvidenceBuilderIntegration:
         req = ReportRequest(
             candidate_ids=("c1",), intended_use="self_use", provider="rule"
         )
-        pack = builder.build(req)
-        assert len(pack.candidates) == 0
-        assert len(pack.facts) == 0
+        with pytest.raises(UnknownCandidateError):
+            builder.build(req)
