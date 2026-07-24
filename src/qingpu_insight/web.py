@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from ipaddress import ip_address
 from pathlib import Path
-from threading import Lock
+from threading import BoundedSemaphore, Lock
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -43,6 +43,7 @@ from qingpu_insight.market_metrics import (
 )
 from qingpu_insight.market_repository import MarketDataSource, repository_from_env
 from qingpu_insight.model_features import ValuationInput, build_model_frame
+from qingpu_insight.report_repository import CorruptReportError
 from qingpu_insight.valuation import ModelRegistry, valuate
 from qingpu_insight.valuation_store import FileValuationStore
 
@@ -633,11 +634,9 @@ def create_app(
 
     @app.post("/api/admin/listing-updates")
     def admin_listing_update():
-        if not _is_trusted_local_request():
-            return jsonify({"error": {"code": "forbidden", "message": "僅允許本機存取。"}}), 403
-        csrf = request.headers.get("X-Qingpu-CSRF", "")
-        if csrf != session.get("_csrf_token", ""):
-            return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
+        unauthorized = _require_trusted_local_post()
+        if unauthorized:
+            return unauthorized
         if admin_services is None:
             return jsonify(
                 {"error": {"code": "admin_unavailable", "message": "管理功能未啟用。"}}
@@ -737,6 +736,15 @@ def create_app(
     if report_services is None and report_service is not None and report_repository is not None:
         report_services = ReportServices(service=report_service, repository=report_repository)
 
+    _REPORT_SEMAPHORE = BoundedSemaphore(1)
+
+    def _require_trusted_local_post():
+        if not _is_trusted_local_request():
+            return jsonify({"error": {"code": "forbidden", "message": "僅限本機。"}}), 403
+        if request.headers.get("X-Qingpu-CSRF", "") != session.get("_csrf_token", ""):
+            return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
+        return None
+
     _REPORT_ALLOWED_FIELDS = frozenset({"candidate_ids", "budget_twd", "intended_use", "provider"})
 
     def _parse_report_request() -> dict:
@@ -789,8 +797,9 @@ def create_app(
 
     @app.post("/api/reports")
     def create_report():
-        if not _is_trusted_local_request():
-            return jsonify({"error": {"code": "forbidden", "message": "僅允許本機存取。"}}), 403
+        unauthorized = _require_trusted_local_post()
+        if unauthorized:
+            return unauthorized
         if report_services is None:
             return jsonify(
                 {"error": {"code": "report_unavailable", "message": "報告功能未啟用。"}}
@@ -816,12 +825,18 @@ def create_app(
                 }
             ), 400
 
+        if not _REPORT_SEMAPHORE.acquire(blocking=False):
+            return jsonify(
+                {"error": {"code": "report_busy", "message": "已有報告正在產生。"}}
+            ), 429
         try:
             saved = report_services.service.generate(request)
         except Exception:
             return jsonify(
                 {"error": {"code": "report_failed", "message": "報告產生失敗。"}}
             ), 503
+        finally:
+            _REPORT_SEMAPHORE.release()
 
         return jsonify(
             {
@@ -845,7 +860,12 @@ def create_app(
                 {"error": {"code": "report_unavailable", "message": "報告功能未啟用。"}}
             ), 503
 
-        record = report_services.repository.get(report_id)
+        try:
+            record = report_services.repository.get(report_id)
+        except CorruptReportError:
+            return jsonify(
+                {"error": {"code": "report_corrupt", "message": "報告已毀損。"}}
+            ), 503
         if record is None:
             return jsonify(
                 {"error": {"code": "not_found", "message": "報告不存在。"}}
@@ -868,18 +888,20 @@ def create_app(
     def ops_health():
         if not _is_trusted_local_request():
             return jsonify({"error": {"code": "forbidden", "message": "僅允許本機存取。"}}), 403
-        if ops_services is None or ops_services.health_service is None:
+        if ops_services is None or ops_services.health_repository is None:
             return jsonify(
                 {"error": {"code": "ops_unavailable", "message": "維運功能未啟用。"}}
             ), 503
         try:
-            summary = ops_services.health_service.run()
-            if ops_services.health_repository is not None:
-                ops_services.health_repository.save(summary)
+            latest = ops_services.health_repository.latest()
+            if latest is None:
+                return jsonify(
+                    {"error": {"code": "no_health_data", "message": "尚無健康檢查記錄。"}}
+                ), 404
             return jsonify(
                 {
-                    "status": summary.status,
-                    "checked_at": summary.checked_at.isoformat(),
+                    "status": latest.status,
+                    "checked_at": latest.checked_at.isoformat(),
                     "items": [
                         {
                             "code": item.code,
@@ -888,7 +910,7 @@ def create_app(
                             "value": item.value,
                             "unit": item.unit,
                         }
-                        for item in summary.items
+                        for item in latest.items
                     ],
                 }
             )

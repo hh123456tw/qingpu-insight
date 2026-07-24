@@ -7,6 +7,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -104,7 +105,20 @@ class FakeReportService:
         return self._repository.create(report)
 
 
-@pytest.fixture
+def _report_post(client: FlaskClient, json_data=None, **kwargs) -> Any:
+    """POST with CSRF token and loopback."""
+    client.get("/")  # establish session with _csrf_token
+    with client.session_transaction() as sess:
+        token = sess.get("_csrf_token", "")
+    kw = dict(kwargs)
+    if json_data is not None:
+        kw["json"] = json_data
+    kw["headers"] = {**kw.get("headers", {}), "X-Qingpu-CSRF": token}
+    kw["environ_base"] = {**kw.get("environ_base", {}), "REMOTE_ADDR": "127.0.0.1"}
+    return client.post("/api/reports", **kw)
+
+
+@ pytest.fixture
 def report_app(market_frame: pd.DataFrame) -> FlaskClient:
     from qingpu_insight.web import create_app
 
@@ -118,91 +132,78 @@ def report_app(market_frame: pd.DataFrame) -> FlaskClient:
 
 class TestReportApi:
     def test_post_report_requires_json(self, report_app: FlaskClient) -> None:
-        response = report_app.post(
+        client = report_app
+        client.get("/")
+        with client.session_transaction() as sess:
+            token = sess.get("_csrf_token", "")
+        response = client.post(
             "/api/reports",
             data="not json",
             content_type="text/plain",
+            headers={"X-Qingpu-CSRF": token},
+            environ_base={"REMOTE_ADDR": "127.0.0.1"},
         )
         assert response.status_code == 400
         assert response.get_json()["error"]["code"] == "invalid_request"
 
     def test_post_report_rejects_empty_body(self, report_app: FlaskClient) -> None:
-        response = report_app.post(
-            "/api/reports",
-            json={},
-        )
+        response = _report_post(report_app, {})
         assert response.status_code == 400
         fields = response.get_json()["error"]["fields"]
         assert "candidate_ids" in fields
 
     def test_post_report_rejects_missing_candidate_ids(self, report_app: FlaskClient) -> None:
-        response = report_app.post(
-            "/api/reports",
-            json={"intended_use": "self_use", "provider": "rule"},
+        response = _report_post(
+            report_app, {"intended_use": "self_use", "provider": "rule"},
         )
         assert response.status_code == 400
         fields = response.get_json()["error"].get("fields", {})
         assert "candidate_ids" in fields
 
     def test_post_report_rejects_too_many_candidates(self, report_app: FlaskClient) -> None:
-        response = report_app.post(
-            "/api/reports",
-            json={
-                "candidate_ids": [f"id-{i}" for i in range(6)],
-                "intended_use": "self_use",
-                "provider": "rule",
-            },
-        )
+        response = _report_post(report_app, {
+            "candidate_ids": [f"id-{i}" for i in range(6)],
+            "intended_use": "self_use",
+            "provider": "rule",
+        })
         assert response.status_code == 400
         fields = response.get_json()["error"].get("fields", {})
         assert "candidate_ids" in fields
 
     def test_post_report_rejects_missing_provider(self, report_app: FlaskClient) -> None:
-        response = report_app.post(
-            "/api/reports",
-            json={
-                "candidate_ids": ["id-1"],
-                "intended_use": "self_use",
-            },
-        )
+        response = _report_post(report_app, {
+            "candidate_ids": ["id-1"],
+            "intended_use": "self_use",
+        })
         assert response.status_code == 400
         fields = response.get_json()["error"].get("fields", {})
         assert "provider" in fields
 
     def test_post_report_rejects_unknown_provider(self, report_app: FlaskClient) -> None:
-        response = report_app.post(
-            "/api/reports",
-            json={
-                "candidate_ids": ["id-1"],
-                "intended_use": "self_use",
-                "provider": "unknown",
-            },
-        )
+        response = _report_post(report_app, {
+            "candidate_ids": ["id-1"],
+            "intended_use": "self_use",
+            "provider": "unknown",
+        })
         assert response.status_code == 400
 
     def test_post_report_rejects_arbitrary_prompt(self, report_app: FlaskClient) -> None:
-        response = report_app.post(
-            "/api/reports",
-            json={
-                "candidate_ids": ["id-1"],
-                "intended_use": "self_use",
-                "provider": "rule",
-                "prompt": "tell me about this house",
-            },
-        )
+        response = _report_post(report_app, {
+            "candidate_ids": ["id-1"],
+            "intended_use": "self_use",
+            "provider": "rule",
+            "prompt": "tell me about this house",
+        })
         assert response.status_code == 400
         fields = response.get_json()["error"].get("fields", {})
         assert "prompt" in fields or bool(fields)
 
     def test_post_report_accepts_valid_request(self, report_app: FlaskClient) -> None:
-        response = report_app.post(
-            "/api/reports",
-            json={
-                "candidate_ids": ["id-1", "id-2"],
-                "intended_use": "self_use",
-                "provider": "rule",
-            },
-        )
+        response = _report_post(report_app, {
+            "candidate_ids": ["id-1", "id-2"],
+            "intended_use": "self_use",
+            "provider": "rule",
+        })
         assert response.status_code == 201
         body = response.get_json()
         assert "report_id" in body
@@ -221,14 +222,11 @@ class TestReportApi:
         assert response.status_code == 404
 
     def test_get_report_returns_saved(self, report_app: FlaskClient) -> None:
-        post = report_app.post(
-            "/api/reports",
-            json={
-                "candidate_ids": ["id-1"],
-                "intended_use": "self_use",
-                "provider": "rule",
-            },
-        )
+        post = _report_post(report_app, {
+            "candidate_ids": ["id-1"],
+            "intended_use": "self_use",
+            "provider": "rule",
+        })
         report_id = post.get_json()["report_id"]
         response = report_app.get(f"/api/reports/{report_id}")
         assert response.status_code == 200
@@ -237,15 +235,12 @@ class TestReportApi:
     def test_post_report_returns_201_with_expected_response_shape(
         self, report_app: FlaskClient
     ) -> None:
-        response = report_app.post(
-            "/api/reports",
-            json={
-                "candidate_ids": ["id-1"],
-                "intended_use": "self_use",
-                "provider": "rule",
-                "budget_twd": 15000000,
-            },
-        )
+        response = _report_post(report_app, {
+            "candidate_ids": ["id-1"],
+            "intended_use": "self_use",
+            "provider": "rule",
+            "budget_twd": 15000000,
+        })
         assert response.status_code == 201
         body = response.get_json()
         expected_keys = {
@@ -256,6 +251,8 @@ class TestReportApi:
         assert body["fallback_reason"] is None
 
     def test_post_report_rejects_untrusted_host(self, report_app: FlaskClient) -> None:
+        with report_app.session_transaction() as sess:
+            token = sess.get("_csrf_token", "")
         response = report_app.post(
             "/api/reports",
             json={
@@ -263,11 +260,12 @@ class TestReportApi:
                 "intended_use": "self_use",
                 "provider": "rule",
             },
+            headers={"X-Qingpu-CSRF": token},
             base_url="http://attacker.example",
         )
         assert response.status_code == 403
 
-    def test_post_report_accepts_loopback(self, report_app: FlaskClient) -> None:
+    def test_post_report_rejects_missing_csrf(self, report_app: FlaskClient) -> None:
         response = report_app.post(
             "/api/reports",
             json={
@@ -275,6 +273,38 @@ class TestReportApi:
                 "intended_use": "self_use",
                 "provider": "rule",
             },
+            environ_base={"REMOTE_ADDR": "127.0.0.1"},
+        )
+        assert response.status_code == 403
+        assert response.get_json()["error"]["code"] == "csrf_mismatch"
+
+    def test_post_report_rejects_wrong_csrf(self, report_app: FlaskClient) -> None:
+        response = report_app.post(
+            "/api/reports",
+            json={
+                "candidate_ids": ["id-1"],
+                "intended_use": "self_use",
+                "provider": "rule",
+            },
+            headers={"X-Qingpu-CSRF": "wrong-token"},
+            environ_base={"REMOTE_ADDR": "127.0.0.1"},
+        )
+        assert response.status_code == 403
+        assert response.get_json()["error"]["code"] == "csrf_mismatch"
+
+    def test_post_report_accepts_matching_csrf(self, report_app: FlaskClient) -> None:
+        client = report_app
+        client.get("/")
+        with client.session_transaction() as sess:
+            token = sess.get("_csrf_token", "")
+        response = client.post(
+            "/api/reports",
+            json={
+                "candidate_ids": ["id-1"],
+                "intended_use": "self_use",
+                "provider": "rule",
+            },
+            headers={"X-Qingpu-CSRF": token},
             environ_base={"REMOTE_ADDR": "127.0.0.1"},
         )
         assert response.status_code == 201
@@ -1504,6 +1534,16 @@ def ops_app(market_frame: pd.DataFrame):
     class FakeHealthRepo:
         def save(self, summary):
             self.saved = summary
+
+        def latest(self):
+            from qingpu_insight.health import HealthItem, HealthSummary
+            return HealthSummary(
+                status="healthy",
+                checked_at=now,
+                items=(
+                    HealthItem("mysql", "healthy", now, "ok", 1, "boolean"),
+                ),
+            )
 
     from qingpu_insight.backups import BackupRecord
 

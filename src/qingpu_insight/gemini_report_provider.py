@@ -39,7 +39,7 @@ class GeminiReportProvider:
         start = time.perf_counter()
         prompt = self._build_prompt(pack, repair_codes)
         schema = BuyerReportDraft.model_json_schema()
-        url = f"{_GEMINI_BASE}/{self._model}:generateContent?key={self._api_key}"
+        url = f"{_GEMINI_BASE}/{self._model}:generateContent"
         body: dict[str, Any] = {
             "system_instruction": {
                 "parts": [{"text": (
@@ -61,8 +61,13 @@ class GeminiReportProvider:
             ],
         }
         try:
+            headers = {
+                "Content-Type": "application/json",
+                "x-goog-api-key": self._api_key,
+            }
             resp = self._session.post(
                 url,
+                headers=headers,
                 json=body,
                 timeout=self._timeout,
             )

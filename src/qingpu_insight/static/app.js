@@ -634,13 +634,17 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   fetchOps();
-  setInterval(fetchOps, 60000);
+  setInterval(function () {
+    if (document.hidden) return;
+    fetchOps();
+  }, 60000);
 })();
 
 // --- Report (M4.4) ---
 
 (function () {
   const form = document.getElementById("report-form");
+  const submitBtn = document.getElementById("report-submit");
   const candidateInput = document.getElementById("report-candidate-ids");
   const providerSelect = document.getElementById("report-provider");
   const geminiNotice = document.getElementById("gemini-notice");
@@ -754,6 +758,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
   form.addEventListener("submit", function (e) {
     e.preventDefault();
+    if (submitBtn) submitBtn.disabled = true;
     statusEl.textContent = "產生報告中…";
     resultSection.hidden = true;
 
@@ -780,6 +785,7 @@ document.addEventListener("DOMContentLoaded", function () {
     var budgetVal = budgetInput.value;
     if (budgetVal) payload.budget_twd = parseInt(budgetVal);
 
+    var restore = function () { if (submitBtn) submitBtn.disabled = false; };
     fetch("/api/reports", {
       method: "POST",
       headers: {
@@ -791,6 +797,7 @@ document.addEventListener("DOMContentLoaded", function () {
       .then(function (r) {
         if (!r.ok) {
           return r.json().then(function (err) {
+            restore();
             throw new Error(
               (err.error && err.error.fields
                 ? Object.keys(err.error.fields).join("、") + " 欄位錯誤"
@@ -803,10 +810,12 @@ document.addEventListener("DOMContentLoaded", function () {
         return r.json();
       })
       .then(function (report) {
+        restore();
         statusEl.textContent = "";
         renderReport(report);
       })
       .catch(function (err) {
+        restore();
         statusEl.textContent = err.message;
         resultSection.hidden = true;
       });

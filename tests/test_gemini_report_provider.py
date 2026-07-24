@@ -110,7 +110,7 @@ class TestGeminiReportProvider:
             GeminiReportProvider(api_key=None, model="gemini-pro")  # type: ignore[arg-type]
 
     def test_successful_response(self) -> None:
-        url = f"{_GEMINI_URL}?key=test-key"
+        url = _GEMINI_URL
         with responses.RequestsMock() as rsps:
             rsps.post(url, json=_gemini_response(_VALID_DRAFT_DICT), status=200)
             provider = GeminiReportProvider(api_key="test-key", model="gemini-pro")
@@ -122,7 +122,7 @@ class TestGeminiReportProvider:
         assert result.draft.summary.text == "總價15000000元，面積30.00坪"
 
     def test_handles_markdown_code_fence(self) -> None:
-        url = f"{_GEMINI_URL}?key=test-key"
+        url = _GEMINI_URL
         raw = f"```json\n{json.dumps(_VALID_DRAFT_DICT, ensure_ascii=False)}\n```"
         with responses.RequestsMock() as rsps:
             rsps.post(
@@ -157,7 +157,7 @@ class TestGeminiReportProvider:
         assert exc.value.code == "gemini_connection_error"
 
     def test_http_429(self) -> None:
-        url = f"{_GEMINI_URL}?key=test-key"
+        url = _GEMINI_URL
         with responses.RequestsMock() as rsps:
             rsps.post(url, body="Rate Limited", status=429)
             provider = GeminiReportProvider(api_key="test-key", model="gemini-pro")
@@ -166,7 +166,7 @@ class TestGeminiReportProvider:
             assert exc.value.code == "gemini_http_error"
 
     def test_http_5xx(self) -> None:
-        url = f"{_GEMINI_URL}?key=test-key"
+        url = _GEMINI_URL
         with responses.RequestsMock() as rsps:
             rsps.post(url, body="Internal Error", status=500)
             provider = GeminiReportProvider(api_key="test-key", model="gemini-pro")
@@ -175,7 +175,7 @@ class TestGeminiReportProvider:
             assert exc.value.code == "gemini_http_error"
 
     def test_non_json_response(self) -> None:
-        url = f"{_GEMINI_URL}?key=test-key"
+        url = _GEMINI_URL
         with responses.RequestsMock() as rsps:
             rsps.post(url, body="not json", status=200)
             provider = GeminiReportProvider(api_key="test-key", model="gemini-pro")
@@ -184,7 +184,7 @@ class TestGeminiReportProvider:
             assert exc.value.code == "gemini_non_json_response"
 
     def test_missing_candidates_field(self) -> None:
-        url = f"{_GEMINI_URL}?key=test-key"
+        url = _GEMINI_URL
         with responses.RequestsMock() as rsps:
             rsps.post(url, json={"error": "bad request"}, status=200)
             provider = GeminiReportProvider(api_key="test-key", model="gemini-pro")
@@ -193,7 +193,7 @@ class TestGeminiReportProvider:
             assert exc.value.code == "gemini_non_json_response"
 
     def test_empty_candidates(self) -> None:
-        url = f"{_GEMINI_URL}?key=test-key"
+        url = _GEMINI_URL
         with responses.RequestsMock() as rsps:
             rsps.post(url, json={"candidates": []}, status=200)
             provider = GeminiReportProvider(api_key="test-key", model="gemini-pro")
@@ -202,7 +202,7 @@ class TestGeminiReportProvider:
             assert exc.value.code == "gemini_non_json_response"
 
     def test_non_json_content(self) -> None:
-        url = f"{_GEMINI_URL}?key=test-key"
+        url = _GEMINI_URL
         with responses.RequestsMock() as rsps:
             rsps.post(
                 url,
@@ -215,7 +215,7 @@ class TestGeminiReportProvider:
             assert exc.value.code == "gemini_non_json_response"
 
     def test_validation_error(self) -> None:
-        url = f"{_GEMINI_URL}?key=test-key"
+        url = _GEMINI_URL
         bad = {"summary": {"text": "bad", "fact_ids": [], "numeric_fact_ids": []}}
         with responses.RequestsMock() as rsps:
             rsps.post(url, json=_gemini_response(bad), status=200)
@@ -242,7 +242,7 @@ class TestGeminiReportProvider:
         assert "super-secret-key" not in repr(provider)
 
     def test_latency_recorded(self) -> None:
-        url = f"{_GEMINI_URL}?key=test-key"
+        url = _GEMINI_URL
         with responses.RequestsMock() as rsps:
             rsps.post(url, json=_gemini_response(_VALID_DRAFT_DICT), status=200)
             provider = GeminiReportProvider(api_key="test-key", model="gemini-pro")
