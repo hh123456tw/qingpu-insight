@@ -12,6 +12,7 @@ from math import isfinite
 from numbers import Real
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import joblib
 import pandas as pd
@@ -71,6 +72,7 @@ from qingpu_insight.listing_update import (
     PreparedListingType,
 )
 from qingpu_insight.listing_valuation import compare_listing_to_model
+from qingpu_insight.llm_benchmark import run_benchmark
 from qingpu_insight.location_evidence import LocationEvidence
 from qingpu_insight.market_cleaning import build_market_dataset
 from qingpu_insight.model_features import build_model_frame
@@ -87,7 +89,7 @@ from qingpu_insight.model_training import (
 from qingpu_insight.moi import read_moi_csv
 from qingpu_insight.mysql_loader import load_market_rows
 from qingpu_insight.publishing import MySQLVersionPublisher
-from qingpu_insight.report_contracts import ReportRequest
+from qingpu_insight.report_contracts import EvidencePack, ReportRequest
 from qingpu_insight.report_service import ReportService
 from qingpu_insight.reporting import write_report
 from qingpu_insight.valuation import ModelRegistry, ValuationBundle, train_artifact
@@ -1835,7 +1837,146 @@ def build_parser() -> argparse.ArgumentParser:
         help="intended use of the report",
     )
 
+    benchmark_parser = subparsers.add_parser(
+        "llm-benchmark",
+        help="run LLM benchmark against fixed anonymous cases",
+    )
+    benchmark_parser.add_argument(
+        "--cases", required=True,
+        help="path to JSON file with case EvidencePacks",
+    )
+    benchmark_parser.add_argument(
+        "--models", nargs="+", required=True,
+        help="model name(s) to benchmark",
+    )
+    benchmark_parser.add_argument(
+        "--output-dir", default="outputs/m44-benchmark",
+        help="output directory for benchmark artifacts",
+    )
+    benchmark_parser.add_argument(
+        "--models-env",
+        help="environment variable containing comma-separated model IDs",
+    )
+
+    smoke_parser = subparsers.add_parser(
+        "llm-smoke",
+        help="quick smoke test for a single model",
+    )
+    smoke_parser.add_argument(
+        "--provider", choices=("ollama", "gemini"), default="ollama",
+        help="report provider (default: ollama)",
+    )
+    smoke_parser.add_argument(
+        "--model", default=None,
+        help="model name to test",
+    )
+
     return parser
+
+
+def llm_benchmark(root: Path, args) -> int:
+    cases_path = Path(args.cases)
+    if not cases_path.exists():
+        print(f"cases file not found: {cases_path}", file=sys.stderr)
+        return 1
+    try:
+        raw = json.loads(cases_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeError) as exc:
+        print(f"invalid cases file: {exc}", file=sys.stderr)
+        return 1
+
+    if args.models_env:
+        model_env = os.environ.get(args.models_env, "")
+        models = [m.strip() for m in model_env.split(",") if m.strip()]
+        if not models:
+            print(
+                f"{args.models_env} is empty or not set",
+                file=sys.stderr,
+            )
+            return 1
+    else:
+        models = list(args.models)
+
+    cases: list[EvidencePack] = []
+    for item in raw:
+        try:
+            cases.append(EvidencePack.model_validate(item))
+        except Exception as exc:
+            print(f"invalid case: {exc}", file=sys.stderr)
+            return 1
+
+    from qingpu_insight.report_providers import RuleReportProvider
+
+    providers: dict[str, Any] = {}
+    for model_name in models:
+        providers[model_name] = RuleReportProvider()
+
+    output_dir = Path(args.output_dir)
+    try:
+        results, summaries = run_benchmark(cases, providers, output_dir)
+    except Exception as exc:
+        print(f"benchmark failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Benchmark complete: {len(results)} results, {len(summaries)} model(s)")
+    for s in summaries:
+        print(
+            f"  {s.model}: {s.case_count} cases, "
+            f"{s.success_rate:.1%} success, "
+            f"p50={s.p50_latency:.0f}ms"
+        )
+    return 0
+
+
+def llm_smoke(root: Path, args) -> int:
+    from qingpu_insight.report_providers import RuleReportProvider
+
+    provider = RuleReportProvider()
+    from qingpu_insight.evidence import EvidenceBuilder
+
+    builder = _create_fallback_evidence_repository(root)
+    eb = EvidenceBuilder(builder)
+
+    try:
+        req = ReportRequest(
+            candidate_ids=("smoke",),
+            intended_use="self_use",
+            provider="rule",
+        )
+        pack = eb.build(req)
+    except Exception:
+        from qingpu_insight.report_contracts import (
+            EvidenceCandidate,
+        )
+
+        pack = EvidencePack(
+            pack_id="smoke",
+            dataset_version="local",
+            generated_at=datetime.now(UTC).isoformat(),
+            candidates=(EvidenceCandidate(candidate_id="smoke", listing_type="sale"),),
+            facts=(),
+            limitations=("smoke: no local data available",),
+        )
+
+    try:
+        result = provider.generate(pack)
+    except Exception as exc:
+        print(f"smoke test failed: {exc}", file=sys.stderr)
+        return 1
+
+    from qingpu_insight.llm_benchmark import score_result
+
+    br = score_result(result, pack)
+    print(json.dumps({
+        "provider": result.provider,
+        "model": result.model,
+        "schema_success": br.schema_success,
+        "fact_accuracy": br.fact_accuracy,
+        "coverage": br.required_section_coverage,
+        "latency_ms": br.latency_ms,
+        "failure_codes": list(br.failure_codes),
+    }, ensure_ascii=False))
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1876,6 +2017,10 @@ def main(argv: list[str] | None = None) -> int:
         return backup_restore_drill(root, args.backup_id)
     if args.command == "report-generate":
         return report_generate(root, args)
+    if args.command == "llm-benchmark":
+        return llm_benchmark(root, args)
+    if args.command == "llm-smoke":
+        return llm_smoke(root, args)
     return 0
 
 
