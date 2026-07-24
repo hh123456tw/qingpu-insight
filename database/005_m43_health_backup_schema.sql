@@ -17,14 +17,24 @@ CREATE TABLE IF NOT EXISTS health_items (
     PRIMARY KEY (run_id, code)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-DROP TABLE IF EXISTS backup_records;
-CREATE TABLE backup_records (
+-- Forward-compatible backup_records: never DROP, only CREATE IF NOT EXISTS + ALTER for upgrades
+CREATE TABLE IF NOT EXISTS backup_records (
     backup_id VARCHAR(36) NOT NULL PRIMARY KEY,
     status VARCHAR(32) NOT NULL,
     path VARCHAR(1024) NOT NULL,
-    sha256 CHAR(64) NOT NULL,
-    size_bytes BIGINT UNSIGNED NOT NULL,
+    sha256 CHAR(64) NOT NULL DEFAULT '',
+    size_bytes BIGINT UNSIGNED NOT NULL DEFAULT 0,
     created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     restore_status VARCHAR(32) NULL,
     restore_checked_at DATETIME(3) NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Migrate from old schema: if checksum column exists, backfill sha256
+SET @has_checksum = (SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'backup_records' AND COLUMN_NAME = 'checksum');
+SET @migrate_sql = IF(@has_checksum > 0,
+    'UPDATE backup_records SET sha256 = checksum WHERE sha256 = \'\'',
+    'SELECT 1');
+PREPARE stmt FROM @migrate_sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
