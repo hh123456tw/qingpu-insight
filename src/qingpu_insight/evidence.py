@@ -69,7 +69,10 @@ class EvidenceBuilder:
             candidates_df = candidates_df[candidates_df["dataset_version"] == version]
 
         requested = set(request.candidate_ids)
-        found = set(candidates_df["listing_id"].astype(str))
+        if "listing_id" not in candidates_df.columns:
+            found: set[str] = set()
+        else:
+            found = set(candidates_df["listing_id"].astype(str))
         missing = sorted(requested - found)
         if missing:
             raise UnknownCandidateError(tuple(missing))
