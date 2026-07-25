@@ -3,17 +3,23 @@ import warnings
 import numpy as np
 import pandas as pd
 import pytest
+from sklearn.base import BaseEstimator
 
 from qingpu_insight.model_features import FEATURE_COLUMNS
 from qingpu_insight.model_training import (
+    BaselineEvaluationError,
     CandidateEvaluation,
+    ModelExperiment,
     RecentMedianBaseline,
     TimeSplit,
     candidate_estimators,
     evaluate_candidate,
+    evaluate_fitted_candidate,
     leakage_audit,
     make_preprocessor,
     metric_rows,
+    passes_release_gate,
+    run_model_experiment,
     select_release_candidate,
     split_by_time,
 )
@@ -235,7 +241,7 @@ def test_evaluate_candidate_returns_evaluation(model_frame):
 
     split = split_by_time(model_frame, test_months=12, calibration_months=6)
     estimator = DummyRegressor(strategy="mean")
-    result = evaluate_candidate("dummy_mean", estimator, split)
+    result = evaluate_candidate("dummy_mean", estimator, split.train, split.test)
     assert result.name == "dummy_mean"
     assert result.estimator is estimator
     assert isinstance(result.overall_mae, float)
@@ -331,3 +337,134 @@ def test_release_gate_ignores_unpublished_small_station_metrics():
         metrics=pd.DataFrame(),
     )
     assert select_release_candidate([baseline, candidate]).name == "ridge"
+
+
+class FailingRegressor(BaseEstimator):
+    def fit(self, X, y=None):
+        raise RuntimeError("fit failed")
+
+    def predict(self, X):
+        return np.zeros(len(X))
+
+
+def test_experiment_selects_on_calibration_before_reading_final_test(
+    model_frame: pd.DataFrame,
+) -> None:
+    from sklearn.dummy import DummyRegressor
+
+    split = split_by_time(model_frame)
+    estimators = {
+        "low_quantile": DummyRegressor(strategy="quantile", quantile=0.25),
+        "high_quantile": DummyRegressor(strategy="quantile", quantile=0.75),
+    }
+    first = run_model_experiment(split, estimators)
+
+    hostile_test = split.test.copy()
+    hostile_test["target_unit_price_twd"] = 2_000_000.0
+    second = run_model_experiment(
+        TimeSplit(split.train, split.calibration, hostile_test),
+        {
+            "low_quantile": DummyRegressor(strategy="quantile", quantile=0.25),
+            "high_quantile": DummyRegressor(strategy="quantile", quantile=0.75),
+        },
+    )
+
+    assert second.selected_name == first.selected_name
+    assert set(second.final_test_results) == {"baseline", first.selected_name}
+
+
+def test_experiment_candidate_failure_is_isolated(model_frame):
+    from sklearn.dummy import DummyRegressor
+
+    split = split_by_time(model_frame)
+    estimators = {
+        "broken": FailingRegressor(),
+        "ok": DummyRegressor(strategy="mean"),
+    }
+    result = run_model_experiment(split, estimators)
+    assert result.selected_name != "broken"
+    assert result.candidate_errors == {"broken": "candidate_failed"}
+
+
+def test_experiment_baseline_failure_raises_error():
+    from sklearn.dummy import DummyRegressor
+
+    n = 150
+    train = pd.DataFrame(
+        {
+            "transaction_date": [pd.Timestamp("2024-01-01")] * n,
+            "station_code": ["A17"] * n,
+            "building_type": ["住宅大樓"] * n,
+            "target_unit_price_twd": [600_000.0] * n,
+        }
+    )
+    split = TimeSplit(train=train, calibration=train, test=train)
+    with pytest.raises(BaselineEvaluationError):
+        run_model_experiment(split, {"dummy": DummyRegressor()})
+
+
+def test_experiment_final_gate_returns_recommended_false_when_candidate_fails():
+    np.random.seed(42)
+    base = pd.Timestamp("2022-01-01")
+    total_days = 1460
+    n = 800
+    dates = [base + pd.DateOffset(days=int(i * total_days / n)) for i in range(n)]
+
+    rows = []
+    for i in range(n):
+        frac = i / n
+        if frac < 0.6:
+            target = 600_000.0
+        elif frac < 0.75:
+            target = 550_000.0
+        else:
+            target = 2_000_000.0
+        dt = dates[i]
+        rows.append(
+            {
+                "transaction_date": dt,
+                "station_code": "A17",
+                "station_distance_m": 500.0,
+                "building_area_ping": 35.0,
+                "building_type": "住宅大樓",
+                "bedrooms": 3,
+                "living_rooms": 2,
+                "bathrooms": 2,
+                "building_age_years": 10.0,
+                "floor": 8,
+                "total_floors": 15,
+                "floor_ratio": 0.53,
+                "parking_type": "",
+                "parking_area_ping": 0.0,
+                "transaction_year": dt.year,
+                "transaction_month": dt.month,
+                "target_unit_price_twd": target,
+                "transaction_key": f"T{i}",
+                "road_key": f"R{i % 10}",
+            }
+        )
+    frame = pd.DataFrame(rows)
+    split = split_by_time(frame)
+
+    from sklearn.dummy import DummyRegressor
+
+    estimators = {
+        "cheater": DummyRegressor(strategy="constant", constant=550_000),
+    }
+    result = run_model_experiment(split, estimators)
+    assert result.selected_name == "cheater"
+    assert not result.recommended
+    assert "final_gate_failed" in result.reason_codes
+
+
+def test_experiment_no_candidate_beats_baseline_returns_baseline_selected(model_frame):
+    from sklearn.dummy import DummyRegressor
+
+    split = split_by_time(model_frame)
+    estimators = {
+        "terrible": DummyRegressor(strategy="constant", constant=1),
+    }
+    result = run_model_experiment(split, estimators)
+    assert result.selected_name == "baseline"
+    assert not result.recommended
+    assert "baseline_selected" in result.reason_codes

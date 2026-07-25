@@ -136,22 +136,51 @@ class CandidateEvaluation:
     metrics: pd.DataFrame
 
 
-def evaluate_candidate(name: str, estimator: Any, split: TimeSplit) -> CandidateEvaluation:
-    estimator.fit(split.train[list(FEATURE_COLUMNS)], split.train["target_unit_price_twd"])
-    predicted = estimator.predict(split.test[list(FEATURE_COLUMNS)])
-    actual = split.test["target_unit_price_twd"].values
-    metrics = metric_rows(actual, predicted, split.test)
-    overall_mae = float(metrics.loc["overall", "mae"])
-    station_mape = {
-        idx.split(":", 1)[1]: float(row["mape"])
-        for idx, row in metrics.iterrows()
-        if idx.startswith("station:")
-    }
+@dataclass(frozen=True)
+class ModelExperiment:
+    selection_results: tuple[CandidateEvaluation, ...]
+    selected_name: str
+    selected_estimator: Any
+    final_test_results: dict[str, CandidateEvaluation]
+    candidate_errors: dict[str, str]
+    recommended: bool
+    reason_codes: tuple[str, ...]
+
+
+class BaselineEvaluationError(Exception):
+    pass
+
+
+def evaluate_candidate(
+    name: str,
+    estimator: Any,
+    train_frame: pd.DataFrame,
+    evaluation_frame: pd.DataFrame,
+) -> CandidateEvaluation:
+    estimator.fit(
+        train_frame[list(FEATURE_COLUMNS)],
+        train_frame["target_unit_price_twd"],
+    )
+    return evaluate_fitted_candidate(name, estimator, evaluation_frame)
+
+
+def evaluate_fitted_candidate(
+    name: str,
+    estimator: Any,
+    evaluation_frame: pd.DataFrame,
+) -> CandidateEvaluation:
+    predicted = estimator.predict(evaluation_frame[list(FEATURE_COLUMNS)])
+    actual = evaluation_frame["target_unit_price_twd"].to_numpy()
+    metrics = metric_rows(actual, predicted, evaluation_frame)
     return CandidateEvaluation(
         name=name,
         estimator=estimator,
-        overall_mae=overall_mae,
-        station_mape=station_mape,
+        overall_mae=float(metrics.loc["overall", "mae"]),
+        station_mape={
+            index.split(":", 1)[1]: float(row["mape"])
+            for index, row in metrics.iterrows()
+            if index.startswith("station:")
+        },
         metrics=metrics,
     )
 
@@ -243,17 +272,84 @@ def candidate_estimators(seed: int = 42) -> dict[str, Pipeline]:
     }
 
 
+def passes_release_gate(
+    candidate: CandidateEvaluation,
+    baseline: CandidateEvaluation,
+) -> bool:
+    published_stations = set(baseline.station_mape)
+    return (
+        candidate.name != "baseline"
+        and candidate.overall_mae <= baseline.overall_mae * 0.98
+        and published_stations <= set(candidate.station_mape)
+        and all(
+            candidate.station_mape[station] <= baseline.station_mape[station] * 1.10
+            for station in published_stations
+        )
+    )
+
+
 def select_release_candidate(results: list[CandidateEvaluation]) -> CandidateEvaluation:
     baseline = next(result for result in results if result.name == "baseline")
-    published_stations = set(baseline.station_mape)
-    eligible = [
-        result
-        for result in results
-        if result.name != "baseline"
-        and result.overall_mae <= baseline.overall_mae * 0.98
-        and published_stations <= set(result.station_mape)
-        and all(
-            result.station_mape[s] <= baseline.station_mape[s] * 1.10 for s in published_stations
-        )
-    ]
-    return min(eligible, key=lambda result: result.overall_mae, default=baseline)
+    eligible = [r for r in results if passes_release_gate(r, baseline)]
+    return min(eligible, key=lambda r: r.overall_mae, default=baseline)
+
+
+def run_model_experiment(
+    split: TimeSplit,
+    estimators: dict[str, Any] | None = None,
+) -> ModelExperiment:
+    if estimators is None:
+        estimators = candidate_estimators()
+
+    baseline = RecentMedianBaseline()
+
+    try:
+        baseline.fit(split.train)
+        baseline_cal = evaluate_fitted_candidate("baseline", baseline, split.calibration)
+    except Exception as exc:
+        raise BaselineEvaluationError("baseline evaluation failed") from exc
+
+    calibration_results: list[CandidateEvaluation] = [baseline_cal]
+    candidate_errors: dict[str, str] = {}
+
+    for name, est in estimators.items():
+        try:
+            est.fit(split.train[list(FEATURE_COLUMNS)], split.train["target_unit_price_twd"])
+            result = evaluate_fitted_candidate(name, est, split.calibration)
+            calibration_results.append(result)
+        except Exception:
+            candidate_errors[name] = "candidate_failed"
+
+    selected = select_release_candidate(calibration_results)
+    selected_name = selected.name
+    selected_estimator = selected.estimator
+
+    final_test_results: dict[str, CandidateEvaluation] = {}
+    final_baseline = evaluate_fitted_candidate("baseline", baseline, split.test)
+    final_test_results["baseline"] = final_baseline
+
+    if selected_name != "baseline":
+        final_selected = evaluate_fitted_candidate(selected_name, selected_estimator, split.test)
+        final_test_results[selected_name] = final_selected
+    else:
+        final_selected = final_baseline
+
+    if selected_name == "baseline":
+        recommended = False
+        reason_codes: tuple[str, ...] = ("baseline_selected",)
+    elif passes_release_gate(final_selected, final_baseline):
+        recommended = True
+        reason_codes = ()
+    else:
+        recommended = False
+        reason_codes = ("final_gate_failed",)
+
+    return ModelExperiment(
+        selection_results=tuple(calibration_results),
+        selected_name=selected_name,
+        selected_estimator=selected_estimator,
+        final_test_results=final_test_results,
+        candidate_errors=candidate_errors,
+        recommended=recommended,
+        reason_codes=reason_codes,
+    )

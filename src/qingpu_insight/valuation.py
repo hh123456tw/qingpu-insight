@@ -338,8 +338,8 @@ def train_artifact(
 
     imp = permutation_importance(
         selected.estimator,
-        split.test[list(FEATURE_COLUMNS)],
-        split.test["target_unit_price_twd"],
+        split.calibration[list(FEATURE_COLUMNS)],
+        split.calibration["target_unit_price_twd"],
         scoring="neg_mean_absolute_error",
         n_repeats=5,
         random_state=42,

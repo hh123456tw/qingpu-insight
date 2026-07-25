@@ -1,4 +1,5 @@
 from dataclasses import replace
+from typing import Any
 
 import joblib
 import numpy as np
@@ -378,6 +379,109 @@ def test_similar_transactions_insufficient_data(bundle):
     result = similar_transactions(bundle, row, empty_market)
     assert result["comparable_scope"] == "insufficient_data"
     assert len(result["comparables"]) == 0
+
+
+class FitRecordingEstimator:
+    def __init__(self):
+        self.fit_called = False
+
+    def fit(self, X, y=None):
+        self.fit_called = True
+        return self
+
+    def predict(self, X):
+        return np.full(len(X), 500_000)
+
+
+def test_train_artifact_uses_calibration_and_does_not_refit(tmp_path):
+    np.random.seed(42)
+    n = 200
+    train = pd.DataFrame(
+        {
+            "transaction_date": pd.date_range("2024-01-01", periods=n, freq="D"),
+            "target_unit_price_twd": np.random.uniform(200_000, 800_000, n),
+        }
+    )
+    for col in FEATURE_COLUMNS:
+        if col in ("station_code", "building_type", "parking_type"):
+            train[col] = "A17"
+        else:
+            train[col] = np.random.randn(n)
+    train["transaction_year"] = 2025
+    train["transaction_month"] = 6
+    for col in FEATURE_COLUMNS:
+        if col not in train.columns:
+            train[col] = 0
+
+    calibration = train.iloc[:50].copy()
+    test = train.iloc[50:100].copy()
+
+    from dataclasses import dataclass
+
+    @dataclass
+    class FakeSplit:
+        train: pd.DataFrame
+        calibration: pd.DataFrame
+        test: pd.DataFrame
+
+    split = FakeSplit(train=train, calibration=calibration, test=test)
+
+    est = FitRecordingEstimator()
+
+    @dataclass
+    class FakeSelected:
+        name: str
+        estimator: Any
+        metrics: pd.DataFrame
+
+    metrics = pd.DataFrame(
+        {"overall": {"mae": 50000, "mape": 10, "rmse": 60000, "r2": 0.5, "count": 50}}
+    ).T
+
+    bundle = ValuationBundle(
+        transaction_type="resale",
+        model_name="baseline",
+        model_version="v1",
+        pipeline=est,
+        interval_abs_residual_twd_per_ping=50000,
+        feature_ranges={},
+        feature_hard_ranges={},
+        feature_medians={},
+        global_importance=[],
+        reference_rows=train,
+        data_min_date="2024-01-01",
+        data_max_date="2026-06-01",
+        metrics={},
+    )
+    selected = FakeSelected(name="baseline", estimator=est, metrics=metrics)
+
+    import sklearn.inspection
+
+    original_pi = sklearn.inspection.permutation_importance
+    pi_X_captured = {}
+
+    def fake_pi(estimator, X, y, **kwargs):
+        pi_X_captured["X"] = X
+        from types import SimpleNamespace
+
+        return SimpleNamespace(importances_mean=np.zeros(len(FEATURE_COLUMNS)))
+
+    sklearn.inspection.permutation_importance = fake_pi
+
+    try:
+        result_path = train_artifact("resale", selected, split, bundle, tmp_path)
+    finally:
+        sklearn.inspection.permutation_importance = original_pi
+
+    assert not est.fit_called, "train_artifact must not call fit()"
+
+    captured_X = pi_X_captured["X"]
+    assert len(captured_X) == len(calibration)
+    assert list(captured_X.columns) == list(FEATURE_COLUMNS)
+
+    loaded: ValuationBundle = joblib.load(result_path)
+    assert loaded.transaction_type == "resale"
+    assert loaded.model_name == "baseline"
 
 
 def test_train_artifact_round_trip(tmp_path):
