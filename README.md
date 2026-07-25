@@ -265,6 +265,8 @@ Get-Content database/002_add_valuation_columns.sql | mysql -h 127.0.0.1 -u <user
 Get-Content database/003_listing_intelligence_schema.sql | mysql -h 127.0.0.1 -u <user> -p <database>
 Get-Content database/004_listing_range_fields.sql | mysql -h 127.0.0.1 -u <user> -p <database>
 Get-Content database/004_m4_jobs_publishing_schema.sql | mysql -h 127.0.0.1 -u <user> -p <database>
+Get-Content database/005_m43_health_backup_schema.sql | mysql -h 127.0.0.1 -u <user> -p <database>
+Get-Content database/006_m44_reports_schema.sql | mysql -h 127.0.0.1 -u <user> -p <database>
 ```
 
 正式 artifact 寫入 `data/processed/listing_versions/<version>.parquet`；advisory lock 位於
@@ -353,7 +355,46 @@ code/message；不包含 DB URL、SQL、traceback、HTML、電話或內部 repos
 
 兩個 GET 端點沿用 M4.2 的 loopback + trusted Host 保護。無任何 backup／restore HTTP mutation route。
 
-### M4.3 acceptance
+### M4.4 Reports 工作流程
+
+```powershell
+# 更新刊登資料（最少 1 頁）
+.\.venv\Scripts\qingpu-data.exe listing-update --types sale newhouse rental --max-pages 1
+
+# 執行健康檢查
+.\.venv\Scripts\qingpu-data.exe health-run
+
+# 取得一個有效的刊登 ID
+$listingId = mysql -h 127.0.0.1 -u root -p --batch --skip-column-names qingpu_insight -e "SELECT source_listing_id FROM listing_current WHERE active = TRUE LIMIT 1"
+
+# 用 Rule（無 LLM 需求）產生買方報告
+.\.venv\Scripts\qingpu-data.exe report-generate --candidate $listingId --provider rule --intended-use self_use
+
+# 啟動網頁（含報告 API /api/reports）
+.\.venv\Scripts\qingpu-web.exe
+```
+
+Ollama 與 Gemini 為可選的 LLM report provider。未設定時 Web UI 與 CLI 可選 provider `rule`，
+以 RuleReportProvider 產生規則式報告，不將 fallback 描述為模型成功。設定方式：
+
+```powershell
+$env:QINGPU_OLLAMA_MODEL = "gemma3:4b"
+$env:QINGPU_GEMINI_API_KEY = "<your-key>"
+$env:QINGPU_GEMINI_MODEL = "gemini-2.0-flash"
+```
+
+### Smoke 與 Benchmark
+
+```powershell
+# Rule smoke（不需 LLM）
+.\.venv\Scripts\qingpu-data.exe llm-smoke --provider rule --model rule --output-dir outputs/m44-benchmark
+
+# Ollama benchmark（需要已安裝的模型）
+$env:M44_BENCHMARK_MODELS = ((ollama list | Select-Object -Skip 1 -First 1) -split '\s+')[0]
+.\.venv\Scripts\qingpu-data.exe llm-benchmark --cases benchmarks/m44_cases.json --models-env M44_BENCHMARK_MODELS --provider ollama --output-dir outputs/m44-benchmark
+```
+
+## M4.3 acceptance
 
 ```powershell
 $env:PYTHONPATH = (Resolve-Path "src").Path

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -12,7 +11,6 @@ from qingpu_insight.backups import (
     BackupRecord,
     BackupService,
     RecordingRunner,
-    build_restore_database,
     validate_restore_database,
 )
 from qingpu_insight.health import (
@@ -25,8 +23,7 @@ NOW = datetime.now(UTC)
 
 
 def _hex_only_id() -> str:
-    import uuid
-    return uuid.uuid4().hex
+    return "a" * 32
 
 
 # ---------------------------------------------------------------------------
