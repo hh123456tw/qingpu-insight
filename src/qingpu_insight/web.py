@@ -280,16 +280,6 @@ def parse_valuation_payload(payload: dict[str, Any]) -> ValuationInput:
     if missing:
         raise ApiInputError("請完整填寫估價條件。", missing)
     try:
-        floor = int(payload["floor"])
-        total_floors = int(payload["total_floors"])
-        if floor > total_floors:
-            raise ApiInputError(
-                "所在樓層不可高於總樓層。",
-                {
-                    "floor": "must_not_exceed_total_floors",
-                    "total_floors": "must_be_at_least_floor",
-                },
-            )
         return ValuationInput(
             transaction_type=str(payload["transaction_type"]),
             station_code=str(payload["station_code"]),
@@ -302,16 +292,14 @@ def parse_valuation_payload(payload: dict[str, Any]) -> ValuationInput:
             building_age_years=float(payload["building_age_years"])
             if payload.get("building_age_years") is not None
             else None,
-            floor=floor,
-            total_floors=total_floors,
+            floor=int(payload["floor"]),
+            total_floors=int(payload["total_floors"]),
             parking_type=payload.get("parking_type"),
             parking_area_ping=float(payload.get("parking_area_ping", 0)),
             asking_total_price_twd=int(payload["asking_total_price_twd"])
             if payload.get("asking_total_price_twd")
             else None,
         )
-    except ApiInputError:
-        raise
     except (KeyError, TypeError, ValueError):
         raise ApiInputError(
             "估價條件格式不正確。", {"valuation": "invalid"}
@@ -961,8 +949,8 @@ def create_app(
         candidate_ids = payload.get("candidate_ids")
         if not isinstance(candidate_ids, list) or not candidate_ids:
             fields["candidate_ids"] = "required"
-        elif len(candidate_ids) > 1:
-            fields["candidate_ids"] = "max_1"
+        elif len(candidate_ids) > 5:
+            fields["candidate_ids"] = "max_5"
         elif not all(isinstance(c, str) for c in candidate_ids):
             fields["candidate_ids"] = "string_items"
 
