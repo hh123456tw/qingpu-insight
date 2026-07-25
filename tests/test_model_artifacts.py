@@ -1,0 +1,252 @@
+import io
+from datetime import UTC, date, datetime
+from pathlib import Path
+from uuid import UUID
+
+import joblib
+import pandas as pd
+import pytest
+
+from qingpu_insight.model_artifacts import (
+    REPORT_TYPES,
+    CandidateArtifactStore,
+    DataSnapshot,
+    MarketTrainingResult,
+    TrainingManifest,
+    sha256_file,
+)
+from qingpu_insight.valuation import ValuationBundle
+
+
+def _make_bundle(market: str) -> bytes:
+    bundle = ValuationBundle(
+        transaction_type=market,
+        model_name="ridge",
+        model_version="1.0",
+        pipeline=None,
+        interval_abs_residual_twd_per_ping=1000.0,
+        feature_ranges={},
+        feature_hard_ranges={},
+        feature_medians={},
+        global_importance=[],
+        reference_rows=pd.DataFrame(),
+        data_min_date="2024-01-01",
+        data_max_date="2024-12-31",
+        metrics={},
+    )
+    buf = io.BytesIO()
+    joblib.dump(bundle, buf)
+    return buf.getvalue()
+
+
+def manifest_fixture(run_id: str, artifact_hash: str, report_hash: str) -> TrainingManifest:
+    return TrainingManifest(
+        run_id=UUID(run_id),
+        created_at=datetime.now(UTC),
+        markets=["resale"],
+        source_commit="abc123def456",
+        source_dirty=False,
+        runtime_versions={"python": "3.11"},
+        data_snapshot=DataSnapshot(
+            sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            raw_count=100,
+            usable_counts={"resale": 80, "presale": 0},
+            excluded_counts={"resale": 20, "presale": 0},
+            station_counts={"A17": 30, "A18": 25, "A19": 25},
+            min_date=date(2024, 1, 1),
+            max_date=date(2024, 12, 31),
+        ),
+        results=[
+            MarketTrainingResult(
+                market="resale",
+                selected_model="ridge",
+                recommended=True,
+                reason_codes=["best_cv_score"],
+                selection_metrics={"cv": {"mae": 1000.0}},
+                final_test_metrics={"test": {"mae": 1200.0}},
+                artifact_file="resale.joblib",
+                artifact_sha256=artifact_hash,
+                report_files={"resale-evaluation": "reports/resale-evaluation.json"},
+                report_sha256={"resale-evaluation": report_hash},
+            )
+        ],
+    )
+
+
+def committed_store_fixture(tmp_path: Path) -> tuple[CandidateArtifactStore, TrainingManifest]:
+    store = CandidateArtifactStore(tmp_path / "candidates")
+    stage = store.begin("00000000-0000-4000-8000-000000000001")
+
+    artifact_bytes = _make_bundle("resale")
+    artifact = stage / "resale.joblib"
+    artifact.write_bytes(artifact_bytes)
+
+    report = stage / "reports" / "resale-evaluation.json"
+    report.parent.mkdir(parents=True)
+    report.write_text('{"selected_model":"ridge"}', encoding="utf-8")
+
+    manifest = manifest_fixture(
+        run_id="00000000-0000-4000-8000-000000000001",
+        artifact_hash=sha256_file(artifact),
+        report_hash=sha256_file(report),
+    )
+    (stage / "manifest.json").write_text(
+        manifest.model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+
+    store.commit(str(manifest.run_id), manifest)
+    return store, manifest
+
+
+class TestCandidateArtifactStore:
+    def test_commits_a_valid_run_atomically(self, tmp_path: Path) -> None:
+        store = CandidateArtifactStore(tmp_path / "artifacts" / "candidates")
+        stage = store.begin("00000000-0000-4000-8000-000000000001")
+
+        artifact_bytes = _make_bundle("resale")
+        artifact = stage / "resale.joblib"
+        artifact.write_bytes(artifact_bytes)
+
+        report = stage / "reports" / "resale-evaluation.json"
+        report.parent.mkdir()
+        report.write_text('{"selected_model":"ridge"}', encoding="utf-8")
+
+        manifest = manifest_fixture(
+            run_id="00000000-0000-4000-8000-000000000001",
+            artifact_hash=sha256_file(artifact),
+            report_hash=sha256_file(report),
+        )
+        (stage / "manifest.json").write_text(
+            manifest.model_dump_json(indent=2),
+            encoding="utf-8",
+        )
+
+        committed = store.commit(str(manifest.run_id), manifest)
+
+        assert committed.name == str(manifest.run_id)
+        assert not stage.exists()
+        assert store.get(str(manifest.run_id)) == manifest
+
+    @pytest.mark.parametrize("run_id", ["../escape", "not-a-uuid", ""])
+    def test_rejects_unsafe_run_ids(self, tmp_path: Path, run_id: str) -> None:
+        store = CandidateArtifactStore(tmp_path / "candidates")
+        with pytest.raises(ValueError, match="run_id"):
+            store.begin(run_id)
+
+    def test_never_overwrites_a_completed_run(self, tmp_path: Path) -> None:
+        store, manifest = committed_store_fixture(tmp_path)
+        with pytest.raises(FileExistsError):
+            store.begin(str(manifest.run_id))
+
+    def test_report_lookup_accepts_only_the_fixed_whitelist(self, tmp_path: Path) -> None:
+        store, manifest = committed_store_fixture(tmp_path)
+        with pytest.raises(ValueError, match="report_type"):
+            store.report_path(str(manifest.run_id), "../../resale.joblib")
+
+
+class TestManifestHelpers:
+    def test_manifest_fixture_roundtrip(self) -> None:
+        h = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        manifest = manifest_fixture(
+            run_id="00000000-0000-4000-8000-000000000001",
+            artifact_hash=h,
+            report_hash=h,
+        )
+        assert manifest.schema_version == 1
+        assert isinstance(manifest.run_id, UUID)
+
+    def test_sha256_file(self, tmp_path: Path) -> None:
+        f = tmp_path / "test.bin"
+        f.write_bytes(b"hello")
+        h = sha256_file(f)
+        assert h == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        assert len(h) == 64
+
+
+class TestStoreSafety:
+    def test_discard_staging_noop_when_absent(self, tmp_path: Path) -> None:
+        store = CandidateArtifactStore(tmp_path / "candidates")
+        store.discard_staging("00000000-0000-4000-8000-000000000001")
+
+    def test_discard_staging_refuses_invalid_uuid(self, tmp_path: Path) -> None:
+        store = CandidateArtifactStore(tmp_path / "candidates")
+        with pytest.raises(ValueError, match="run_id"):
+            store.discard_staging("../escape")
+
+    def test_get_returns_none_for_incomplete_run(self, tmp_path: Path) -> None:
+        store = CandidateArtifactStore(tmp_path / "candidates")
+        store.begin("00000000-0000-4000-8000-000000000001")
+        assert store.get("00000000-0000-4000-8000-000000000001") is None
+
+    def test_list_recent_skips_tmp_dirs(self, tmp_path: Path) -> None:
+        store = CandidateArtifactStore(tmp_path / "candidates")
+        stage = store.begin("00000000-0000-4000-8000-000000000001")
+        (stage / "manifest.json").write_text("{}", encoding="utf-8")
+        assert len(store.list_recent()) == 0
+        assert len(store.list_recent()) == 0
+
+    def test_report_path_all_whitelisted_types(self, tmp_path: Path) -> None:
+        store, manifest = committed_store_fixture(tmp_path)
+        rid = str(manifest.run_id)
+        for rtype in REPORT_TYPES:
+            p = store.report_path(rid, rtype)
+            assert p.is_relative_to(store._root / rid)
+
+
+class TestCommitIntegrity:
+    def test_rejects_mutated_artifact(self, tmp_path: Path) -> None:
+        store, _ = committed_store_fixture(tmp_path)
+        store2 = CandidateArtifactStore(tmp_path / "candidates2")
+
+        rid = "11111111-1111-4111-8111-111111111111"
+        stage2 = store2.begin(rid)
+
+        src = tmp_path / "candidates" / "00000000-0000-4000-8000-000000000001"
+        for f in src.rglob("*"):
+            if f.is_file():
+                rel = f.relative_to(src)
+                dest = stage2 / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(f.read_bytes())
+
+        artifact_path = stage2 / "resale.joblib"
+        artifact_path.write_bytes(b"tampered-data")
+
+        new_hash = sha256_file(artifact_path)
+        manifest2 = manifest_fixture(
+            run_id=rid,
+            artifact_hash=new_hash,
+            report_hash=sha256_file(stage2 / "reports" / "resale-evaluation.json"),
+        )
+        (stage2 / "manifest.json").write_text(
+            manifest2.model_dump_json(indent=2), encoding="utf-8"
+        )
+
+        with pytest.raises((ValueError, TypeError)):
+            store2.commit(rid, manifest2)
+
+    def test_rejects_report_hash_mismatch(self, tmp_path: Path) -> None:
+        store = CandidateArtifactStore(tmp_path / "candidates")
+        stage = store.begin("22222222-2222-4222-8222-222222222222")
+
+        artifact_bytes = _make_bundle("resale")
+        artifact = stage / "resale.joblib"
+        artifact.write_bytes(artifact_bytes)
+
+        report = stage / "reports" / "resale-evaluation.json"
+        report.parent.mkdir(parents=True)
+        report.write_text('{"selected_model":"ridge"}', encoding="utf-8")
+
+        fake_hash = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        manifest = manifest_fixture(
+            run_id="22222222-2222-4222-8222-222222222222",
+            artifact_hash=sha256_file(artifact),
+            report_hash=fake_hash,
+        )
+        (stage / "manifest.json").write_text(
+            manifest.model_dump_json(indent=2), encoding="utf-8"
+        )
+
+        with pytest.raises(ValueError, match="Hash mismatch"):
+            store.commit("22222222-2222-4222-8222-222222222222", manifest)
