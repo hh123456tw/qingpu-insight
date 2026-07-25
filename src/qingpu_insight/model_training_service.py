@@ -21,6 +21,7 @@ from qingpu_insight.model_artifacts import (
 )
 from qingpu_insight.model_features import FEATURE_COLUMNS, build_model_frame
 from qingpu_insight.model_training import (
+    BaselineEvaluationError,
     ModelExperiment,
     leakage_audit,
     run_model_experiment,
@@ -264,7 +265,10 @@ class ModelTrainingService:
                 )
                 model_frame = build_model_frame(frame, market)
                 split = split_by_time(model_frame)
-                experiment = run_model_experiment(split)
+                try:
+                    experiment = run_model_experiment(split)
+                except BaselineEvaluationError as exc:
+                    raise ModelTrainingError("baseline_failed", str(exc))
                 locked = experiment.final_test_results[experiment.selected_name]
                 seed_bundle = ValuationBundle(
                     transaction_type=market,
@@ -283,10 +287,13 @@ class ModelTrainingService:
                     ),
                     metrics={},
                 )
-                artifact_path = train_artifact(
-                    market, locked, split, seed_bundle, stage
-                )
-                bundle: ValuationBundle = joblib.load(artifact_path)
+                try:
+                    artifact_path = train_artifact(
+                        market, locked, split, seed_bundle, stage
+                    )
+                    bundle: ValuationBundle = joblib.load(artifact_path)
+                except Exception as exc:
+                    raise ModelTrainingError("candidate_write_failed", str(exc))
                 self._jobs.progress(
                     run_id,
                     {
@@ -294,24 +301,31 @@ class ModelTrainingService:
                         "completed_markets": list(completed),
                     },
                 )
-                report_dir = stage / "reports"
-                evaluation_path = write_evaluation(
-                    bundle, experiment, split, report_dir
-                )
-                card_path = write_model_card(
-                    bundle, experiment, leakage_audit(split), report_dir
-                )
-                results.append(
-                    market_result_from_files(
-                        market=market,
-                        bundle=bundle,
-                        experiment=experiment,
-                        artifact_path=artifact_path,
-                        evaluation_path=evaluation_path,
-                        card_path=card_path,
-                        stage=stage,
+                try:
+                    report_dir = stage / "reports"
+                    evaluation_path = write_evaluation(
+                        bundle, experiment, split, report_dir
                     )
-                )
+                    card_path = write_model_card(
+                        bundle, experiment, leakage_audit(split), report_dir
+                    )
+                except Exception as exc:
+                    raise ModelTrainingError("candidate_write_failed", str(exc))
+
+                try:
+                    results.append(
+                        market_result_from_files(
+                            market=market,
+                            bundle=bundle,
+                            experiment=experiment,
+                            artifact_path=artifact_path,
+                            evaluation_path=evaluation_path,
+                            card_path=card_path,
+                            stage=stage,
+                        )
+                    )
+                except Exception as exc:
+                    raise ModelTrainingError("candidate_validation_failed", str(exc))
                 completed.append(market)
 
             self._jobs.progress(
