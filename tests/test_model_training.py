@@ -384,6 +384,7 @@ def test_experiment_candidate_failure_is_isolated(model_frame):
     result = run_model_experiment(split, estimators)
     assert result.selected_name != "broken"
     assert result.candidate_errors == {"broken": "candidate_failed"}
+    assert "broken" not in result.final_test_results
 
 
 def test_experiment_baseline_failure_raises_error():
@@ -468,3 +469,4 @@ def test_experiment_no_candidate_beats_baseline_returns_baseline_selected(model_
     assert result.selected_name == "baseline"
     assert not result.recommended
     assert "baseline_selected" in result.reason_codes
+    assert set(result.final_test_results) == {"baseline"}
