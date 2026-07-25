@@ -28,6 +28,8 @@ class BenchmarkResult:
     failure_codes: tuple[str, ...] = ()
     success: bool = True
     error_code: str | None = None
+    requested_provider: str = ""
+    requested_model: str = ""
 
 
 @dataclass
@@ -190,6 +192,12 @@ def _write_results(
                 "fallback_used": r.fallback_used,
                 "latency_ms": r.latency_ms,
                 "failure_codes": list(r.failure_codes),
+                "requested_provider": r.requested_provider,
+                "requested_model": r.requested_model,
+                "success": r.success,
+                "error_code": r.error_code,
+                "actual_provider": r.provider,
+                "actual_model": r.model,
             }
             for r in results
         ],
@@ -230,6 +238,9 @@ def run_benchmark(
     cases: list[EvidencePack],
     providers: dict[str, ReportProvider],
     output_dir: Path,
+    *,
+    requested_provider: str = "",
+    requested_model: str = "",
 ) -> tuple[list[BenchmarkResult], list[ModelSummary]]:
     import time
 
@@ -242,6 +253,8 @@ def run_benchmark(
                 result = provider.generate(pack)
                 elapsed_ms = int((time.perf_counter() - start) * 1000)
                 br = score_result(result, pack, fallback_used)
+                br.requested_provider = requested_provider
+                br.requested_model = requested_model
             except Exception:
                 elapsed_ms = int((time.perf_counter() - start) * 1000)
                 br = BenchmarkResult(
@@ -256,6 +269,8 @@ def run_benchmark(
                     failure_codes=(),
                     success=False,
                     error_code="provider_failed",
+                    requested_provider=requested_provider,
+                    requested_model=requested_model,
                 )
             results.append(br)
     summaries = _summarize(results)

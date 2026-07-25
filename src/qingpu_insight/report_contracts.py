@@ -56,6 +56,8 @@ class ReportClaim(BaseModel):
     def _require_evidence_reference(self) -> ReportClaim:
         if not self.fact_ids and not self.numeric_fact_ids:
             raise ValueError("at least one evidence reference required")
+        if not set(self.numeric_fact_ids).issubset(self.fact_ids):
+            raise ValueError("numeric_fact_ids must be a subset of fact_ids")
         return self
 
 

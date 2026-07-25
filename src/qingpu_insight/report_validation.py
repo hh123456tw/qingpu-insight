@@ -31,7 +31,11 @@ SENSITIVE_PATTERNS: dict[str, re.Pattern] = {
     "db_url": re.compile(
         r"(?:mysql(?:\+pymysql)?|postgres(?:ql)?|sqlite|mongodb|redis)://\S+"
     ),
+    "credential": re.compile(r"(?i)(?:api_key|password|secret)\s*=\s*\S+"),
+    "bearer_token": re.compile(r"(?i)\bbearer\s+[a-z0-9]{16,}"),
 }
+
+CHINESE_DIGITS = frozenset("零一二三四五六七八九十百千萬億")
 
 UNIT_KEYWORDS: dict[str, frozenset[str]] = {
     "twd": frozenset({"元", "萬", "價格", "總價", "開價"}),
@@ -155,6 +159,15 @@ def _check_sensitive_content(
             return
 
 
+def _check_chinese_numbers(path: str, text: str, issues: list[ValidationIssue]) -> None:
+    has_chinese_digit = any(c in CHINESE_DIGITS for c in text)
+    if not has_chinese_digit:
+        return
+    unit_keywords = frozenset({"元", "萬", "坪", "年", "公尺"})
+    if any(kw in text for kw in unit_keywords):
+        issues.append(ValidationIssue(code="unsupported_chinese_number", path=path))
+
+
 def _check_unit_mismatch(
     path: str,
     claim: ReportClaim,
@@ -191,6 +204,7 @@ def validate_report(
         _check_fact_ids(path, claim, valid_fact_ids, issues)
         _check_numbers(path, claim, facts_by_id, issues)
         _check_sensitive_content(path, claim.text, issues)
+        _check_chinese_numbers(path, claim.text, issues)
         _check_unit_mismatch(path, claim, facts_by_id, issues)
 
     return ValidationResult(

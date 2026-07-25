@@ -1855,6 +1855,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--model", default=None,
         help="model name to test",
     )
+    smoke_parser.add_argument(
+        "--output-dir",
+        default="outputs/m44-benchmark",
+    )
 
     return parser
 
@@ -1890,8 +1894,6 @@ def llm_benchmark(root: Path, args) -> int:
             print(f"invalid case: {exc}", file=sys.stderr)
             return 1
 
-    from qingpu_insight.report_providers import RuleReportProvider
-
     providers: dict[str, Any] = {}
     ollama_base_url = os.environ.get("QINGPU_OLLAMA_BASE_URL", "http://127.0.0.1:11434")
     for model_name in models:
@@ -1902,18 +1904,24 @@ def llm_benchmark(root: Path, args) -> int:
                 from qingpu_insight.gemini_report_provider import GeminiReportProvider
                 providers[model_name] = GeminiReportProvider(api_key=key, model=gm)
             else:
-                providers[model_name] = RuleReportProvider()
+                print(json.dumps({"error": "gemini_not_configured"}, ensure_ascii=False))
+                return 1
         elif args.provider == "ollama" or not args.provider:
             from qingpu_insight.ollama_report_provider import OllamaReportProvider
             providers[model_name] = OllamaReportProvider(
                 base_url=ollama_base_url, model=model_name,
             )
         else:
-            providers[model_name] = RuleReportProvider()
+            print(json.dumps({"error": "gemini_not_configured"}, ensure_ascii=False))
+            return 1
 
     output_dir = Path(args.output_dir)
     try:
-        results, summaries = run_benchmark(cases, providers, output_dir)
+        results, summaries = run_benchmark(
+            cases, providers, output_dir,
+            requested_provider=args.provider or "ollama",
+            requested_model=",".join(models),
+        )
     except Exception as exc:
         print(f"benchmark failed: {exc}", file=sys.stderr)
         return 1
@@ -2016,18 +2024,26 @@ def llm_smoke(root: Path, args) -> int:
     from qingpu_insight.llm_benchmark import score_result
 
     br = score_result(result, pack)
-    print(json.dumps({
-        "provider": actual_provider_name,
-        "model": actual_model,
+    smoke_output = {
+        "requested_provider": args.provider,
+        "requested_model": args.model or args.provider,
         "actual_provider": result.provider,
         "actual_model": result.model,
         "fallback_reason": fallback_reason,
+        "success": br.schema_success,
         "schema_success": br.schema_success,
         "fact_accuracy": br.fact_accuracy,
         "coverage": br.required_section_coverage,
         "latency_ms": br.latency_ms,
         "failure_codes": list(br.failure_codes),
-    }, ensure_ascii=False))
+    }
+    print(json.dumps(smoke_output, ensure_ascii=False))
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "smoke_result.json").write_text(
+        json.dumps(smoke_output, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     return 0
 
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 from datetime import UTC, datetime
 
+import pytest
+
 from qingpu_insight.report_contracts import (
     BuyerReportDraft,
     EvidenceCandidate,
@@ -195,7 +197,7 @@ class TestValidateReport:
     def test_unknown_fact_id_in_numeric_fact_ids(self) -> None:
         claim = ReportClaim(
             text="測試",
-            fact_ids=(),
+            fact_ids=(_NONEXISTENT,),
             numeric_fact_ids=(_NONEXISTENT,),
         )
         draft = _valid_draft(summary=claim)
@@ -342,3 +344,29 @@ class TestValidateReport:
         result = validate_report(draft, PACK)
         assert not result.valid
         assert any(i.code == "missing_numeric_fact_reference" for i in result.issues)
+
+    @pytest.mark.parametrize(
+        "text",
+        ["api_key=supersecret", "password=hunter2", "Bearer abcdefghijklmnop"],
+    )
+    def test_secret_shaped_claim_is_rejected(self, text: str) -> None:
+        claim = ReportClaim(
+            text=text,
+            fact_ids=(_C1_LOC,),
+            numeric_fact_ids=(),
+        )
+        draft = _valid_draft(summary=claim)
+        result = validate_report(draft, PACK)
+        assert not result.valid
+        assert any(i.code == "sensitive_content" for i in result.issues)
+
+    def test_common_chinese_price_expression_is_rejected(self) -> None:
+        claim = ReportClaim(
+            text="總價一千五百萬",
+            fact_ids=(_C1_ASKING,),
+            numeric_fact_ids=(_C1_ASKING,),
+        )
+        draft = _valid_draft(summary=claim)
+        result = validate_report(draft, PACK)
+        assert not result.valid
+        assert any(i.code == "unsupported_chinese_number" for i in result.issues)

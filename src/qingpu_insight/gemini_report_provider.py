@@ -59,6 +59,10 @@ class GeminiReportProvider:
                     ],
                 },
             ],
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "maxOutputTokens": 1200,
+            },
         }
         try:
             headers = {

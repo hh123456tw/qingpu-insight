@@ -55,6 +55,7 @@ class OllamaReportProvider:
             ],
             "format": "json",
             "stream": False,
+            "options": {"num_predict": 1200},
         }
         try:
             resp = self._session.post(

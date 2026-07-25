@@ -176,13 +176,21 @@ class TestReportClaim:
 
     def test_valid_with_numeric_fact_ids(self) -> None:
         claim = ReportClaim(
-            text="總價偏低", fact_ids=(), numeric_fact_ids=("def456",)
+            text="總價偏低", fact_ids=("def456",), numeric_fact_ids=("def456",)
         )
         assert claim.numeric_fact_ids == ("def456",)
 
     def test_requires_at_least_one_reference(self) -> None:
         with pytest.raises(ValidationError):
             ReportClaim(text="價格便宜 10%", fact_ids=(), numeric_fact_ids=())
+
+    def test_numeric_fact_ids_must_be_subset_of_fact_ids(self) -> None:
+        with pytest.raises(ValidationError):
+            ReportClaim(
+                text="總價100元",
+                fact_ids=(),
+                numeric_fact_ids=("price-fact",),
+            )
 
     def test_rejects_extra_field(self) -> None:
         with pytest.raises(ValidationError):
