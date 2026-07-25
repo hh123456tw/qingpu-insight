@@ -85,6 +85,10 @@ class CandidateArtifactStore:
 
     def commit(self, run_id: str, manifest: TrainingManifest) -> Path:
         normalized = self._normalize(run_id)
+        if str(manifest.run_id) != normalized:
+            raise ValueError(
+                f"manifest.run_id {manifest.run_id} does not match run_id {run_id}"
+            )
 
         stage = self._root / f".tmp-{normalized}"
         final = self._root / normalized
@@ -126,13 +130,12 @@ class CandidateArtifactStore:
                 report_path = stage / report_rel
                 if not report_path.exists():
                     raise FileNotFoundError(f"Report {report_rel} not found")
-                expected_hash = result.report_sha256.get(report_key)
-                if expected_hash:
-                    actual_hash = sha256_file(report_path)
-                    if actual_hash != expected_hash:
-                        raise ValueError(
-                            f"Hash mismatch for report {report_rel}"
-                        )
+                expected_hash = result.report_sha256[report_key]
+                actual_hash = sha256_file(report_path)
+                if actual_hash != expected_hash:
+                    raise ValueError(
+                        f"Hash mismatch for report {report_rel}"
+                    )
 
         os.replace(str(stage), str(final))
         return final
@@ -151,7 +154,7 @@ class CandidateArtifactStore:
         shutil.rmtree(stage)
 
     def get(self, run_id: str) -> TrainingManifest | None:
-        final = (self._root / run_id).resolve()
+        final = (self._root / self._normalize(run_id)).resolve()
         manifest_path = final / "manifest.json"
         if not manifest_path.exists():
             return None
@@ -173,4 +176,4 @@ class CandidateArtifactStore:
     def report_path(self, run_id: str, report_type: str) -> Path:
         if report_type not in REPORT_TYPES:
             raise ValueError(f"Unknown report_type: {report_type}")
-        return (self._root / run_id / REPORT_TYPES[report_type]).resolve()
+        return (self._root / self._normalize(run_id) / REPORT_TYPES[report_type]).resolve()
