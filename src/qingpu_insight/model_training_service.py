@@ -209,6 +209,9 @@ class ModelTrainingService:
         self._source_version_provider = source_version_provider
         self._clock = clock or (lambda: datetime.now())
 
+    def start_run(self, run_id: str) -> Any:
+        return self._jobs.start(run_id)
+
     def submit(self, request: ModelTrainingRequest) -> JobSubmission:
         return self._jobs.create(
             job_type="model_training",

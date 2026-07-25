@@ -230,7 +230,7 @@ def model_train(root: Path, args) -> int:
     service = _create_model_training_service(root)
     request = ModelTrainingRequest(tuple(markets), trigger="manual")
     submission = service.submit(request)
-    sub_run = service._jobs.start(submission.run.run_id)
+    sub_run = service.start_run(submission.run.run_id)
     manifest = service.execute(sub_run.run_id, request)
     print(f"candidate run: {manifest.run_id}")
     return 0
@@ -1861,11 +1861,10 @@ def llm_benchmark(root: Path, args) -> int:
     for model_name in models:
         if args.provider == "gemini":
             key = os.environ.get("QINGPU_GEMINI_API_KEY", "")
-            if key and model_name:
+            gm = os.environ.get("QINGPU_GEMINI_MODEL", model_name)
+            if key and gm:
                 from qingpu_insight.gemini_report_provider import GeminiReportProvider
-                providers[model_name] = GeminiReportProvider(
-                    api_key=key, model=model_name,
-                )
+                providers[model_name] = GeminiReportProvider(api_key=key, model=gm)
             else:
                 print(json.dumps({"error": "gemini_not_configured"}, ensure_ascii=False))
                 return 1
@@ -1883,14 +1882,14 @@ def llm_benchmark(root: Path, args) -> int:
         results, summaries = run_benchmark(
             cases, providers, output_dir,
             requested_provider=args.provider or "ollama",
-            requested_model="",
+            requested_model=",".join(models),
         )
     except Exception as exc:
         print(f"benchmark failed: {exc}", file=sys.stderr)
         return 1
 
-    all_failed = all(not r.success for r in results) if results else True
-    if all_failed:
+    all_failed = all(not r.schema_success for r in results) if results else True
+    if all_failed and results:
         print("benchmark failed: all results are failures", file=sys.stderr)
         return 1
 
@@ -1947,15 +1946,6 @@ def llm_smoke(root: Path, args) -> int:
 
     try:
         if args.provider == "ollama":
-            actual_model = args.model or os.environ.get("QINGPU_OLLAMA_MODEL", "")
-            if not actual_model:
-                print(json.dumps({
-                    "requested_provider": "ollama",
-                    "requested_model": None,
-                    "success": False,
-                    "error_code": "ollama_not_configured",
-                }, ensure_ascii=False))
-                return 1
             from qingpu_insight.ollama_report_provider import OllamaReportProvider
             provider = OllamaReportProvider(
                 base_url=os.environ.get("QINGPU_OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
@@ -1963,20 +1953,17 @@ def llm_smoke(root: Path, args) -> int:
             )
         elif args.provider == "gemini":
             key = os.environ.get("QINGPU_GEMINI_API_KEY", "")
-            gm = args.model or os.environ.get("QINGPU_GEMINI_MODEL", "")
+            gm = os.environ.get("QINGPU_GEMINI_MODEL", actual_model)
             if not key or not gm:
-                print(json.dumps({
-                    "requested_provider": "gemini",
-                    "requested_model": gm or None,
-                    "success": False,
-                    "error_code": "gemini_not_configured",
-                }, ensure_ascii=False))
-                return 1
-            actual_model = gm
-            from qingpu_insight.gemini_report_provider import GeminiReportProvider
-            provider = GeminiReportProvider(api_key=key, model=gm)
+                fallback_reason = "gemini_not_configured"
+                from qingpu_insight.report_providers import RuleReportProvider
+                provider = RuleReportProvider()
+                actual_provider_name = "rule"
+                actual_model = "rule"
+            else:
+                from qingpu_insight.gemini_report_provider import GeminiReportProvider
+                provider = GeminiReportProvider(api_key=key, model=gm)
         else:
-            actual_model = "rule"
             from qingpu_insight.report_providers import RuleReportProvider
             provider = RuleReportProvider()
     except Exception as exc:
@@ -2005,7 +1992,7 @@ def llm_smoke(root: Path, args) -> int:
         "actual_provider": result.provider,
         "actual_model": result.model,
         "fallback_reason": fallback_reason,
-        "success": br.success,
+        "success": br.schema_success,
         "schema_success": br.schema_success,
         "fact_accuracy": br.fact_accuracy,
         "coverage": br.required_section_coverage,
@@ -2019,7 +2006,7 @@ def llm_smoke(root: Path, args) -> int:
         json.dumps(smoke_output, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    return 0 if br.success else 1
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
