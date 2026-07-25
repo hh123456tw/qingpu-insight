@@ -185,6 +185,11 @@ class ModelTrainingRequest:
     def markets(self) -> tuple[Literal["resale", "presale"], ...]:
         return self._markets
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ModelTrainingRequest):
+            return NotImplemented
+        return self.markets == other.markets and self.trigger == other.trigger
+
     def __repr__(self) -> str:
         return f"ModelTrainingRequest(markets={self.markets}, trigger={self.trigger!r})"
 

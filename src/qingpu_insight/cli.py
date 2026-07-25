@@ -14,7 +14,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-import joblib
 import pandas as pd
 import pymysql
 
@@ -77,16 +76,11 @@ from qingpu_insight.listing_valuation import compare_listing_to_model
 from qingpu_insight.llm_benchmark import run_benchmark
 from qingpu_insight.location_evidence import LocationEvidence
 from qingpu_insight.market_cleaning import build_market_dataset
-from qingpu_insight.model_features import build_model_frame
-from qingpu_insight.model_training import (
-    CandidateEvaluation,
-    RecentMedianBaseline,
-    candidate_estimators,
-    evaluate_candidate,
-    leakage_audit,
-    metric_rows,
-    select_release_candidate,
-    split_by_time,
+from qingpu_insight.model_artifacts import CandidateArtifactStore
+from qingpu_insight.model_training_service import (
+    ModelTrainingRequest,
+    ModelTrainingService,
+    SourceVersionProvider,
 )
 from qingpu_insight.moi import read_moi_csv
 from qingpu_insight.mysql_loader import load_market_rows
@@ -95,8 +89,7 @@ from qingpu_insight.report_composition import create_report_runtime
 from qingpu_insight.report_contracts import EvidencePack, ReportRequest
 from qingpu_insight.report_service import ReportService
 from qingpu_insight.reporting import write_report
-from qingpu_insight.valuation import ModelRegistry, ValuationBundle, train_artifact
-from qingpu_insight.valuation_reporting import write_evaluation, write_model_card
+from qingpu_insight.valuation import ModelRegistry
 
 SOURCES = (
     "https://data.gov.tw/dataset/77051",
@@ -232,68 +225,14 @@ def mysql_load(root: Path, input_path: str) -> int:
     return 0
 
 
-def model_train(root: Path, input_path: str, artifact_dir: str, report_dir: str) -> int:
-    frame = pd.read_parquet(root / input_path)
-    artifact_path = root / artifact_dir
-    report_path = root / report_dir
-
-    for transaction_type in ("resale", "presale"):
-        print(f"Training {transaction_type} model...")
-        mf = build_model_frame(frame, transaction_type)
-        split = split_by_time(mf)
-
-        baseline = RecentMedianBaseline().fit(split.train)
-        baseline_pred = baseline.predict(split.test)
-        baseline_actual = split.test["target_unit_price_twd"].values
-        baseline_metrics = metric_rows(baseline_actual, baseline_pred, split.test)
-        baseline_mae = float(baseline_metrics.loc["overall", "mae"])
-        baseline_station_mape = {
-            idx.split(":", 1)[1]: float(row["mape"])
-            for idx, row in baseline_metrics.iterrows()
-            if idx.startswith("station:")
-        }
-        baseline_eval = CandidateEvaluation(
-            name="baseline",
-            estimator=baseline,
-            overall_mae=baseline_mae,
-            station_mape=baseline_station_mape,
-            metrics=baseline_metrics,
-        )
-
-        candidates = [baseline_eval]
-        for name, estimator in candidate_estimators().items():
-            candidates.append(evaluate_candidate(name, estimator, split))
-
-        selected = select_release_candidate(candidates)
-        leakage = leakage_audit(split)
-
-        temp_bundle = ValuationBundle(
-            transaction_type=transaction_type,
-            model_name="",
-            model_version="",
-            pipeline=None,
-            interval_abs_residual_twd_per_ping=0,
-            feature_ranges={},
-            feature_hard_ranges={},
-            feature_medians={},
-            global_importance=[],
-            reference_rows=pd.DataFrame(),
-            data_min_date="",
-            data_max_date=str(split.train["transaction_date"].max().date()),
-            metrics={},
-        )
-
-        train_artifact(transaction_type, selected, split, temp_bundle, artifact_path)
-        bundle: ValuationBundle = joblib.load(artifact_path / f"{transaction_type}.joblib")
-
-        eval_path = write_evaluation(bundle, candidates, split, report_path)
-        card_path = write_model_card(bundle, candidates, leakage, report_path)
-
-        artifact_file = artifact_path / f"{transaction_type}.joblib"
-        print(f"  {transaction_type}: {selected.name} -> {artifact_file}")
-        print(f"    evaluation: {eval_path}")
-        print(f"    model card: {card_path}")
-
+def model_train(root: Path, args) -> int:
+    markets = args.markets
+    service = _create_model_training_service(root)
+    request = ModelTrainingRequest(tuple(markets), trigger="manual")
+    submission = service.submit(request)
+    sub_run = service._jobs.start(submission.run.run_id)
+    manifest = service.execute(sub_run.run_id, request)
+    print(f"candidate run: {manifest.run_id}")
     return 0
 
 
@@ -1197,6 +1136,24 @@ def _create_listing_update_service(
     )
 
 
+def _create_model_training_service(root: Path) -> ModelTrainingService:
+    settings = get_settings(root)
+    input_path = settings.processed_dir / "market_transactions.parquet"
+    store = CandidateArtifactStore(root / "candidates")
+    factory = create_mysql_connection_factory()
+    from qingpu_insight.job_repository import MySQLJobRepository
+
+    job_repo = MySQLJobRepository(factory)
+    job_service = JobService(job_repo)
+    source_version_provider = SourceVersionProvider(commit="unknown", dirty=False)
+    return ModelTrainingService(
+        jobs=job_service,
+        store=store,
+        input_path=input_path,
+        source_version_provider=source_version_provider,
+    )
+
+
 # --- M4.3 ops helpers ---
 
 
@@ -1538,14 +1495,15 @@ def _create_fallback_evidence_repository(root: Path):
                 return pd.DataFrame()
 
         def load_market_evidence(self, candidate_ids):
-            import pandas as pd
+            from qingpu_insight.evidence_repository import empty_market_frame
+
             try:
                 df = pd.read_parquet(processed / "market_transactions.parquet")
                 if "listing_id" in df.columns:
                     return df[df["listing_id"].isin(candidate_ids)].copy()
-                return pd.DataFrame()
+                return empty_market_frame()
             except (FileNotFoundError, ValueError):
-                return pd.DataFrame()
+                return empty_market_frame()
 
     return ParquetEvidenceRepository()
 
@@ -1703,6 +1661,10 @@ def build_parser() -> argparse.ArgumentParser:
     model_parser.add_argument("--input", default="data/processed/market_transactions.parquet")
     model_parser.add_argument("--artifact-dir", default="artifacts")
     model_parser.add_argument("--report-dir", default="outputs/reports")
+    model_parser.add_argument(
+        "--markets", nargs="*", default=["resale", "presale"],
+        choices=("resale", "presale"),
+    )
 
     scrape_parser = subparsers.add_parser(
         "listing-scrape", help="capture raw listing data from 591"
@@ -1899,10 +1861,11 @@ def llm_benchmark(root: Path, args) -> int:
     for model_name in models:
         if args.provider == "gemini":
             key = os.environ.get("QINGPU_GEMINI_API_KEY", "")
-            gm = os.environ.get("QINGPU_GEMINI_MODEL", model_name)
-            if key and gm:
+            if key and model_name:
                 from qingpu_insight.gemini_report_provider import GeminiReportProvider
-                providers[model_name] = GeminiReportProvider(api_key=key, model=gm)
+                providers[model_name] = GeminiReportProvider(
+                    api_key=key, model=model_name,
+                )
             else:
                 print(json.dumps({"error": "gemini_not_configured"}, ensure_ascii=False))
                 return 1
@@ -1920,14 +1883,14 @@ def llm_benchmark(root: Path, args) -> int:
         results, summaries = run_benchmark(
             cases, providers, output_dir,
             requested_provider=args.provider or "ollama",
-            requested_model=",".join(models),
+            requested_model="",
         )
     except Exception as exc:
         print(f"benchmark failed: {exc}", file=sys.stderr)
         return 1
 
-    all_failed = all(not r.schema_success for r in results) if results else True
-    if all_failed and results:
+    all_failed = all(not r.success for r in results) if results else True
+    if all_failed:
         print("benchmark failed: all results are failures", file=sys.stderr)
         return 1
 
@@ -1984,6 +1947,15 @@ def llm_smoke(root: Path, args) -> int:
 
     try:
         if args.provider == "ollama":
+            actual_model = args.model or os.environ.get("QINGPU_OLLAMA_MODEL", "")
+            if not actual_model:
+                print(json.dumps({
+                    "requested_provider": "ollama",
+                    "requested_model": None,
+                    "success": False,
+                    "error_code": "ollama_not_configured",
+                }, ensure_ascii=False))
+                return 1
             from qingpu_insight.ollama_report_provider import OllamaReportProvider
             provider = OllamaReportProvider(
                 base_url=os.environ.get("QINGPU_OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
@@ -1991,17 +1963,20 @@ def llm_smoke(root: Path, args) -> int:
             )
         elif args.provider == "gemini":
             key = os.environ.get("QINGPU_GEMINI_API_KEY", "")
-            gm = os.environ.get("QINGPU_GEMINI_MODEL", actual_model)
+            gm = args.model or os.environ.get("QINGPU_GEMINI_MODEL", "")
             if not key or not gm:
-                fallback_reason = "gemini_not_configured"
-                from qingpu_insight.report_providers import RuleReportProvider
-                provider = RuleReportProvider()
-                actual_provider_name = "rule"
-                actual_model = "rule"
-            else:
-                from qingpu_insight.gemini_report_provider import GeminiReportProvider
-                provider = GeminiReportProvider(api_key=key, model=gm)
+                print(json.dumps({
+                    "requested_provider": "gemini",
+                    "requested_model": gm or None,
+                    "success": False,
+                    "error_code": "gemini_not_configured",
+                }, ensure_ascii=False))
+                return 1
+            actual_model = gm
+            from qingpu_insight.gemini_report_provider import GeminiReportProvider
+            provider = GeminiReportProvider(api_key=key, model=gm)
         else:
+            actual_model = "rule"
             from qingpu_insight.report_providers import RuleReportProvider
             provider = RuleReportProvider()
     except Exception as exc:
@@ -2030,7 +2005,7 @@ def llm_smoke(root: Path, args) -> int:
         "actual_provider": result.provider,
         "actual_model": result.model,
         "fallback_reason": fallback_reason,
-        "success": br.schema_success,
+        "success": br.success,
         "schema_success": br.schema_success,
         "fact_accuracy": br.fact_accuracy,
         "coverage": br.required_section_coverage,
@@ -2044,7 +2019,7 @@ def llm_smoke(root: Path, args) -> int:
         json.dumps(smoke_output, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    return 0
+    return 0 if br.success else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -2059,7 +2034,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "mysql-load":
         return mysql_load(root, args.input)
     if args.command == "model-train":
-        return model_train(root, args.input, args.artifact_dir, args.report_dir)
+        return model_train(root, args)
     if args.command == "listing-scrape":
         return listing_scrape(root, args)
     if args.command == "listing-build":

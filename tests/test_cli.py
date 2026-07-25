@@ -628,13 +628,18 @@ def test_mysql_load_success(tmp_path, monkeypatch) -> None:
     assert len(called_with[0]) == len(clean)
 
 
-def test_model_train_builds_both_types_without_network(tmp_path, monkeypatch) -> None:
+def test_model_train_builds_both_types_without_network(
+    tmp_path, monkeypatch, capsys
+) -> None:
     monkeypatch.chdir(tmp_path)
     copy_fixture_to_processed(tmp_path)
+
+    fake = RecordingModelTrainingService()
+    monkeypatch.setattr(cli, "_create_model_training_service", lambda root: fake)
+
     exit_code = main(["model-train"])
     assert exit_code == 0
-    assert (tmp_path / "artifacts/resale.joblib").exists()
-    assert (tmp_path / "artifacts/presale.joblib").exists()
+    assert "candidate run:" in capsys.readouterr().out
 
 
 @pytest.fixture
@@ -1561,6 +1566,73 @@ class TestListingBuild:
 
         assert main(["listing-build", "--batch-dir", str(batch_dir)]) == 0
         assert "rejection_reasons=missing_price:1" in capsys.readouterr().out
+
+
+class RecordingModelTrainingService:
+    def __init__(self) -> None:
+        self.requests: list = []
+        self._jobs = SimpleNamespace(
+            start=lambda run_id: SimpleNamespace(run_id=run_id)
+        )
+
+    def submit(self, request):
+        from qingpu_insight.jobs import JobRun, JobSubmission
+
+        self.requests.append(request)
+        run = JobRun(
+            run_id="00000000-0000-0000-0000-000000000001",
+            job_type="model_training",
+            trigger=request.trigger,
+            idempotency_key="model_training:active",
+            status="pending",
+            started_at=None,
+            finished_at=None,
+            attempt=1,
+            input_version=None,
+            output_version=None,
+            summary={},
+            error_code=None,
+            error_message=None,
+        )
+        return JobSubmission(run=run, created=True)
+
+    def execute(self, run_id, request):
+        return SimpleNamespace(
+            run_id="00000000-0000-0000-0000-000000000001"
+        )
+
+
+def test_model_train_cli_submits_and_executes_common_service(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from qingpu_insight.model_training_service import ModelTrainingRequest
+
+    fake = RecordingModelTrainingService()
+    monkeypatch.setattr(cli, "_create_model_training_service", lambda root: fake)
+
+    monkeypatch.chdir(tmp_path)
+    result = cli.main(["model-train", "--markets", "resale"])
+
+    assert result == 0
+    assert fake.requests == [ModelTrainingRequest(("resale",), trigger="manual")]
+    assert "candidate run:" in capsys.readouterr().out
+
+
+def test_model_train_default_markets_both(tmp_path, monkeypatch, capsys) -> None:
+    from qingpu_insight.model_training_service import ModelTrainingRequest
+
+    fake = RecordingModelTrainingService()
+    monkeypatch.setattr(cli, "_create_model_training_service", lambda root: fake)
+
+    monkeypatch.chdir(tmp_path)
+    result = cli.main(["model-train"])
+
+    assert result == 0
+    assert fake.requests == [
+        ModelTrainingRequest(("resale", "presale"), trigger="manual")
+    ]
 
 
 # --- M4.3 ops CLI tests ---
