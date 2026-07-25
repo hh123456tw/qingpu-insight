@@ -229,13 +229,16 @@ class TestProgressAndRecovery:
     ) -> None:
         pending = service.create("model_training", "model-pending", "web").run
         running = service.create("model_training", "model-running", "web").run
+        retry_wait = service.create("model_training", "model-retry-wait", "web").run
         listing = service.create("listing_update", "listing-running", "web").run
         service.start(running.run_id)
+        service.start(retry_wait.run_id)
+        service.retry(retry_wait.run_id)
         service.start(listing.run_id)
 
         recovered = service.recover_interrupted("model_training")
 
-        assert {run.run_id for run in recovered} == {pending.run_id, running.run_id}
+        assert {run.run_id for run in recovered} == {pending.run_id, running.run_id, retry_wait.run_id}
         assert all(run.status == "failed" for run in recovered)
         assert all(run.error_code == "worker_interrupted" for run in recovered)
         assert service.get(listing.run_id).status == "running"  # type: ignore[union-attr]
