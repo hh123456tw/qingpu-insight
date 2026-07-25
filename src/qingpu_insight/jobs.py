@@ -12,10 +12,10 @@ JobStatus = Literal[
 ]
 
 ALLOWED_TRANSITIONS: dict[JobStatus, tuple[JobStatus, ...]] = {
-    "pending": ("running",),
+    "pending": ("running", "failed"),
     "running": ("succeeded", "retry_wait", "skipped", "failed"),
     "failed": ("needs_attention",),
-    "retry_wait": ("running", "needs_attention"),
+    "retry_wait": ("running", "needs_attention", "failed"),
     "succeeded": (),
     "skipped": (),
     "needs_attention": (),
@@ -82,7 +82,16 @@ class JobRepository(Protocol):
     def create_or_get(self, run: JobRun) -> tuple[JobRun, bool]: ...
     def get(self, run_id: str) -> JobRun | None: ...
     def find_active_by_key(self, idempotency_key: str) -> JobRun | None: ...
-    def list_recent(self, limit: int = 20) -> list[JobRun]: ...
+    def list_recent(
+        self, limit: int = 20, job_type: str | None = None
+    ) -> list[JobRun]: ...
+    def list_active(self, job_type: str) -> list[JobRun]: ...
+    def update_summary(
+        self,
+        run_id: str,
+        expected_status: JobStatus,
+        summary: dict[str, object],
+    ) -> bool: ...
     def transition(
         self, run_id: str, current_status: JobStatus, target_status: JobStatus,
         *,
@@ -122,8 +131,30 @@ class JobService:
     def get(self, run_id: str) -> JobRun | None:
         return self._repository.get(run_id)
 
-    def list_recent(self, limit: int = 20) -> list[JobRun]:
-        return self._repository.list_recent(limit)
+    def list_recent(
+        self, limit: int = 20, job_type: str | None = None
+    ) -> list[JobRun]:
+        return self._repository.list_recent(limit, job_type)
+
+    def progress(self, run_id: str, summary: dict[str, object]) -> JobRun:
+        run = self._repository.get(run_id)
+        if run is None:
+            raise ValueError(f"run {run_id} not found")
+        if run.status != "running":
+            raise InvalidJobTransition(run_id, run.status, "running")
+        if not self._repository.update_summary(run_id, "running", summary):
+            raise InvalidJobTransition(run_id, "running", "running")
+        updated = self._repository.get(run_id)
+        assert updated is not None
+        return updated
+
+    def recover_interrupted(self, job_type: str) -> list[JobRun]:
+        recovered = []
+        for run in self._repository.list_active(job_type):
+            recovered.append(
+                self.fail(run.run_id, "worker_interrupted", "worker interrupted")
+            )
+        return recovered
 
     def _transition(
         self,

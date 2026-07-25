@@ -261,6 +261,67 @@ def test_transition_persists_terminal_metadata_atomically(fake_conn: FakeConnect
     assert "v1" in params and '{"rows": 2}' in params
 
 
+def test_list_recent_filters_by_job_type_when_supplied(fake_conn: FakeConnection) -> None:
+    repo = MySQLJobRepository(fake_conn)
+    row = {**row_for(pending_run()), "run_id": "a", "created_at": "2025-01-01 00:00:00"}
+    fake_conn.cursor_instance.fetch_rows = [row]
+    result = repo.list_recent(job_type="model_training")
+    statements = [sql for sql, _ in fake_conn.cursor_instance.executed]
+    list_sql = next(s for s in statements if "job_runs" in s and "ORDER BY" in s)
+    assert "WHERE" in list_sql and "job_type" in list_sql
+
+
+def test_list_recent_without_filter_omits_where_clause(fake_conn: FakeConnection) -> None:
+    repo = MySQLJobRepository(fake_conn)
+    fake_conn.cursor_instance.fetch_rows = [
+        {**row_for(pending_run()), "created_at": "2025-01-01 00:00:00"},
+    ]
+    result = repo.list_recent()
+    statements = [sql for sql, _ in fake_conn.cursor_instance.executed]
+    list_sql = next(s for s in statements if "job_runs" in s and "ORDER BY" in s)
+    assert "WHERE" not in list_sql.upper().split("ORDER")[0]
+
+
+def test_list_active_returns_only_active_statuses_for_job_type(
+    fake_conn: FakeConnection,
+) -> None:
+    repo = MySQLJobRepository(fake_conn)
+    now = "2025-06-01 12:00:00.000"
+    rows = [
+        {**row_for(pending_run()), "run_id": "a", "status": "pending",
+         "created_at": now},
+        {**row_for(pending_run()), "run_id": "b", "status": "running",
+         "created_at": now},
+    ]
+    fake_conn.cursor_instance.fetch_rows = rows
+    result = repo.list_active("listing_update")
+    statements = [sql for sql, _ in fake_conn.cursor_instance.executed]
+    active_sql = next(s for s in statements if "job_runs" in s and "status" in s and "ORDER BY" in s)
+    assert "job_type" in active_sql and "status IN" in active_sql
+    assert len(result) == 2
+
+
+def test_update_summary_persists_summary_for_running_job(fake_conn: FakeConnection) -> None:
+    repo = MySQLJobRepository(fake_conn)
+    fake_conn.cursor_instance.rowcount = 1
+    result = repo.update_summary("test-uuid", "running", {"progress": 0.5})
+    sql, params = fake_conn.cursor_instance.executed[-1]
+    assert sql.strip().upper().startswith("UPDATE")
+    assert "summary = %s" in sql
+    assert "updated_at = %s" in sql
+    assert "run_id = %s" in sql and "status = %s" in sql
+    assert result is True
+
+
+def test_update_summary_returns_false_when_status_mismatch(fake_conn: FakeConnection) -> None:
+    repo = MySQLJobRepository(fake_conn)
+    fake_conn.cursor_instance.rowcount = 0
+    result = repo.update_summary("test-uuid", "succeeded", {"progress": 0.5})
+    sql, params = fake_conn.cursor_instance.executed[-1]
+    assert sql.strip().upper().startswith("UPDATE")
+    assert result is False
+
+
 def test_repository_uses_connection_factory_for_each_operation() -> None:
     connections: list[FakeConnection] = []
 

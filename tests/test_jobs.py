@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 
@@ -42,8 +43,30 @@ class FakeJobRepository:
                 return run
         return None
 
-    def list_recent(self, limit: int = 20) -> list[JobRun]:
-        return list(self._runs.values())[-limit:][::-1]
+    def list_recent(self, limit: int = 20, job_type: str | None = None) -> list[JobRun]:
+        runs = list(self._runs.values())
+        if job_type is not None:
+            runs = [r for r in runs if r.job_type == job_type]
+        return runs[-limit:][::-1]
+
+    def list_active(self, job_type: str) -> list[JobRun]:
+        return sorted(
+            [
+                r
+                for r in self._runs.values()
+                if r.job_type == job_type and r.status in ACTIVE_STATUSES
+            ],
+            key=lambda r: r.run_id,
+        )
+
+    def update_summary(
+        self, run_id: str, expected_status: JobStatus, summary: dict[str, Any]
+    ) -> bool:
+        run = self._runs.get(run_id)
+        if run is None or run.status != expected_status:
+            return False
+        self._runs[run_id] = replace(run, summary=summary)
+        return True
 
     def transition(
         self, run_id: str, current_status: JobStatus, target_status: JobStatus,
@@ -174,6 +197,48 @@ class TestJobService:
         second = service.create("test", "recent-2", "manual").run
         assert service.get(first.run_id) == first
         assert service.list_recent() == [second, first]
+
+
+class TestProgressAndRecovery:
+    def test_progress_replaces_summary_only_while_running(
+        self, service: JobService
+    ) -> None:
+        run = service.create("model_training", "model-training", "web").run
+        service.start(run.run_id)
+        updated = service.progress(
+            run.run_id,
+            {"stage": "training_resale", "completed_markets": []},
+        )
+        assert updated.status == "running"
+        assert updated.summary == {
+            "stage": "training_resale",
+            "completed_markets": [],
+        }
+        service.succeed(run.run_id, run.run_id, {"stage": "complete"})
+        with pytest.raises(InvalidJobTransition):
+            service.progress(run.run_id, {"stage": "late_write"})
+
+    def test_list_recent_can_filter_job_type(self, service: JobService) -> None:
+        model = service.create("model_training", "model-1", "web").run
+        service.create("listing_update", "listing-1", "web")
+        assert service.list_recent(job_type="model_training") == [model]
+
+    def test_recover_interrupted_marks_only_requested_job_type_failed(
+        self,
+        service: JobService,
+    ) -> None:
+        pending = service.create("model_training", "model-pending", "web").run
+        running = service.create("model_training", "model-running", "web").run
+        listing = service.create("listing_update", "listing-running", "web").run
+        service.start(running.run_id)
+        service.start(listing.run_id)
+
+        recovered = service.recover_interrupted("model_training")
+
+        assert {run.run_id for run in recovered} == {pending.run_id, running.run_id}
+        assert all(run.status == "failed" for run in recovered)
+        assert all(run.error_code == "worker_interrupted" for run in recovered)
+        assert service.get(listing.run_id).status == "running"  # type: ignore[union-attr]
 
 
 class TestRedactJobMessage:

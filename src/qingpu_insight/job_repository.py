@@ -261,13 +261,38 @@ class MySQLJobRepository:
             return None
         return self._row_to_run(row)
 
-    def list_recent(self, limit: int = 20) -> list[JobRun]:
+    def list_recent(self, limit: int = 20, job_type: str | None = None) -> list[JobRun]:
+        with self._connection() as connection:
+            try:
+                with connection.cursor(pymysql.cursors.DictCursor) as cursor:
+                    if job_type is not None:
+                        cursor.execute(
+                            "SELECT * FROM job_runs WHERE job_type = %s"
+                            " ORDER BY created_at DESC, run_id DESC LIMIT %s",
+                            (job_type, limit),
+                        )
+                    else:
+                        cursor.execute(
+                            "SELECT * FROM job_runs"
+                            " ORDER BY created_at DESC, run_id DESC LIMIT %s",
+                            (limit,),
+                        )
+                    rows = cursor.fetchall()
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+        return [self._row_to_run(row) for row in rows]
+
+    def list_active(self, job_type: str) -> list[JobRun]:
         with self._connection() as connection:
             try:
                 with connection.cursor(pymysql.cursors.DictCursor) as cursor:
                     cursor.execute(
-                        "SELECT * FROM job_runs ORDER BY created_at DESC, run_id DESC LIMIT %s",
-                        (limit,),
+                        "SELECT * FROM job_runs WHERE job_type = %s"
+                        " AND status IN ('pending', 'running', 'retry_wait')"
+                        " ORDER BY created_at ASC, run_id ASC",
+                        (job_type,),
                     )
                     rows = cursor.fetchall()
                 connection.commit()
@@ -275,6 +300,29 @@ class MySQLJobRepository:
                 connection.rollback()
                 raise
         return [self._row_to_run(row) for row in rows]
+
+    def update_summary(
+        self,
+        run_id: str,
+        expected_status: JobStatus,
+        summary: dict[str, object],
+    ) -> bool:
+        now = datetime.now(UTC)
+        summary_json = json.dumps(summary, ensure_ascii=False)
+        with self._connection() as connection:
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        "UPDATE job_runs SET summary = %s, updated_at = %s"
+                        " WHERE run_id = %s AND status = %s",
+                        (summary_json, now, run_id, expected_status),
+                    )
+                    affected = cursor.rowcount
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+        return affected == 1
 
     def transition(
         self,
