@@ -160,9 +160,9 @@ class TestReportApi:
         fields = response.get_json()["error"].get("fields", {})
         assert "candidate_ids" in fields
 
-    def test_post_report_rejects_too_many_candidates(self, report_app: FlaskClient) -> None:
+    def test_post_report_rejects_multiple_candidates(self, report_app: FlaskClient) -> None:
         response = _report_post(report_app, {
-            "candidate_ids": [f"id-{i}" for i in range(6)],
+            "candidate_ids": ["id-1", "id-2"],
             "intended_use": "self_use",
             "provider": "rule",
         })
@@ -200,7 +200,7 @@ class TestReportApi:
 
     def test_post_report_accepts_valid_request(self, report_app: FlaskClient) -> None:
         response = _report_post(report_app, {
-            "candidate_ids": ["id-1", "id-2"],
+            "candidate_ids": ["id-1"],
             "intended_use": "self_use",
             "provider": "rule",
         })
@@ -328,6 +328,10 @@ def test_homepage_contains_market_dashboard_contract(client) -> None:
     assert 'id="market-map"' in html
     assert 'id="price-trend"' in html
     assert 'id="recent-transactions"' in html
+    assert (
+        'href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" '
+        'crossorigin="anonymous"'
+    ) in html
     assert "資料更新至" in html
     assert "僅供市場研究" in html
 
@@ -336,6 +340,10 @@ def test_frontend_assets_keep_units_and_map_size_consistent(client) -> None:
     script = client.get("/static/app.js").get_data(as_text=True)
     styles = client.get("/static/app.css").get_data(as_text=True)
     assert "t.median_unit_price_per_ping_twd / 10000" in script
+    assert "https://unpkg.com/leaflet@1.9.4/dist/images/" in script
+    assert 'iconRetinaUrl: "marker-icon-2x.png"' in script
+    assert 'iconUrl: "marker-icon.png"' in script
+    assert 'shadowUrl: "marker-shadow.png"' in script
     assert "height: 440px" in styles
     assert "min-width: 0" in styles
 
@@ -861,6 +869,22 @@ def test_post_valuation_reports_field_errors(valuation_client):
     assert "building_area_ping" in response.get_json()["error"]["fields"]
 
 
+def test_post_valuation_reports_floor_above_total_floors(valuation_client):
+    payload = {**VALID_RESALE_PAYLOAD, "floor": 20, "total_floors": 10}
+
+    response = valuation_client.post("/api/valuations", json=payload)
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == {
+        "code": "invalid_request",
+        "message": "所在樓層不可高於總樓層。",
+        "fields": {
+            "floor": "must_not_exceed_total_floors",
+            "total_floors": "must_be_at_least_floor",
+        },
+    }
+
+
 def test_missing_artifact_uses_explicit_baseline(client_without_models):
     response = client_without_models.post("/api/valuations", json=VALID_RESALE_PAYLOAD)
     assert response.status_code == 201
@@ -907,6 +931,8 @@ def test_frontend_renders_evidence_before_summary(client):
     assert "interval_total_price_twd" in script
     assert "confidence_reasons" in script
     assert "comparables" in script
+    assert "所在樓層不可高於總樓層" in script
+    assert "floorInput.reportValidity()" in script
     assert "innerHTML =" not in script
 
 
@@ -938,8 +964,17 @@ class MemoryAdminJobRepository:
                 return run
         return None
 
-    def list_recent(self, limit: int = 20) -> list[JobRun]:
-        return list(reversed(list(self._runs.values())))[:limit]
+    def list_recent(self, limit: int = 20, job_type: str | None = None) -> list[JobRun]:
+        all_runs = reversed(list(self._runs.values()))
+        if job_type is not None:
+            all_runs = (r for r in all_runs if r.job_type == job_type)
+        return list(all_runs)[:limit]
+
+    def list_active(self, job_type: str) -> list[JobRun]:
+        return [
+            r for r in self._runs.values()
+            if r.job_type == job_type and r.status in ("pending", "running", "retry_wait")
+        ]
 
     def transition(
         self,
@@ -1399,6 +1434,35 @@ def test_job_detail_validates_uuid_before_lookup(admin_client: FlaskClient) -> N
     assert absent.status_code == 404
 
 
+def test_runtime_app_loads_dotenv_and_wires_listing_repository(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    import qingpu_insight.cli as cli
+    import qingpu_insight.web as web
+
+    listing_repo = object()
+    dotenv_calls = []
+    repository_calls = []
+
+    monkeypatch.setattr(
+        web,
+        "load_dotenv",
+        lambda path, override: dotenv_calls.append((path, override)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "create_listing_repository",
+        lambda root: repository_calls.append(root) or listing_repo,
+    )
+    monkeypatch.setattr(web, "create_app", lambda **kwargs: kwargs)
+
+    runtime = web._create_runtime_app(tmp_path)
+
+    assert dotenv_calls == [(tmp_path / ".env", False)]
+    assert repository_calls == [tmp_path]
+    assert runtime == {"root": tmp_path, "listing_repo": listing_repo}
+
+
 def test_production_admin_composition_requires_database_and_strong_secret(
     monkeypatch, tmp_path: Path, market_frame: pd.DataFrame,
 ) -> None:
@@ -1660,6 +1724,261 @@ def test_ops_health_repository_failure_returns_safe_503(market_frame) -> None:
         response = c.get("/api/ops/health")
         assert response.status_code == 503
         assert response.get_json()["error"]["code"] == "ops_unavailable"
+
+
+# --- Model Admin API tests (M5 / Task 6) ---
+
+
+class StubModelTrainingService:
+    def __init__(self, job_service) -> None:
+        self.job_service = job_service
+        self.handoffs: list[str] = []
+
+    def submit(self, request):
+        return self.job_service.create(
+            "model_training", "model_training:active", "web",
+        )
+
+    def handoff(self, submission, request, executor):
+        self.handoffs.append(submission.run.run_id)
+        return executor.submit(submission.run.run_id, lambda: None)
+
+
+class StubModelObservatory:
+    def __init__(self, job_service) -> None:
+        self.job_service = job_service
+        self._runs: dict[str, dict] = {}
+        self._report_paths: dict[str, Path] = {}
+
+    def status(self) -> dict:
+        return {"official_models": {}, "candidate_count": 0}
+
+    def list_runs(self, limit: int = 20) -> list[dict]:
+        jobs = self.job_service.list_recent(limit, job_type="model_training")
+        results = []
+        for run in jobs:
+            entry = {
+                "run_id": run.run_id,
+                "status": run.status,
+                "trigger": run.trigger,
+                "started_at": run.started_at.isoformat() if run.started_at else None,
+                "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+            }
+            if run.run_id in self._runs:
+                entry["markets"] = self._runs[run.run_id].get("markets", [])
+            results.append(entry)
+        return results
+
+    def get_run(self, run_id: str) -> dict | None:
+        run = self.job_service.get(run_id)
+        if run is None:
+            return None
+        result: dict = {
+            "run_id": run.run_id,
+            "status": run.status,
+            "trigger": run.trigger,
+        }
+        if run.run_id in self._runs:
+            result["manifest"] = dict(self._runs[run.run_id])
+        return result
+
+    def report_path(self, run_id: str, report_type: str) -> Path:
+        from qingpu_insight.model_artifacts import REPORT_TYPES
+
+        if report_type not in REPORT_TYPES:
+            raise ValueError(f"Unknown report_type: {report_type}")
+        path = Path.cwd() / "reports" / report_type
+        if path.suffix == ".joblib":
+            raise ValueError("joblib downloads are not permitted")
+        return path
+
+
+@pytest.fixture
+def model_admin_client(market_frame: pd.DataFrame) -> FlaskClient:
+    from qingpu_insight.jobs import JobService
+    from qingpu_insight.web import AdminServices, create_app
+
+    repo = MemoryAdminJobRepository()
+    job_service = JobService(repo)
+    mts = StubModelTrainingService(job_service)
+    obs = StubModelObservatory(job_service)
+    app = create_app(
+        data_source=InMemoryMarketDataSource(market_frame),
+        admin_services=AdminServices(
+            job_service=job_service,
+            listing_update_service=StubListingUpdateService(job_service),
+            executor=FakeAdminExecutor(),
+            model_training_service=mts,
+            model_observatory=obs,
+        ),
+    )
+    with app.test_client() as client:
+        with client.session_transaction() as sess:
+            sess["_csrf_token"] = "test-token"
+        yield client
+
+
+class TestModelAdminApi:
+    @pytest.mark.parametrize(
+        ("payload", "field"),
+        [
+            ({}, "markets"),
+            ({"markets": []}, "markets"),
+            ({"markets": ["resale", "resale"]}, "markets"),
+            ({"markets": ["sale"]}, "markets"),
+            ({"markets": ["resale"], "path": "C:/secret"}, "path"),
+            ({"markets": ["resale"], "model": "xgboost"}, "model"),
+        ],
+    )
+    def test_model_training_post_rejects_nonfixed_payload(
+        self, model_admin_client: FlaskClient,
+        payload: dict[str, object],
+        field: str,
+    ) -> None:
+        response = model_admin_client.post(
+            "/api/admin/model-training-runs",
+            json=payload,
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+        assert response.get_json()["error"]["fields"][field]
+
+    def test_model_admin_get_rejects_untrusted_host(
+        self, model_admin_client: FlaskClient,
+    ) -> None:
+        response = model_admin_client.get(
+            "/api/admin/models/status",
+            base_url="http://attacker.example",
+        )
+        assert response.status_code == 403
+
+    def test_model_admin_training_runs_get_rejects_untrusted_host(
+        self, model_admin_client: FlaskClient,
+    ) -> None:
+        response = model_admin_client.get(
+            "/api/admin/model-training-runs",
+            base_url="http://attacker.example",
+        )
+        assert response.status_code == 403
+
+    def test_model_admin_training_run_get_rejects_untrusted_host(
+        self, model_admin_client: FlaskClient,
+    ) -> None:
+        response = model_admin_client.get(
+            "/api/admin/model-training-runs/00000000-0000-4000-8000-000000000000",
+            base_url="http://attacker.example",
+        )
+        assert response.status_code == 403
+
+    def test_model_admin_report_get_rejects_untrusted_host(
+        self, model_admin_client: FlaskClient,
+    ) -> None:
+        response = model_admin_client.get(
+            "/api/admin/model-training-runs/00000000-0000-4000-8000-000000000000/reports/resale-evaluation",
+            base_url="http://attacker.example",
+        )
+        assert response.status_code == 403
+
+    def test_model_admin_post_rejects_missing_csrf(
+        self, model_admin_client: FlaskClient,
+    ) -> None:
+        response = model_admin_client.post(
+            "/api/admin/model-training-runs",
+            json={"markets": ["resale"]},
+        )
+        assert response.status_code == 403
+
+    def test_model_admin_post_rejects_wrong_csrf(
+        self, model_admin_client: FlaskClient,
+    ) -> None:
+        response = model_admin_client.post(
+            "/api/admin/model-training-runs",
+            json={"markets": ["resale"]},
+            headers={"X-Qingpu-CSRF": "wrong-token"},
+        )
+        assert response.status_code == 403
+
+    def test_model_admin_post_submit_new_run_returns_202(
+        self, model_admin_client: FlaskClient,
+    ) -> None:
+        response = model_admin_client.post(
+            "/api/admin/model-training-runs",
+            json={"markets": ["resale"]},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 202
+        body = response.get_json()
+        assert body["created"] is True
+        assert body["job_type"] == "model_training"
+        assert body["status"] == "pending"
+
+    def test_model_admin_post_repeat_while_active_returns_200(
+        self, model_admin_client: FlaskClient,
+    ) -> None:
+        first = model_admin_client.post(
+            "/api/admin/model-training-runs",
+            json={"markets": ["resale"]},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        second = model_admin_client.post(
+            "/api/admin/model-training-runs",
+            json={"markets": ["resale"]},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert second.status_code == 200
+        assert second.get_json()["created"] is False
+        assert second.get_json()["run_id"] == first.get_json()["run_id"]
+
+    def test_model_training_history_contains_only_model_training(
+        self, model_admin_client: FlaskClient,
+    ) -> None:
+        model_admin_client.post(
+            "/api/admin/model-training-runs",
+            json={"markets": ["resale"]},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        model_admin_client.post(
+            "/api/admin/model-training-runs",
+            json={"markets": ["presale"]},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        response = model_admin_client.get("/api/admin/model-training-runs?limit=10")
+        assert response.status_code == 200
+        body = response.get_json()
+        assert all(item["status"] == "pending" for item in body["items"])
+
+    def test_model_training_run_detail_validates_uuid(
+        self, model_admin_client: FlaskClient,
+    ) -> None:
+        bad = model_admin_client.get("/api/admin/model-training-runs/not-a-uuid")
+        missing = model_admin_client.get(
+            "/api/admin/model-training-runs/00000000-0000-4000-8000-000000000000"
+        )
+        assert bad.status_code == 400
+        assert bad.get_json()["error"]["fields"] == {"run_id": "invalid_uuid"}
+        assert missing.status_code == 404
+
+    @pytest.mark.parametrize("bad_type", [
+        "resale.joblib", "unknown",
+    ])
+    def test_model_admin_report_unknown_type_returns_400(
+        self, model_admin_client: FlaskClient, bad_type: str,
+    ) -> None:
+        response = model_admin_client.get(
+            "/api/admin/model-training-runs/00000000-0000-4000-8000-000000000000"
+            f"/reports/{bad_type}"
+        )
+        assert response.status_code == 400
+        assert response.get_json()["error"]["fields"]["report_type"]
+
+    def test_model_admin_status_returns_shape(
+        self, model_admin_client: FlaskClient,
+    ) -> None:
+        response = model_admin_client.get("/api/admin/models/status")
+        assert response.status_code == 200
+        body = response.get_json()
+        assert "official_models" in body
+        assert "candidate_count" in body
 
 
 def test_ops_backups_repository_failure_returns_safe_503(market_frame) -> None:

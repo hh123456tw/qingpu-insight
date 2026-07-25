@@ -93,6 +93,9 @@ class ModelObservatory:
 
         return result
 
+    def report_path(self, run_id: str, report_type: str) -> Path:
+        return self._candidate_store.report_path(run_id, report_type)
+
     def list_runs(self, limit: int = 20) -> list[dict[str, Any]]:
         jobs = self._job_service.list_recent(limit, job_type="model_training")
         manifests: dict[str, TrainingManifest] = {}

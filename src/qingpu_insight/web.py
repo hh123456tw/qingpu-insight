@@ -14,7 +14,8 @@ from urllib.parse import urlsplit
 
 import numpy as np
 import pandas as pd
-from flask import Flask, jsonify, render_template, request, session
+from dotenv import load_dotenv
+from flask import Flask, jsonify, render_template, request, send_file, session
 from werkzeug.datastructures import MultiDict
 from werkzeug.exceptions import HTTPException
 
@@ -64,6 +65,8 @@ class AdminServices:
     job_service: JobService
     listing_update_service: ListingUpdateService
     executor: LocalJobExecutor
+    model_training_service: object | None = None
+    model_observatory: object | None = None
 
 
 @dataclass(frozen=True)
@@ -147,10 +150,35 @@ def _create_production_admin_services(
         service_kwargs["source_factory"] = source_factory
     service = _create_listing_update_service(root, **service_kwargs)
     build_executor = executor_factory or LocalJobExecutor
+    executor = build_executor(service.job_service)
+
+    from qingpu_insight.model_artifacts import CandidateArtifactStore
+    from qingpu_insight.model_observatory import ModelObservatory
+    from qingpu_insight.model_training_service import (
+        ModelTrainingService,
+        SourceVersionProvider,
+    )
+
+    input_path = root / "data" / "market_data.parquet"
+    candidate_store = CandidateArtifactStore(root / "model" / "candidates")
+    mts = ModelTrainingService(
+        service.job_service, candidate_store, input_path,
+        SourceVersionProvider("unknown", True),
+    )
+    observatory = ModelObservatory(
+        root / "artifacts", candidate_store, mts, service.job_service,
+        input_path=input_path,
+    )
+
+    for interrupted in service.job_service.recover_interrupted("model_training"):
+        candidate_store.discard_staging(interrupted.run_id)
+
     return AdminServices(
         job_service=service.job_service,
         listing_update_service=service,
-        executor=build_executor(service.job_service),
+        executor=executor,
+        model_training_service=mts,
+        model_observatory=observatory,
     )
 
 
@@ -252,6 +280,16 @@ def parse_valuation_payload(payload: dict[str, Any]) -> ValuationInput:
     if missing:
         raise ApiInputError("請完整填寫估價條件。", missing)
     try:
+        floor = int(payload["floor"])
+        total_floors = int(payload["total_floors"])
+        if floor > total_floors:
+            raise ApiInputError(
+                "所在樓層不可高於總樓層。",
+                {
+                    "floor": "must_not_exceed_total_floors",
+                    "total_floors": "must_be_at_least_floor",
+                },
+            )
         return ValuationInput(
             transaction_type=str(payload["transaction_type"]),
             station_code=str(payload["station_code"]),
@@ -264,14 +302,16 @@ def parse_valuation_payload(payload: dict[str, Any]) -> ValuationInput:
             building_age_years=float(payload["building_age_years"])
             if payload.get("building_age_years") is not None
             else None,
-            floor=int(payload["floor"]),
-            total_floors=int(payload["total_floors"]),
+            floor=floor,
+            total_floors=total_floors,
             parking_type=payload.get("parking_type"),
             parking_area_ping=float(payload.get("parking_area_ping", 0)),
             asking_total_price_twd=int(payload["asking_total_price_twd"])
             if payload.get("asking_total_price_twd")
             else None,
         )
+    except ApiInputError:
+        raise
     except (KeyError, TypeError, ValueError):
         raise ApiInputError(
             "估價條件格式不正確。", {"valuation": "invalid"}
@@ -338,6 +378,40 @@ def _parse_listing_update_request() -> ListingUpdateRequest:
     return ListingUpdateRequest(
         types=tuple(types), max_pages=max_pages, trigger=trigger.strip()
     )
+
+
+def _parse_model_training_request() -> tuple[str, ...]:
+    if request.mimetype != "application/json":
+        raise ApiInputError("Request body must be JSON.", {"body": "application_json"})
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        raise ApiInputError("Request body must be a JSON object.", {"body": "object"})
+
+    fields: dict[str, str] = {}
+
+    extra = set(payload.keys()) - {"markets"}
+    for k in sorted(extra):
+        fields[k] = "not_allowed"
+
+    raw_markets = payload.get("markets")
+    if raw_markets is None:
+        fields["markets"] = "required"
+    elif not isinstance(raw_markets, list):
+        fields["markets"] = "array"
+    elif not raw_markets:
+        fields["markets"] = "non_empty"
+    elif any(not isinstance(m, str) for m in raw_markets):
+        fields["markets"] = "string_items"
+    elif len(set(raw_markets)) != len(raw_markets):
+        fields["markets"] = "unique"
+    elif any(m not in {"resale", "presale"} for m in raw_markets):
+        fields["markets"] = "supported_values"
+
+    if fields:
+        raise ApiInputError("Request validation failed.", fields)
+
+    ordered = [m for m in ("resale", "presale") if m in raw_markets]
+    return tuple(ordered)
 
 
 def _public_job(run: JobRun) -> dict[str, object]:
@@ -693,6 +767,112 @@ def create_app(
             return jsonify({"error": {"code": "not_found", "message": "工作不存在。"}}), 404
         return jsonify(_public_job(run))
 
+    # ------------------------------------------------------------------
+    # Model Admin API (M5)
+    # ------------------------------------------------------------------
+
+    @app.get("/api/admin/models/status")
+    def admin_models_status():
+        if not _is_trusted_local_request():
+            return jsonify({"error": {"code": "forbidden", "message": "僅允許本機存取。"}}), 403
+        if admin_services is None or admin_services.model_observatory is None:
+            return jsonify({"error": {"code": "admin_unavailable", "message": "管理功能未啟用。"}}), 503
+        return jsonify(admin_services.model_observatory.status())
+
+    @app.get("/api/admin/model-training-runs")
+    def admin_model_training_runs():
+        if not _is_trusted_local_request():
+            return jsonify({"error": {"code": "forbidden", "message": "僅允許本機存取。"}}), 403
+        if admin_services is None or admin_services.model_observatory is None:
+            return jsonify({"error": {"code": "admin_unavailable", "message": "管理功能未啟用。"}}), 503
+        raw_limit = request.args.get("limit", "20")
+        try:
+            limit = int(raw_limit)
+        except (TypeError, ValueError):
+            return _invalid_request({"limit": "integer_1_to_100"})
+        if str(limit) != raw_limit or not 1 <= limit <= 100:
+            return _invalid_request({"limit": "integer_1_to_100"})
+        try:
+            runs = admin_services.model_observatory.list_runs(limit)
+        except Exception:
+            return jsonify({"error": {"code": "admin_unavailable", "message": "工作歷史暫時無法取得。"}}), 503
+        return jsonify({"items": runs, "limit": limit})
+
+    @app.get("/api/admin/model-training-runs/<run_id>")
+    def admin_model_training_run(run_id: str):
+        if not _is_trusted_local_request():
+            return jsonify({"error": {"code": "forbidden", "message": "僅允許本機存取。"}}), 403
+        if admin_services is None or admin_services.model_observatory is None:
+            return jsonify({"error": {"code": "admin_unavailable", "message": "管理功能未啟用。"}}), 503
+        try:
+            uuid.UUID(run_id)
+        except (ValueError, AttributeError):
+            return _invalid_request({"run_id": "invalid_uuid"})
+        try:
+            run = admin_services.model_observatory.get_run(run_id)
+        except Exception:
+            return jsonify({"error": {"code": "admin_unavailable", "message": "工作狀態暫時無法取得。"}}), 503
+        if run is None:
+            return jsonify({"error": {"code": "not_found", "message": "工作不存在。"}}), 404
+        return jsonify(run)
+
+    @app.post("/api/admin/model-training-runs")
+    def admin_model_training_submit():
+        if not _is_trusted_local_request():
+            return jsonify({"error": {"code": "forbidden", "message": "僅限本機。"}}), 403
+        if request.headers.get("X-Qingpu-CSRF", "") != session.get("_csrf_token", ""):
+            return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
+        if admin_services is None or admin_services.model_training_service is None:
+            return jsonify({"error": {"code": "admin_unavailable", "message": "管理功能未啟用。"}}), 503
+        try:
+            markets = _parse_model_training_request()
+        except ApiInputError:
+            raise
+
+        from qingpu_insight.model_training_service import ModelTrainingRequest
+
+        request_obj = ModelTrainingRequest(markets=markets)
+
+        try:
+            submission = admin_services.model_training_service.submit(request_obj)
+        except Exception:
+            return jsonify({"error": {"code": "admin_unavailable", "message": "管理功能暫時無法使用。"}}), 503
+
+        if submission.created:
+            try:
+                admin_services.model_training_service.handoff(
+                    submission, request_obj, admin_services.executor,
+                )
+            except Exception:
+                return jsonify({"error": {"code": "enqueue_failed", "message": "工作無法啟動。"}}), 503
+
+        body = _public_job(submission.run)
+        body["created"] = submission.created
+        return jsonify(body), 202 if submission.created else 200
+
+    @app.get("/api/admin/model-training-runs/<run_id>/reports/<report_type>")
+    def admin_model_training_report(run_id: str, report_type: str):
+        if not _is_trusted_local_request():
+            return jsonify({"error": {"code": "forbidden", "message": "僅允許本機存取。"}}), 403
+        if admin_services is None or admin_services.model_observatory is None:
+            return jsonify({"error": {"code": "admin_unavailable", "message": "管理功能未啟用。"}}), 503
+        try:
+            uuid.UUID(run_id)
+        except (ValueError, AttributeError):
+            return _invalid_request({"run_id": "invalid_uuid"})
+        try:
+            path = admin_services.model_observatory.report_path(run_id, report_type)
+        except ValueError:
+            return _invalid_request({"report_type": "not_allowed"})
+
+        if path.suffix == ".joblib":
+            return _invalid_request({"report_type": "not_downloadable"})
+
+        try:
+            return send_file(path, as_attachment=True, download_name=path.name)
+        except FileNotFoundError:
+            return jsonify({"error": {"code": "not_found", "message": "報告不存在。"}}), 404
+
     @app.get("/api/jobs")
     def list_jobs():
         if not _is_trusted_local_request():
@@ -781,8 +961,8 @@ def create_app(
         candidate_ids = payload.get("candidate_ids")
         if not isinstance(candidate_ids, list) or not candidate_ids:
             fields["candidate_ids"] = "required"
-        elif len(candidate_ids) > 5:
-            fields["candidate_ids"] = "max_5"
+        elif len(candidate_ids) > 1:
+            fields["candidate_ids"] = "max_1"
         elif not all(isinstance(c, str) for c in candidate_ids):
             fields["candidate_ids"] = "string_items"
 
@@ -992,10 +1172,19 @@ def create_app(
     return app
 
 
+def _create_runtime_app(root: Path) -> Flask:
+    load_dotenv(root / ".env", override=False)
+
+    from qingpu_insight.cli import create_listing_repository
+
+    listing_repo = create_listing_repository(root)
+    return create_app(root=root, listing_repo=listing_repo)
+
+
 def main() -> None:
     port = int(os.environ.get("QINGPU_PORT", "5000"))
     debug = os.environ.get("QINGPU_DEBUG", "") == "1"
-    app = create_app(root=Path.cwd())
+    app = _create_runtime_app(Path.cwd())
     try:
         app.run(host="127.0.0.1", port=port, debug=debug)
     finally:
