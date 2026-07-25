@@ -22,11 +22,13 @@ class ModelObservatory:
         candidate_store: CandidateArtifactStore,
         model_training_service: ModelTrainingService,
         job_service: JobService,
+        input_path: Path | None = None,
     ) -> None:
         self._artifact_dir = artifact_dir
         self._candidate_store = candidate_store
         self._model_training_service = model_training_service
         self._job_service = job_service
+        self._input_path = input_path
         self._cached_snapshot: dict[str, Any] | None = None
         self._cached_snapshot_key: tuple[str, int, float] | None = None
 
@@ -67,16 +69,13 @@ class ModelObservatory:
             "candidate_count": len(candidates),
         }
 
-        input_path: Path | None = getattr(
-            self._model_training_service, "_input_path", None
-        )
-        if input_path is not None and input_path.exists():
-            stat = input_path.stat()
-            key = (str(input_path.resolve()), stat.st_size, stat.st_mtime_ns)
+        if self._input_path is not None and self._input_path.exists():
+            stat = self._input_path.stat()
+            key = (str(self._input_path.resolve()), stat.st_size, stat.st_mtime_ns)
             if key != self._cached_snapshot_key:
                 try:
-                    frame = pd.read_parquet(input_path)
-                    snapshot = build_data_snapshot(input_path, frame)
+                    frame = pd.read_parquet(self._input_path)
+                    snapshot = build_data_snapshot(self._input_path, frame)
                     self._cached_snapshot = {
                         "sha256": snapshot.sha256,
                         "raw_count": snapshot.raw_count,

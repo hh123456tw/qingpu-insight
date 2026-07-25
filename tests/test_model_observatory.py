@@ -156,15 +156,13 @@ def observatory_fixture(
             )
     pd.DataFrame(rows).to_parquet(input_path, index=False)
 
-    # We need a minimal ModelTrainingService that exposes _input_path
-    class FakeModelTrainingService:
-        _input_path = input_path
-
+    dummy_service = type("FakeModelTrainingService", (), {})()
     return ModelObservatory(
         artifact_dir=artifact_dir,
         candidate_store=candidate_store,
-        model_training_service=FakeModelTrainingService(),  # type: ignore
+        model_training_service=dummy_service,  # type: ignore
         job_service=FakeJobService(),
+        input_path=input_path,
     )
 
 

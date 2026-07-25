@@ -1575,6 +1575,9 @@ class RecordingModelTrainingService:
             start=lambda run_id: SimpleNamespace(run_id=run_id)
         )
 
+    def start_run(self, run_id: str) -> Any:
+        return self._jobs.start(run_id)
+
     def submit(self, request):
         from qingpu_insight.jobs import JobRun, JobSubmission
 
