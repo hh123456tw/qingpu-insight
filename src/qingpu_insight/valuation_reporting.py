@@ -5,13 +5,13 @@ from typing import Any
 import numpy as np
 
 from qingpu_insight.model_features import FEATURE_COLUMNS
-from qingpu_insight.model_training import CandidateEvaluation, TimeSplit, leakage_audit
+from qingpu_insight.model_training import ModelExperiment, TimeSplit, leakage_audit
 from qingpu_insight.valuation import ValuationBundle
 
 
 def write_evaluation(
     bundle: ValuationBundle,
-    candidates: list[CandidateEvaluation],
+    experiment: ModelExperiment,
     split: TimeSplit,
     report_dir: Path,
 ) -> Path:
@@ -27,25 +27,34 @@ def write_evaluation(
 
     policy_counts = split.train["target_policy"].value_counts().to_dict()
 
-    candidate_metrics = {}
-    for c in candidates:
-        candidate_metrics[c.name] = {
-            "overall_mae": c.overall_mae,
-            "station_mape": c.station_mape,
-            "metrics": c.metrics.to_dict(),
-        }
+    selection_metrics: dict[str, dict[str, object]] = {}
+    for c in experiment.selection_results:
+        selection_metrics[c.name] = c.metrics.to_dict(orient="index")
+
+    final_test_metrics: dict[str, dict[str, object]] = {}
+    for name, c in experiment.final_test_results.items():
+        final_test_metrics[name] = c.metrics.to_dict(orient="index")
 
     report = {
         "transaction_type": bundle.transaction_type,
         "model_version": bundle.model_version,
         "selected_model": bundle.model_name,
-        "candidates": candidate_metrics,
+        "selection_metrics": selection_metrics,
+        "final_test_metrics": final_test_metrics,
+        "recommendation": {
+            "status": "recommended" if experiment.recommended else "not_recommended",
+            "reason_codes": list(experiment.reason_codes),
+        },
         "grouped_metrics": bundle.metrics,
         "split": {
             "train_start": str(split.train["transaction_date"].min().date()),
             "train_end": str(split.train["transaction_date"].max().date()),
-            "calibration_start": str(split.calibration["transaction_date"].min().date()),
-            "calibration_end": str(split.calibration["transaction_date"].max().date()),
+            "calibration_start": str(
+                split.calibration["transaction_date"].min().date()
+            ),
+            "calibration_end": str(
+                split.calibration["transaction_date"].max().date()
+            ),
             "test_start": str(split.test["transaction_date"].min().date()),
             "test_end": str(split.test["transaction_date"].max().date()),
             "train_count": len(split.train),
@@ -69,7 +78,7 @@ def write_evaluation(
 
 def write_model_card(
     bundle: ValuationBundle,
-    candidates: list[CandidateEvaluation],
+    experiment: ModelExperiment,
     leakage: dict[str, Any],
     report_dir: Path,
 ) -> Path:
@@ -85,7 +94,7 @@ def write_model_card(
         "## 候選模型",
     ]
 
-    for c in candidates:
+    for c in experiment.selection_results:
         marker = " ✓" if c.name == bundle.model_name else ""
         lines.append(f"- {c.name}：MAE = {c.overall_mae:,.0f}{marker}")
 
@@ -134,6 +143,9 @@ def write_model_card(
             "- 輸入數值超出特徵訓練範圍",
             "- 交易類型與模型類型不符",
             "- 缺乏附近站點近期交易資料",
+            "",
+            "## 版本狀態",
+            "- 此版本為未發布候選模型，不會替換網站正式估價模型。",
             "",
         ]
     )
