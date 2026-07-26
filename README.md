@@ -320,6 +320,89 @@ Remove-Item Env:MYSQL_PWD
 
 請參閱 [docs/m2-valuation-methodology.md](docs/m2-valuation-methodology.md)。
 
+### 中古屋模型證據工作流程
+
+中古屋（resale）估價模型在訓練與發布時，會額外執行完整的證據檢查，確保模型符合最低品質門檻。
+
+**資料狀態**
+- 資料範圍：訓練資料的時間區間（min_date～max_date）、各站點（A17/A18/A19）與類型（resale/presale）的可用交易筆數
+- 日期語義：`data_max_date` 是訓練資料最後一筆交易的日期，也是模型「知道」的最後日期
+
+**候選模型家族**
+現有候選模型為 `Ridge`、`RandomForest`、`HistGradientBoosting` 及 `RecentMedianBaseline`（僅作為基準線，不作為正式模型發布）。**XGBoost 被刻意排除**：本專案的資料規模（數千筆）不需要 XGBoost 的分散式加速優勢，且 `HistGradientBoostingRegressor` 在相同資料上已達到可比或更好的表現，同時減少相依套件數量。
+
+**衍生特徵**
+在基本特徵（車站距離、坪數、類型、樓層、車位等 14 個欄位）之上，新增五個衍生特徵：
+- `transaction_month_index`：交易年月數值，捕獲長期時間趨勢
+- `station_building_type`：車站與建物類型交互項
+- `building_age_band`：屋齡分群（0–5、5–10、10–20、20+ 年）
+- `area_band`：坪數分群（small < 20、standard 20–50、large > 50 坪）
+- `floor_band`：樓層比三分群（low、middle、high）
+
+訓練使用 **24 個月半衰期遞迴權重**（`recency_weights`），愈近期的交易權重愈高，權重下限為 0.10。
+
+**嚴格時間切割**
+所有評估使用嚴格的時間順序切割：
+- 訓練集：最新日期往前推 18 個月以前的所有交易
+- 校準集：訓練集結束後 6 個月
+- 測試集：最後 12 個月
+
+三組各自至少 100 筆交易，否則訓練失敗。
+
+**三次年度回溯測試**
+中古屋模型自動執行三次年度回溯測試：以最後資料日期為基準，逐年往過去推移三個不同的截止日期，每次重新訓練並驗證候選模型是否能通過發布閘門。每次回溯記錄 `passed`（候選是否勝過基準線）與 `stations_within_limit`（各站 MAPE 是否在基準線 110% 以內）。
+
+**發布閘門（Release Gate）**
+候選模型要獲得 `recommended` 狀態，必須同時滿足以下六項條件：
+1. **MAE 改善 ≥ 2%**：整體 MAE ≤ 基準線 MAE × 0.98
+2. **各站 MAPE < 10% 倒退**：所有已發布車站的 MAPE ≤ 基準線 × 1.10
+3. **A18 嚴格不倒退**：A18 車站的 MAPE 必須嚴格低於基準線（`<`，而非 `≤`）
+4. **回溯測試通過 ≥ 2/3**：三次年度回溯中至少兩次 `passed = true`
+5. **回溯各站皆在限制內**：所有回溯的 `stations_within_limit` 皆為 `true`
+6. **資料新鮮度**：`data_max_date` 距最新官方資料日期不超過 180 天
+
+以上六項全部通過，`recommended` 設為 `true`，管理端才允許發布。
+
+**過期降級（Stale Fallback）**
+正式模型若超過 **180 天**未更新，`valuate()` 自動切換至降級模式：
+- 使用最近 12 個月交易計算 `RecentMedianBaseline` 作為估價主體
+- 區間與相似成交仍參考原模型的校準參數
+- 估價結果標記為 `degraded = true`、`degraded_reason = "stale_model"`
+- 信賴度強制設為 `low`，並附加「正式模型資料過舊」說明
+
+若模型 artifact 完全無法載入，則退而使用最近 24 個月的中位數作為估價。
+
+**五分鐘操作流程**
+從資料更新到發布確認的典型操作：
+
+```powershell
+# 1. 更新官方交易資料（指定季度範圍）
+.\.venv\Scripts\qingpu-data.exe run --start-season 115S1 --end-season 115S2
+
+# 2. 建立市場資料集並訓練中古屋模型
+.\.venv\Scripts\qingpu-data.exe market-build
+.\.venv\Scripts\qingpu-data.exe model-train --markets resale
+
+# 3. 開啟觀測台檢查 A18 MAPE 與回溯測試
+# 瀏覽器開啟 http://127.0.0.1:5000/admin#models
+# 找到最新候選 run，展開檢視 release_checks 與 backtests
+
+# 4. 若 recommended = true，取得發布預覽
+# 在管理端「模型」頁面點擊「發布預覽」，確認變更內容
+
+# 5. 輸入確認文字提交發布
+# 系統執行 smoke test → 複製 artifact → 更新 current pointer → 寫入版本記錄
+# 發布後觀測台顯示新版本已啟用
+
+# 僅在所有 release_checks 通過且 recommended = true 時才能發布；
+# 任何一項不滿足，管理端不會釋出發布選項。
+```
+
+**已知限制**
+- 本模型估價的是**當前的合理價格**，不具備未來價格預測能力
+- 模型未納入總體經濟指標（利率、通膨、政策變化）
+- 預售屋（presale）模型不執行回溯測試與衍生特徵實驗，僅使用基本特徵與標準時間切割
+
 ## M3 刊登資訊工作流程
 
 ### 前提
