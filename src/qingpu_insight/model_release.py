@@ -265,8 +265,8 @@ STAGES = (
     "validating_candidate",
     "backing_up_pointer",
     "importing_version",
-    "activating",
     "smoke_testing",
+    "activating",
     "recording_release",
 )
 
