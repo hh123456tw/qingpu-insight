@@ -265,6 +265,28 @@
         });
     }
 
+    function renderModelMetricsTable(container, title, metrics) {
+      if (!metrics || typeof metrics !== "object") return;
+      var modelNames = Object.keys(metrics).sort();
+      for (var mi = 0; mi < modelNames.length; mi++) {
+        var modelName = modelNames[mi];
+        var sub = metrics[modelName];
+        if (!sub || typeof sub !== "object") continue;
+        var subTitle = document.createElement("h5");
+        subTitle.textContent = title + " — " + modelName;
+        container.appendChild(subTitle);
+        var categories = Object.keys(sub).sort();
+        for (var ci = 0; ci < categories.length; ci++) {
+          var cat = sub[ci];
+          if (!cat || typeof cat !== "object") continue;
+          var catLabel = document.createElement("h6");
+          catLabel.textContent = categories[ci];
+          container.appendChild(catLabel);
+          renderMetricTable(container, cat);
+        }
+      }
+    }
+
     function renderDetail(detail) {
       var container = document.getElementById("ma-detail-content");
       container.innerHTML = "";
@@ -290,88 +312,48 @@
       }
 
       if (manifest.results) {
-        var results = manifest.results;
-        if (results.candidates && results.candidates.length > 0) {
-          var candSection = document.createElement("div");
-          candSection.className = "ma-detail-section";
-          var candTitle = document.createElement("h4");
-          candTitle.textContent = "候選模型校正評估";
-          candSection.appendChild(candTitle);
-          var candTable = document.createElement("table");
-          candTable.className = "ma-table";
-          var candThead = document.createElement("thead");
-          var candTr = document.createElement("tr");
-          ["模型", "R²", "RMSE", "MAPE", "推薦"].forEach(function (h) {
-            var th = document.createElement("th");
-            th.textContent = h;
-            candTr.appendChild(th);
-          });
-          candThead.appendChild(candTr);
-          candTable.appendChild(candThead);
-          var candTbody = document.createElement("tbody");
-          for (var ci = 0; ci < results.candidates.length; ci++) {
-            var c = results.candidates[ci];
-            var cr = document.createElement("tr");
-            var tdName = document.createElement("td");
-            tdName.textContent = c.name || "—";
-            cr.appendChild(tdName);
-            var tdR2 = document.createElement("td");
-            tdR2.textContent = c.r2 != null ? String(Number(c.r2).toFixed(4)) : "—";
-            cr.appendChild(tdR2);
-            var tdRMSE = document.createElement("td");
-            tdRMSE.textContent = c.rmse != null ? String(Number(c.rmse).toFixed(0)) : "—";
-            cr.appendChild(tdRMSE);
-            var tdMAPE = document.createElement("td");
-            tdMAPE.textContent = c.mape != null ? String(Number(c.mape).toFixed(2)) + "%" : "—";
-            cr.appendChild(tdMAPE);
-            var tdRec = document.createElement("td");
-            tdRec.textContent = c.recommended === true ? "建議" : (c.recommended === false ? "不建議" : "—");
-            cr.appendChild(tdRec);
-            candTbody.appendChild(cr);
-          }
-          candTable.appendChild(candTbody);
-          candSection.appendChild(candTable);
-          container.appendChild(candSection);
-        }
+        for (var ri = 0; ri < manifest.results.length; ri++) {
+          var r = manifest.results[ri];
+          var section = document.createElement("div");
+          section.className = "ma-detail-section";
+          var sectionTitle = document.createElement("h4");
+          sectionTitle.textContent = "市場: " + (r.market || "—");
+          section.appendChild(sectionTitle);
 
-        if (results.warnings && results.warnings.length > 0) {
-          var warnSection = document.createElement("div");
-          warnSection.className = "ma-detail-section";
-          var warnTitle = document.createElement("h4");
-          warnTitle.textContent = "警告";
-          warnSection.appendChild(warnTitle);
-          renderWarnings(warnSection, results.warnings);
-          container.appendChild(warnSection);
-        }
+          var modelEl = document.createElement("p");
+          modelEl.textContent = "選定模型: " + (r.selected_model || "—");
+          section.appendChild(modelEl);
 
-        if (results.final_test) {
-          var ftSection = document.createElement("div");
-          ftSection.className = "ma-detail-section";
-          var ftTitle = document.createElement("h4");
-          ftTitle.textContent = "最終測試結果";
-          ftSection.appendChild(ftTitle);
-          var ft = results.final_test;
-          var ftTable = document.createElement("table");
-          ftTable.className = "ma-table";
-          var ftBody = document.createElement("tbody");
-          var ftKeys = Object.keys(ft).sort();
-          for (var fi = 0; fi < ftKeys.length; fi++) {
-            var ftr = document.createElement("tr");
-            var ftd1 = document.createElement("td");
-            ftd1.textContent = ftKeys[fi];
-            var ftd2 = document.createElement("td");
-            ftd2.textContent = ft[ftKeys[fi]] != null ? String(ft[ftKeys[fi]]) : "—";
-            ftr.appendChild(ftd1);
-            ftr.appendChild(ftd2);
-            ftBody.appendChild(ftr);
+          var recEl = document.createElement("p");
+          recEl.textContent = "推薦: " + (r.recommended === true ? "是" : (r.recommended === false ? "否" : "—"));
+          section.appendChild(recEl);
+
+          if (r.reason_codes && r.reason_codes.length > 0) {
+            var rcLabel = document.createElement("p");
+            rcLabel.textContent = "原因代碼: " + r.reason_codes.join(", ");
+            section.appendChild(rcLabel);
           }
-          ftTable.appendChild(ftBody);
-          ftSection.appendChild(ftTable);
-          container.appendChild(ftSection);
+
+          renderModelMetricsTable(section, "校正評估", r.selection_metrics);
+          renderModelMetricsTable(section, "最終測試", r.final_test_metrics);
+
+          container.appendChild(section);
         }
       }
 
-      var reportTypes = (detail.report_types) || [];
+      var reportTypes = [];
+      if (manifest.results) {
+        for (var ri = 0; ri < manifest.results.length; ri++) {
+          var rf = manifest.results[ri].report_files;
+          if (rf && typeof rf === "object") {
+            for (var key in rf) {
+              if (rf.hasOwnProperty(key) && reportTypes.indexOf(key) === -1) {
+                reportTypes.push(key);
+              }
+            }
+          }
+        }
+      }
       if (reportTypes.length > 0) {
         var rpSection = document.createElement("div");
         rpSection.className = "ma-detail-section";
@@ -470,7 +452,7 @@
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-CSRF-Token": token,
+          "X-Qingpu-CSRF": token,
         },
         body: JSON.stringify(payload),
       })

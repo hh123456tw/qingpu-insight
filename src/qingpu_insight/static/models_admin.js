@@ -83,7 +83,7 @@
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-CSRF-Token": token,
+        "X-Qingpu-CSRF": token,
       },
       body: JSON.stringify(payload),
     });

@@ -20,6 +20,7 @@ from werkzeug.datastructures import MultiDict
 from werkzeug.exceptions import HTTPException
 
 from qingpu_insight.backup_repository import MySQLBackupRepository
+from qingpu_insight.config import get_settings
 from qingpu_insight.evidence import UnknownCandidateError
 from qingpu_insight.health import HealthService
 from qingpu_insight.health_repository import MySQLHealthRepository
@@ -159,8 +160,9 @@ def _create_production_admin_services(
         SourceVersionProvider,
     )
 
-    input_path = root / "data" / "market_data.parquet"
-    candidate_store = CandidateArtifactStore(root / "model" / "candidates")
+    settings = get_settings(root)
+    input_path = settings.processed_dir / "market_transactions.parquet"
+    candidate_store = CandidateArtifactStore(root / "candidates")
     mts = ModelTrainingService(
         service.job_service, candidate_store, input_path,
         SourceVersionProvider("unknown", True),
