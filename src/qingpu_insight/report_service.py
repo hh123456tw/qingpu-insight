@@ -30,12 +30,14 @@ class ReportService:
         rule_provider: ReportProvider,
         validator: ValidatorFn,
         repository: MySQLReportRepository,
+        provider_resolver: Callable[[str], ReportProvider | None] | None = None,
     ) -> None:
         self._evidence_builder = evidence_builder
         self._providers = providers
         self._rule_provider = rule_provider
         self._validator = validator
         self._repository = repository
+        self._provider_resolver = provider_resolver
 
     def generate(self, request: ReportRequest) -> SavedBuyerReport:
         pack = self._evidence_builder.build(request)
@@ -51,6 +53,8 @@ class ReportService:
                 raise ProviderError("service_rule_failed")
         else:
             ai_provider = self._providers.get(request.provider)
+            if ai_provider is None and self._provider_resolver is not None:
+                ai_provider = self._provider_resolver(request.provider)
 
             if ai_provider is not None:
                 try:

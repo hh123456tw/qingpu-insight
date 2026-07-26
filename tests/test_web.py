@@ -31,6 +31,27 @@ class InMemoryMarketDataSource:
         return self._frame
 
 
+class _SecretsStore:
+    def __init__(self) -> None:
+        self.last_set: str | None = None
+        self.deleted: bool = False
+
+    def status(self) -> dict[str, bool]:
+        return {"gemini_configured": self.last_set is not None and not self.deleted}
+
+    def set_gemini_key(self, key: str) -> None:
+        self.last_set = key
+        self.deleted = False
+
+    def delete_gemini_key(self) -> None:
+        self.deleted = True
+
+    def merged_env(self, base: dict) -> dict:
+        if self.last_set and not self.deleted:
+            return {**base, "QINGPU_GEMINI_API_KEY": self.last_set}
+        return dict(base)
+
+
 class FailingMarketDataSource:
     def load(self, filters: MarketFilters) -> pd.DataFrame:
         raise RuntimeError("database connection failed")
@@ -3283,5 +3304,159 @@ class TestProductionRestoreApi:
             headers={"X-Qingpu-CSRF": "test-token"},
         )
         assert response.status_code == 503
+
+    # ------------------------------------------------------------------
+    # Provider API tests (Task 14)
+    # ------------------------------------------------------------------
+
+    def test_providers_get_status(self, admin_app, admin_client) -> None:
+        app, _, _, _ = admin_app
+        from dataclasses import replace
+        from qingpu_insight.provider_ops import ProviderOpsService
+
+        class _Rule:
+            def generate(self, pack, repair_codes=()):
+                return type("R", (), {"provider": "rule", "model": "rule"})()
+
+        svc = ProviderOpsService(
+            rule_provider=_Rule(),
+            provider_factory=lambda n: None,
+            env={"QINGPU_OLLAMA_MODEL": "test"},
+        )
+        store = _SecretsStore()
+        app.extensions["qingpu_admin_runtime"] = replace(
+            app.extensions["qingpu_admin_runtime"],
+            provider_ops_service=svc,
+            secrets_store=store,
+        )
+        response = admin_client.get("/api/admin/providers")
+        assert response.status_code == 200
+        data = response.json
+        assert "providers" in data
+        names = [p["name"] for p in data["providers"]]
+        assert "rule" in names
+        assert "ollama" in names
+        assert "gemini" in names
+
+    def test_providers_unavailable_without_service(self, admin_app, admin_client) -> None:
+        app, _, _, _ = admin_app
+        from dataclasses import replace
+        app.extensions["qingpu_admin_runtime"] = replace(
+            app.extensions["qingpu_admin_runtime"],
+            provider_ops_service=None,
+        )
+        response = admin_client.get("/api/admin/providers")
+        assert response.status_code == 503
+
+    def test_set_gemini_key(self, admin_app, admin_client) -> None:
+        app, _, _, _ = admin_app
+        from dataclasses import replace
+        from qingpu_insight.provider_ops import ProviderOpsService
+
+        class _Rule:
+            def generate(self, pack, repair_codes=()):
+                return type("R", (), {"provider": "rule", "model": "rule"})()
+
+        store = _SecretsStore()
+        svc = ProviderOpsService(
+            rule_provider=_Rule(),
+            provider_factory=lambda n: None,
+            env={},
+        )
+        app.extensions["qingpu_admin_runtime"] = replace(
+            app.extensions["qingpu_admin_runtime"],
+            provider_ops_service=svc,
+            secrets_store=store,
+        )
+        response = admin_client.put(
+            "/api/admin/providers/gemini-key",
+            json={"key": "test-key-123"},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 200
+        assert response.json["gemini_configured"] is True
+        assert store.last_set == "test-key-123"
+
+    def test_set_gemini_key_rejects_extra_fields(self, admin_app, admin_client) -> None:
+        response = admin_client.put(
+            "/api/admin/providers/gemini-key",
+            json={"key": "test", "extra": "bad"},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+
+    def test_set_gemini_key_rejects_empty(self, admin_app, admin_client) -> None:
+        response = admin_client.put(
+            "/api/admin/providers/gemini-key",
+            json={"key": ""},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+
+    def test_set_gemini_key_requires_csrf(self, admin_app, admin_client) -> None:
+        response = admin_client.put(
+            "/api/admin/providers/gemini-key",
+            json={"key": "test-key"},
+        )
+        assert response.status_code == 403
+
+    def test_delete_gemini_key(self, admin_app, admin_client) -> None:
+        app, _, _, _ = admin_app
+        from dataclasses import replace
+        store = _SecretsStore()
+        store.last_set = "existing-key"
+        app.extensions["qingpu_admin_runtime"] = replace(
+            app.extensions["qingpu_admin_runtime"],
+            secrets_store=store,
+        )
+        response = admin_client.delete(
+            "/api/admin/providers/gemini-key",
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 200
+        assert store.deleted is True
+        assert response.json["gemini_configured"] is False
+
+    def test_provider_smoke_submit(self, admin_app, admin_client) -> None:
+        app, _, _, _ = admin_app
+        from dataclasses import replace
+        from qingpu_insight.provider_ops import ProviderOpsService
+
+        class _Rule:
+            def generate(self, pack, repair_codes=()):
+                return type("R", (), {"provider": "rule", "model": "rule"})()
+
+        svc = ProviderOpsService(
+            rule_provider=_Rule(),
+            provider_factory=lambda n: None,
+            env={},
+        )
+        app.extensions["qingpu_admin_runtime"] = replace(
+            app.extensions["qingpu_admin_runtime"],
+            provider_ops_service=svc,
+        )
+        response = admin_client.post(
+            "/api/admin/provider-smoke-runs",
+            json={"provider": "rule"},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 202
+        assert response.json["provider"] == "rule"
+        assert response.json["status"] == "pending"
+
+    def test_provider_smoke_rejects_invalid_provider(self, admin_app, admin_client) -> None:
+        response = admin_client.post(
+            "/api/admin/provider-smoke-runs",
+            json={"provider": "invalid"},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+
+    def test_provider_smoke_requires_csrf(self, admin_app, admin_client) -> None:
+        response = admin_client.post(
+            "/api/admin/provider-smoke-runs",
+            json={"provider": "rule"},
+        )
+        assert response.status_code == 403
 
 

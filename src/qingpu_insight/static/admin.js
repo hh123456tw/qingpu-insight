@@ -649,6 +649,17 @@
         });
       }
 
+      loadProviderStatus();
+
+      var gmSetBtn = document.getElementById("gm-key-set-btn");
+      if (gmSetBtn) gmSetBtn.addEventListener("click", setGeminiKey);
+
+      var gmDeleteBtn = document.getElementById("gm-key-delete-btn");
+      if (gmDeleteBtn) gmDeleteBtn.addEventListener("click", deleteGeminiKey);
+
+      var smokeBtn = document.getElementById("smoke-run-btn");
+      if (smokeBtn) smokeBtn.addEventListener("click", runSmokeTest);
+
       var restoreInput = document.getElementById("restore-confirm-input");
       if (restoreInput) {
         restoreInput.addEventListener("input", function () {
@@ -660,6 +671,124 @@
         });
       }
     });
+  }
+
+  function loadProviderStatus() {
+    fetch("/api/admin/providers")
+      .then(function (r) { if (r.ok) return r.json(); })
+      .then(function (data) {
+        if (!data || !data.providers) return;
+        var keyStatus = document.getElementById("gm-key-status");
+        var gemini = null;
+        for (var i = 0; i < data.providers.length; i++) {
+          if (data.providers[i].name === "gemini") { gemini = data.providers[i]; break; }
+        }
+        if (keyStatus) {
+          if (gemini && gemini.ready) {
+            keyStatus.textContent = "Gemini API Key 已設定";
+            keyStatus.className = "admin-od-status admin-od-ok";
+          } else {
+            keyStatus.textContent = "Gemini API Key 尚未設定";
+            keyStatus.className = "admin-od-status admin-od-error";
+          }
+        }
+      });
+  }
+
+  function setGeminiKey() {
+    var input = document.getElementById("gm-key-input");
+    var statusEl = document.getElementById("gm-key-status");
+    var key = input ? input.value.trim() : "";
+    if (!key) { statusEl.textContent = "請輸入 API Key"; statusEl.className = "admin-od-status admin-od-error"; return; }
+    var originalKey = key;
+    fetch("/api/admin/providers/gemini-key", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "X-Qingpu-CSRF": getCSRFToken() },
+      body: JSON.stringify({ key: key }),
+    })
+      .then(function (r) { return r.json().then(function (d) { return { status: r.status, body: d }; }); })
+      .then(function (result) {
+        if (result.body.error) {
+          statusEl.textContent = result.body.error.message || "設定失敗";
+          statusEl.className = "admin-od-status admin-od-error";
+        } else {
+          statusEl.textContent = "Gemini API Key 已設定";
+          statusEl.className = "admin-od-status admin-od-ok";
+          if (input) input.value = "";
+        }
+      })
+      .catch(function () {
+        statusEl.textContent = "網路錯誤";
+        statusEl.className = "admin-od-status admin-od-error";
+      });
+  }
+
+  function deleteGeminiKey() {
+    var statusEl = document.getElementById("gm-key-status");
+    fetch("/api/admin/providers/gemini-key", {
+      method: "DELETE",
+      headers: { "X-Qingpu-CSRF": getCSRFToken() },
+    })
+      .then(function (r) { return r.json().then(function (d) { return { status: r.status, body: d }; }); })
+      .then(function (result) {
+        if (result.body.error) {
+          statusEl.textContent = result.body.error.message || "刪除失敗";
+          statusEl.className = "admin-od-status admin-od-error";
+        } else {
+          statusEl.textContent = "Gemini API Key 已刪除";
+          statusEl.className = "admin-od-status admin-od-ok";
+          var input = document.getElementById("gm-key-input");
+          if (input) input.value = "";
+        }
+      })
+      .catch(function () {
+        statusEl.textContent = "網路錯誤";
+        statusEl.className = "admin-od-status admin-od-error";
+      });
+  }
+
+  function runSmokeTest() {
+    var select = document.getElementById("smoke-provider-select");
+    var statusEl = document.getElementById("smoke-result");
+    var provider = select ? select.value : "rule";
+    statusEl.textContent = "執行中…";
+    statusEl.className = "admin-od-status";
+    fetch("/api/admin/provider-smoke-runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Qingpu-CSRF": getCSRFToken() },
+      body: JSON.stringify({ provider: provider }),
+    })
+      .then(function (r) { return r.json().then(function (d) { return { status: r.status, body: d }; }); })
+      .then(function (result) {
+        if (result.body.error) {
+          statusEl.textContent = result.body.error.message || "啟動失敗";
+          statusEl.className = "admin-od-status admin-od-error";
+          return;
+        }
+        var runId = result.body.run_id;
+        statusEl.textContent = "Smoke test 已提交 (" + runId.slice(0, 8) + ")，等待結果…";
+        var retries = 0;
+        (function poll() {
+          fetch("/api/jobs/" + runId)
+            .then(function (r) { return r.json(); })
+            .then(function (job) {
+              if (job.status === "succeeded" || job.status === "failed" || job.status === "interrupted") {
+                statusEl.textContent = "Smoke test " + (job.status === "succeeded" ? "成功" : "失敗 (" + (job.error_message || job.status) + ")");
+                statusEl.className = job.status === "succeeded" ? "admin-od-status admin-od-ok" : "admin-od-status admin-od-error";
+              } else {
+                setTimeout(poll, 2000);
+              }
+            })
+            .catch(function () {
+              if (retries < 2) { retries++; setTimeout(poll, 3000); }
+              else { statusEl.textContent = "輪詢逾時"; statusEl.className = "admin-od-status admin-od-error"; }
+            });
+        })();
+      })
+      .catch(function () {
+        statusEl.textContent = "網路錯誤";
+        statusEl.className = "admin-od-status admin-od-error";
+      });
   }
 
   function buildReleasePreviewPayload(action, market, id) {
@@ -683,5 +812,9 @@
     runListingSequence: runListingSequence,
     buildReleasePreviewPayload: buildReleasePreviewPayload,
     canConfirmDangerousAction: canConfirmDangerousAction,
+    loadProviderStatus: loadProviderStatus,
+    setGeminiKey: setGeminiKey,
+    deleteGeminiKey: deleteGeminiKey,
+    runSmokeTest: runSmokeTest,
   };
 });

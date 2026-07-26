@@ -18,3 +18,4 @@ artifacts/
 outputs/valuations/
 /data/locks/
 /outputs/backups/
+/instance/secrets.env

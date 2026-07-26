@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -161,17 +162,18 @@ def _make_service(
     repo: Any = None,
     validator: Any = None,
     builder: Any = None,
+    provider_resolver: Any = None,
 ) -> ReportService:
     if builder is None:
         b = MagicMock()
         b.build.return_value = PACK
         builder = b
-    if ai_provider is None:
-        providers: dict[str, Any] = {}
-    elif isinstance(ai_provider, SequenceProvider):
-        providers = {"ollama": ai_provider, "gemini": ai_provider}
-    else:
-        providers = {"ollama": ai_provider, "gemini": ai_provider}
+    providers: dict[str, Any] = {}
+    if ai_provider is not None:
+        if isinstance(ai_provider, SequenceProvider):
+            providers = {"ollama": ai_provider, "gemini": ai_provider}
+        else:
+            providers = {"ollama": ai_provider, "gemini": ai_provider}
     if rule_provider is None:
         rule_provider = RuleReportProvider()
     if validator is None:
@@ -185,6 +187,7 @@ def _make_service(
     return ReportService(
         evidence_builder=builder, providers=providers,
         rule_provider=rule_provider, validator=validator, repository=repo,
+        provider_resolver=provider_resolver,
     )
 
 
@@ -356,3 +359,76 @@ class TestReportService:
             ).encode(),
         ).hexdigest()[:20]
         assert saved.request_hash == expected_hash
+
+    def test_provider_resolver_sees_key_added_after_app_start(self, tmp_path: Path) -> None:
+        from qingpu_insight.local_secrets import LocalSecretsStore
+
+        store = LocalSecretsStore(tmp_path / "secrets.env")
+
+        # Start with no key — resolver can't create gemini provider
+        resolver_calls: list[str] = []
+
+        def make_mock_provider() -> object:
+            from qingpu_insight.report_contracts import BuyerReportDraft, ReportClaim
+
+            draft = BuyerReportDraft(
+                summary=ReportClaim(text="ok", fact_ids=("f1",), numeric_fact_ids=()),
+                advantages=(ReportClaim(text="a", fact_ids=("f1",), numeric_fact_ids=()),),
+                risks=(ReportClaim(text="r", fact_ids=("f1",), numeric_fact_ids=()),),
+                negotiation=(ReportClaim(text="n", fact_ids=("f1",), numeric_fact_ids=()),),
+                limitations=(),
+            )
+
+            class _MockProv:
+                def generate(self, pack, repair_codes=()):
+                    return type("R", (), {
+                        "provider": "gemini", "model": "mock",
+                        "draft": draft, "latency_ms": 1.0,
+                    })()
+
+            return _MockProv()
+
+        def resolver(name: str) -> object | None:
+            resolver_calls.append(name)
+            env = store.merged_env({"QINGPU_GEMINI_MODEL": "gemini-2.0-flash"})
+            if name == "gemini" and env.get("QINGPU_GEMINI_API_KEY"):
+                return make_mock_provider()
+            if name == "ollama" and env.get("QINGPU_OLLAMA_MODEL"):
+                return make_mock_provider()
+            if name in ("gemini", "ollama"):
+                return None
+            return None
+
+        repo = MagicMock()
+        repo.create.side_effect = lambda x: x
+        service = _make_service(
+            repo=repo, provider_resolver=resolver,
+        )
+
+        # Request gemini — falls back to rule because no key yet
+        req = ReportRequest(
+            candidate_ids=("c1",), intended_use="self_use", provider="gemini",
+        )
+        saved = service.generate(req)
+        assert saved.provider == "rule"
+        assert saved.fallback_reason == "provider_unavailable"
+
+        assert "gemini" in resolver_calls
+
+        # Now set key via store
+        store.set_gemini_key("test-key-after-start")
+
+        # Second request — resolver should now see the key
+        resolver_calls.clear()
+        # Clear the old provider from cache by creating a new service
+        service2 = _make_service(
+            repo=repo, provider_resolver=resolver,
+        )
+        req2 = ReportRequest(
+            candidate_ids=("c1",), intended_use="self_use", provider="gemini",
+        )
+        # Should resolve to mock now since the key exists
+        result = service2.generate(req2)
+        assert result is not None
+        assert result.provider == "gemini"
+        assert "gemini" in resolver_calls

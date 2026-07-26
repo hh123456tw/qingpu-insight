@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 from flask import Blueprint, current_app, jsonify, render_template, request, session
 
+from qingpu_insight.local_secrets import SecretValidationError
 from qingpu_insight.official_data import _season_key
 from qingpu_insight.operation_previews import OperationPreview
 
@@ -657,5 +658,123 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
         body = _admin_public_job(submission.run)
         body["created"] = submission.created
         return jsonify(body), 202 if submission.created else 200
+
+    # ------------------------------------------------------------------
+    # Provider management (Task 14)
+    # ------------------------------------------------------------------
+
+    @bp.get("/api/admin/providers")
+    def admin_providers():
+        rt = current_app.extensions.get("qingpu_admin_runtime")
+        if rt is None or rt.provider_ops_service is None:
+            err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
+            return jsonify({"error": err}), 503
+        try:
+            return jsonify({"providers": rt.provider_ops_service.status()})
+        except Exception:
+            err = {"code": "admin_unavailable", "message": "提供者狀態暫時無法取得。"}
+            return jsonify({"error": err}), 503
+
+    _GEMINI_KEY_FIELDS = frozenset({"key"})
+
+    @bp.put("/api/admin/providers/gemini-key")
+    def admin_gemini_key_set():
+        if request.headers.get("X-Qingpu-CSRF", "") != session.get("_csrf_token", ""):
+            return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
+
+        if request.mimetype != "application/json":
+            err = {"code": "invalid_request", "message": "Request body must be JSON.",
+                   "fields": {"body": "application_json"}}
+            return jsonify({"error": err}), 400
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            err = {"code": "invalid_request", "message": "Request body must be a JSON object.",
+                   "fields": {"body": "object"}}
+            return jsonify({"error": err}), 400
+
+        extra = set(payload.keys()) - _GEMINI_KEY_FIELDS
+        if extra:
+            fields = {k: "not_allowed" for k in extra}
+            err = {"code": "invalid_request", "message": "Request validation failed.",
+                   "fields": fields}
+            return jsonify({"error": err}), 400
+
+        key = payload.get("key", "")
+        if not isinstance(key, str) or not key:
+            err = {"code": "invalid_request", "message": "Request validation failed.",
+                   "fields": {"key": "required"}}
+            return jsonify({"error": err}), 400
+
+        rt = current_app.extensions.get("qingpu_admin_runtime")
+        if rt is None or rt.secrets_store is None:
+            err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
+            return jsonify({"error": err}), 503
+
+        try:
+            rt.secrets_store.set_gemini_key(key)
+        except SecretValidationError as e:
+            err = {"code": "invalid_request", "message": str(e),
+                   "fields": {"key": "invalid"}}
+            return jsonify({"error": err}), 400
+
+        return jsonify(rt.secrets_store.status())
+
+    @bp.delete("/api/admin/providers/gemini-key")
+    def admin_gemini_key_delete():
+        if request.headers.get("X-Qingpu-CSRF", "") != session.get("_csrf_token", ""):
+            return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
+
+        rt = current_app.extensions.get("qingpu_admin_runtime")
+        if rt is None or rt.secrets_store is None:
+            err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
+            return jsonify({"error": err}), 503
+
+        rt.secrets_store.delete_gemini_key()
+        return jsonify(rt.secrets_store.status())
+
+    @bp.post("/api/admin/provider-smoke-runs")
+    def admin_provider_smoke():
+        if request.headers.get("X-Qingpu-CSRF", "") != session.get("_csrf_token", ""):
+            return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
+
+        if request.mimetype != "application/json":
+            err = {"code": "invalid_request", "message": "Request body must be JSON.",
+                   "fields": {"body": "application_json"}}
+            return jsonify({"error": err}), 400
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            err = {"code": "invalid_request", "message": "Request body must be a JSON object.",
+                   "fields": {"body": "object"}}
+            return jsonify({"error": err}), 400
+
+        provider = payload.get("provider", "")
+        if provider not in {"rule", "ollama", "gemini"}:
+            err = {"code": "invalid_request", "message": "Request validation failed.",
+                   "fields": {"provider": "rule_ollama_or_gemini"}}
+            return jsonify({"error": err}), 400
+
+        rt = current_app.extensions.get("qingpu_admin_runtime")
+        if rt is None or rt.provider_ops_service is None:
+            err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
+            return jsonify({"error": err}), 503
+
+        try:
+            submission = rt.provider_ops_service.submit_smoke(provider)
+        except Exception:
+            err = {"code": "admin_unavailable", "message": "管理功能暫時無法使用。"}
+            return jsonify({"error": err}), 503
+
+        if rt.executor is not None:
+            try:
+                rt.executor.submit(
+                    submission["run_id"],
+                    lambda sid=submission["run_id"], p=provider: (
+                        rt.provider_ops_service.execute_smoke(sid, p)
+                    ),
+                )
+            except Exception:
+                pass
+
+        return jsonify(submission), 202
 
     return bp

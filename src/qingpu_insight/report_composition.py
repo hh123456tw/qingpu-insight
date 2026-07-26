@@ -1,15 +1,26 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from qingpu_insight.evidence import EvidenceBuilder
 from qingpu_insight.evidence_repository import MySQLEvidenceRepository
+from qingpu_insight.local_secrets import LocalSecretsStore
 from qingpu_insight.report_providers import ReportProvider, RuleReportProvider
 from qingpu_insight.report_repository import MySQLReportRepository
 from qingpu_insight.report_service import ReportService
 from qingpu_insight.report_validation import validate_report
+
+
+def create_dynamic_provider_resolver(
+    store: LocalSecretsStore, base_env: Mapping[str, str],
+) -> Callable[[str], ReportProvider | None]:
+    def resolve(name: str) -> ReportProvider | None:
+        env = store.merged_env(base_env)
+        providers = create_provider_registry(env)
+        return providers.get(name)
+    return resolve
 
 
 def create_provider_registry(env: Mapping[str, str]) -> dict[str, ReportProvider]:

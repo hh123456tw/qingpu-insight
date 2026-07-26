@@ -41,6 +41,7 @@ from qingpu_insight.listing_update import (
     ListingUpdateRequest,
     ListingUpdateService,
 )
+from qingpu_insight.local_secrets import LocalSecretsStore
 from qingpu_insight.market_metrics import (
     MarketFilters,
     market_summary,
@@ -53,6 +54,7 @@ from qingpu_insight.official_data import (
     OfficialDataUpdateService,
     ProductionOfficialDataRunner,
 )
+from qingpu_insight.provider_ops import ProviderOpsService
 from qingpu_insight.report_composition import create_report_runtime
 from qingpu_insight.report_repository import CorruptReportError
 from qingpu_insight.valuation import ModelRegistry, valuate
@@ -246,7 +248,9 @@ def _create_production_admin_services(
     try:
         from qingpu_insight.backup_repository import MySQLBackupRepository
         from qingpu_insight.backups import BackupJobService, BackupService, RealRunner
-        from qingpu_insight.cli import create_mysql_connection_factory as _create_mysql_connection_factory
+        from qingpu_insight.cli import (
+            create_mysql_connection_factory as _create_mysql_connection_factory,
+        )
 
         _backup_dir = root / "outputs" / "backups"
         _backup_dir.mkdir(parents=True, exist_ok=True)
@@ -726,6 +730,22 @@ def create_app(
     app.extensions["qingpu_admin_services"] = admin_services
     app.extensions["qingpu_admin_shutdown"] = shutdown_admin
 
+    secrets_store: LocalSecretsStore | None = None
+    provider_ops_service: ProviderOpsService | None = None
+    if root is not None:
+        secrets_store = LocalSecretsStore(root / "instance" / "secrets.env")
+        from qingpu_insight.report_composition import create_dynamic_provider_resolver
+        from qingpu_insight.report_providers import RuleReportProvider
+
+        rule_provider = RuleReportProvider()
+        resolved_env = secrets_store.merged_env(os.environ)
+        provider_resolver = create_dynamic_provider_resolver(secrets_store, os.environ)
+        provider_ops_service = ProviderOpsService(
+            rule_provider=rule_provider,
+            provider_factory=provider_resolver,
+            env=resolved_env,
+        )
+
     if admin_services is not None:
         admin_runtime = AdminRuntime(
             job_service=admin_services.job_service,
@@ -736,10 +756,17 @@ def create_app(
             official_data_service=admin_services.official_data_service,
             model_release_service=admin_services.model_release_service,
             backup_service=admin_services.backup_job_service,
+            provider_ops_service=provider_ops_service,
+            secrets_store=secrets_store,
             root=root,
         )
     else:
-        admin_runtime = AdminRuntime(job_service=None, executor=None)
+        admin_runtime = AdminRuntime(
+            job_service=None, executor=None,
+            provider_ops_service=provider_ops_service,
+            secrets_store=secrets_store,
+            root=root,
+        )
     app.register_blueprint(create_admin_blueprint(admin_runtime))
 
     @app.before_request
