@@ -94,22 +94,18 @@ class MySQLModelReleaseRepository:
 
     def current(self, market: str) -> ModelVersionRecord | None:
         with self._connection() as conn:
-            try:
-                with conn.cursor(pymysql.cursors.DictCursor) as cursor:
-                    cursor.execute(
-                        """SELECT mv.*
-                           FROM model_versions mv
-                           INNER JOIN published_models pm
-                              ON pm.market = mv.market
-                             AND pm.version_id = mv.version_id
-                           WHERE mv.market = %s""",
-                        (market,),
-                    )
-                    row = cursor.fetchone()
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
+            with conn.cursor(pymysql.cursors.DictCursor) as cursor:
+                cursor.execute(
+                    """SELECT mv.*
+                       FROM model_versions mv
+                       INNER JOIN published_models pm
+                          ON pm.market = mv.market
+                         AND pm.version_id = mv.version_id
+                       WHERE mv.market = %s""",
+                    (market,),
+                )
+                row = cursor.fetchone()
+            conn.commit()
         if row is None:
             return None
         return self._row_to_record(row)
@@ -118,6 +114,21 @@ class MySQLModelReleaseRepository:
         with self._connection() as conn:
             try:
                 with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT 1 FROM model_versions"
+                        " WHERE market = %s AND version_id = %s",
+                        (market, version_id),
+                    )
+                    if cursor.fetchone() is None:
+                        raise ValueError(
+                            f"Version {version_id!r} for market {market!r} not registered"
+                        )
+                    cursor.execute(
+                        "SELECT version_id FROM published_models WHERE market = %s",
+                        (market,),
+                    )
+                    prev_row = cursor.fetchone()
+                    previous_version_id = prev_row[0] if prev_row else None
                     cursor.execute(
                         """INSERT INTO published_models
                            (market, version_id, job_run_id, action)
@@ -131,9 +142,9 @@ class MySQLModelReleaseRepository:
                     )
                     cursor.execute(
                         """INSERT INTO model_release_events
-                           (market, version_id, job_run_id, action)
-                           VALUES (%s, %s, %s, %s)""",
-                        (market, version_id, job_run_id, action),
+                           (market, version_id, job_run_id, action, previous_version_id)
+                           VALUES (%s, %s, %s, %s, %s)""",
+                        (market, version_id, job_run_id, action, previous_version_id),
                     )
                 conn.commit()
             except Exception:
@@ -142,20 +153,16 @@ class MySQLModelReleaseRepository:
 
     def list_versions(self, market: str, limit: int) -> list[ModelVersionRecord]:
         with self._connection() as conn:
-            try:
-                with conn.cursor(pymysql.cursors.DictCursor) as cursor:
-                    cursor.execute(
-                        "SELECT * FROM model_versions"
-                        " WHERE market = %s"
-                        " ORDER BY created_at DESC, version_id DESC"
-                        " LIMIT %s",
-                        (market, limit),
-                    )
-                    rows = cursor.fetchall()
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
+            with conn.cursor(pymysql.cursors.DictCursor) as cursor:
+                cursor.execute(
+                    "SELECT * FROM model_versions"
+                    " WHERE market = %s"
+                    " ORDER BY created_at DESC, version_id DESC"
+                    " LIMIT %s",
+                    (market, limit),
+                )
+                rows = cursor.fetchall()
+            conn.commit()
         return [self._row_to_record(row) for row in rows]
 
 

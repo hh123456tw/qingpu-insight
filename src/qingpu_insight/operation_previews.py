@@ -13,6 +13,10 @@ import pymysql
 from qingpu_insight.job_repository import ConnectionFactory
 
 
+class PreviewNotFound(RuntimeError):
+    """Preview does not exist."""
+
+
 class PreviewConfirmationMismatch(RuntimeError):
     """Confirmation text does not match the stored preview."""
 
@@ -100,13 +104,13 @@ class MySQLOperationPreviewRepository:
             try:
                 with conn.cursor(pymysql.cursors.DictCursor) as cursor:
                     cursor.execute(
-                        """UPDATE operation_previews
-                           SET consumed_at = %s
-                           WHERE preview_id = %s
-                             AND confirmation_text = %s
-                             AND consumed_at IS NULL
-                             AND expires_at >= %s""",
-                        (now, preview_id, confirmation_text, now),
+                        "UPDATE operation_previews"
+                        " SET consumed_at = UTC_TIMESTAMP(3)"
+                        " WHERE preview_id = %s"
+                        " AND confirmation_text = %s"
+                        " AND consumed_at IS NULL"
+                        " AND expires_at >= %s",
+                        (preview_id, confirmation_text, now),
                     )
                     if cursor.rowcount == 0:
                         cursor.execute(
@@ -115,7 +119,9 @@ class MySQLOperationPreviewRepository:
                         )
                         row = cursor.fetchone()
                         if row is None:
-                            raise ValueError(f"Preview {preview_id!r} not found")
+                            raise PreviewNotFound(
+                                f"Preview {preview_id!r} not found"
+                            )
                         if row["consumed_at"] is not None:
                             raise PreviewAlreadyConsumed(
                                 f"Preview {preview_id!r} already consumed"
@@ -137,7 +143,7 @@ class MySQLOperationPreviewRepository:
                 PreviewConfirmationMismatch,
                 PreviewAlreadyConsumed,
                 PreviewExpired,
-                ValueError,
+                PreviewNotFound,
             ):
                 conn.rollback()
                 raise
@@ -145,7 +151,7 @@ class MySQLOperationPreviewRepository:
                 conn.rollback()
                 raise
         if row is None:
-            raise ValueError(f"Preview {preview_id!r} not found")
+            raise PreviewNotFound(f"Preview {preview_id!r} not found")
         return self._row_to_preview(row)
 
 
