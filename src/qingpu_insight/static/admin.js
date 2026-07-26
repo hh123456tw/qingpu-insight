@@ -124,7 +124,8 @@
         }).then(function (r) { return r.json(); });
       },
       waitForTerminal: function (runId) {
-        return new Promise(function (resolve) {
+        return new Promise(function (resolve, reject) {
+          var retries = 0;
           (function poll() {
             fetch("/api/jobs/" + runId)
               .then(function (r) { return r.json(); })
@@ -133,6 +134,14 @@
                   resolve(job);
                 } else {
                   setTimeout(poll, 2000);
+                }
+              })
+              .catch(function () {
+                if (retries < 1) {
+                  retries++;
+                  setTimeout(poll, 2000);
+                } else {
+                  reject(new Error("輪詢失敗"));
                 }
               });
           })();
@@ -158,10 +167,19 @@
     }).then(function () {
       runBtn.disabled = false;
       runBtn.classList.remove("disabled");
+    }).catch(function () {
+      runBtn.disabled = false;
+      runBtn.classList.remove("disabled");
+      var statusEl = document.getElementById("ls-status-sale");
+      if (statusEl) { statusEl.textContent = "失敗 (系統錯誤)"; statusEl.className = "listing-type-status status-fail"; }
     });
   }
 
   function retrySingleType(type, maxPages) {
+    var pages = parseInt(maxPages, 10);
+    if (isNaN(pages) || pages < 1) pages = 1;
+    if (pages > 50) pages = 50;
+    maxPages = pages;
     var retryBtn = document.querySelector('.listing-retry-btn[data-type="' + type + '"]');
     if (retryBtn) { retryBtn.disabled = true; retryBtn.style.display = "none"; }
     var el = document.getElementById("ls-status-" + type);
@@ -178,7 +196,8 @@
         }).then(function (r) { return r.json(); });
       },
       waitForTerminal: function (runId) {
-        return new Promise(function (resolve) {
+        return new Promise(function (resolve, reject) {
+          var retries = 0;
           (function poll() {
             fetch("/api/jobs/" + runId)
               .then(function (r) { return r.json(); })
@@ -187,6 +206,14 @@
                   resolve(job);
                 } else {
                   setTimeout(poll, 2000);
+                }
+              })
+              .catch(function () {
+                if (retries < 1) {
+                  retries++;
+                  setTimeout(poll, 2000);
+                } else {
+                  reject(new Error("輪詢失敗"));
                 }
               });
           })();
@@ -205,6 +232,10 @@
           if (btn) { btn.disabled = false; btn.style.display = ""; }
         }
       },
+    }).catch(function () {
+      if (retryBtn) { retryBtn.disabled = false; retryBtn.style.display = ""; }
+      el.textContent = "失敗 (系統錯誤)";
+      el.className = "listing-type-status status-fail";
     });
   }
 
