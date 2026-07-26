@@ -11,8 +11,21 @@ from uuid import uuid4
 
 import joblib
 
-from qingpu_insight.model_artifacts import TrainingManifest, sha256_file
-from qingpu_insight.model_release_repository import ModelVersionRecord
+from qingpu_insight.jobs import JobService
+from qingpu_insight.model_artifacts import (
+    CandidateArtifactStore,
+    TrainingManifest,
+    sha256_file,
+)
+from qingpu_insight.model_features import ValuationInput
+from qingpu_insight.model_release_repository import (
+    ModelReleaseRepository,
+    ModelVersionRecord,
+)
+from qingpu_insight.operation_previews import (
+    OperationPreview,
+    OperationPreviewService,
+)
 from qingpu_insight.valuation import ValuationBundle
 
 
@@ -246,3 +259,267 @@ class OfficialModelStore:
                 f"market mismatch: expected {market}, got {bundle.transaction_type}"
             )
         return bundle
+
+
+STAGES = (
+    "validating_candidate",
+    "backing_up_pointer",
+    "importing_version",
+    "activating",
+    "smoke_testing",
+    "recording_release",
+)
+
+
+_SMOKE_INPUTS: dict[str, ValuationInput] = {
+    "resale": ValuationInput(
+        transaction_type="resale",
+        station_code="A17",
+        station_distance_m=500.0,
+        building_area_ping=30.0,
+        building_type="公寓",
+        bedrooms=3,
+        living_rooms=2,
+        bathrooms=2,
+        building_age_years=20.0,
+        floor=3,
+        total_floors=5,
+    ),
+    "presale": ValuationInput(
+        transaction_type="presale",
+        station_code="A17",
+        station_distance_m=500.0,
+        building_area_ping=30.0,
+        building_type="大樓",
+        bedrooms=3,
+        living_rooms=2,
+        bathrooms=2,
+        floor=3,
+        total_floors=15,
+    ),
+}
+
+
+class ModelReleaseService:
+    def __init__(
+        self,
+        official_store: OfficialModelStore,
+        release_repository: ModelReleaseRepository,
+        preview_service: OperationPreviewService,
+        job_service: JobService,
+        candidate_store: CandidateArtifactStore,
+        artifact_dir: Path,
+    ) -> None:
+        self._official_store = official_store
+        self._release_repository = release_repository
+        self._preview_service = preview_service
+        self._job_service = job_service
+        self._candidate_store = candidate_store
+        self._artifact_dir = artifact_dir
+
+    def preview_publish(self, run_id: str, market: str) -> OperationPreview:
+        manifest = self._candidate_store.get(run_id)
+        if manifest is None:
+            raise ValueError(f"candidate run {run_id!r} not found")
+
+        result = None
+        for r in manifest.results:
+            if r.market == market:
+                result = r
+                break
+        if result is None:
+            raise ValueError(f"no result for market {market!r} in run {run_id!r}")
+
+        if not result.recommended:
+            raise ValueError(
+                f"market {market!r} result is not recommended"
+            )
+
+        candidate_dir = self._candidate_store._root / str(manifest.run_id)
+        artifact_path = (candidate_dir / result.artifact_file).resolve()
+        if not artifact_path.exists():
+            raise FileNotFoundError(f"artifact {result.artifact_file} not found")
+        actual_hash = sha256_file(artifact_path)
+        if actual_hash != result.artifact_sha256:
+            raise ValueError(f"SHA256 mismatch for {result.artifact_file}")
+
+        try:
+            bundle: object = joblib.load(str(artifact_path))
+        except Exception:
+            raise ValueError(f"{result.artifact_file} is not a valid joblib file") from None
+        if not isinstance(bundle, ValuationBundle):
+            raise TypeError(f"{result.artifact_file} is not a ValuationBundle")
+        if bundle.transaction_type != market:
+            raise ValueError(
+                f"market mismatch: expected {market}, got {bundle.transaction_type}"
+            )
+
+        return self._preview_service.create_for(
+            operation="model_publish",
+            payload={"operation": "publish", "market": market, "run_id": run_id},
+            confirmation_text=f"發布 {market} {run_id}",
+        )
+
+    def preview_rollback(self, market: str, version_id: str) -> OperationPreview:
+        self._official_store.load(market, version_id)
+
+        return self._preview_service.create_for(
+            operation="model_rollback",
+            payload={
+                "operation": "rollback", "market": market, "version_id": version_id,
+            },
+            confirmation_text=f"回滾 {market} {version_id}",
+        )
+
+    def submit(self, preview_id: str, confirmation_text: str) -> object:
+
+        preview = self._preview_service.consume(preview_id, confirmation_text)
+        market = str(preview.payload["market"])
+        idempotency_key = f"model_release:{market}:active"
+        submission = self._job_service.create(
+            job_type="model_release",
+            idempotency_key=idempotency_key,
+            trigger="manual",
+        )
+        return submission
+
+    def execute(
+        self, run_id: str, preview: OperationPreview
+    ) -> ModelVersionRecord:
+        op = preview.payload.get("operation")
+        if op == "publish":
+            return self._execute_publish(run_id, preview)
+        elif op == "rollback":
+            return self._execute_rollback(run_id, preview)
+        else:
+            raise ValueError(f"unknown operation {op!r}")
+
+    def handoff(self, submission, preview, executor) -> None:
+        executor.submit(
+            submission.run.run_id,
+            lambda: self.execute(submission.run.run_id, preview),
+        )
+
+    def _progress(self, run_id: str, stage: str) -> None:
+        self._job_service.progress(
+            run_id, {"stage": stage, "timestamp": datetime.now(UTC).isoformat()}
+        )
+
+    def _execute_publish(
+        self, run_id: str, preview: OperationPreview
+    ) -> ModelVersionRecord:
+        market = str(preview.payload["market"])
+        source_run_id = str(preview.payload["run_id"])
+        self._progress(run_id, "validating_candidate")
+
+        manifest = self._candidate_store.get(source_run_id)
+        if manifest is None:
+            raise ValueError(f"candidate run {source_run_id!r} not found")
+
+        prev_file = self._official_store.current(market)
+        self._progress(run_id, "backing_up_pointer")
+
+        candidate_root = self._candidate_store._root / str(manifest.run_id)
+        version_record = self._official_store.import_candidate(
+            candidate_root, manifest, market
+        )
+        self._progress(run_id, "importing_version")
+
+        bundle = self._official_store.load(market, version_record.version_id)
+        self._smoke_test(market, bundle)
+        self._progress(run_id, "smoke_testing")
+
+        prev_file_version = prev_file.version_id if prev_file else None
+        try:
+            self._official_store.activate(market, version_record.version_id)
+            self._progress(run_id, "activating")
+
+            current = self._official_store.current(market)
+            if current is None or current.version_id != version_record.version_id:
+                raise ValueError("file pointer activation verification failed")
+
+            self._release_repository.register_version(version_record)
+            self._release_repository.activate(
+                market, version_record.version_id, run_id, "publish"
+            )
+            self._progress(run_id, "recording_release")
+        except Exception:
+            self._restore_file_pointer(market, prev_file_version)
+            raise
+
+        return version_record
+
+    def _execute_rollback(
+        self, run_id: str, preview: OperationPreview
+    ) -> ModelVersionRecord:
+        market = str(preview.payload["market"])
+        version_id = str(preview.payload["version_id"])
+        self._progress(run_id, "validating_candidate")
+
+        bundle = self._official_store.load(market, version_id)
+
+        prev_file = self._official_store.current(market)
+        self._progress(run_id, "backing_up_pointer")
+
+        prev_file_version = prev_file.version_id if prev_file else None
+        try:
+            activated = self._official_store.activate(market, version_id)
+            self._progress(run_id, "activating")
+
+            current = self._official_store.current(market)
+            if current is None or current.version_id != version_id:
+                raise ValueError("file pointer activation verification failed")
+
+            existing_versions = self._release_repository.list_versions(market, 100)
+            version_exists = any(
+                v.version_id == version_id for v in existing_versions
+            )
+            if not version_exists:
+                record = ModelVersionRecord(
+                    version_id=activated.version_id,
+                    market=activated.market,
+                    source_run_id=activated.source_run_id,
+                    model_name=bundle.model_name,
+                    model_version=bundle.model_version,
+                    artifact_path=activated.artifact_file,
+                    artifact_sha256=activated.artifact_sha256,
+                    metadata={},
+                    created_at=activated.activated_at,
+                )
+                self._release_repository.register_version(record)
+            else:
+                record = next(v for v in existing_versions if v.version_id == version_id)
+
+            self._release_repository.activate(
+                market, version_id, run_id, "rollback"
+            )
+            self._progress(run_id, "recording_release")
+        except Exception:
+            self._restore_file_pointer(market, prev_file_version)
+            raise
+
+        return record
+
+    def _restore_file_pointer(
+        self, market: str, previous_version_id: str | None
+    ) -> None:
+        if previous_version_id is not None:
+            try:
+                self._official_store.activate(market, previous_version_id)
+            except Exception:
+                raise RuntimeError(
+                    f"CRITICAL: file pointer for {market} may be inconsistent"
+                ) from None
+
+    @staticmethod
+    def _smoke_test(market: str, bundle: ValuationBundle) -> None:
+        test_input = _SMOKE_INPUTS.get(market)
+        if test_input is None:
+            raise ValueError(f"no smoke test input for market {market!r}")
+
+        import pandas as pd
+
+        from qingpu_insight.model_features import input_frame
+        data_date = pd.Timestamp(bundle.data_max_date)
+        row = input_frame(test_input, data_date)
+        bundle.pipeline.predict(row)

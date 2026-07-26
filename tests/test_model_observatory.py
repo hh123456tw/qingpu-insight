@@ -6,7 +6,6 @@ from uuid import uuid4
 
 import joblib
 import pandas as pd
-import pytest
 
 from qingpu_insight.jobs import JobRun, JobService
 from qingpu_insight.model_artifacts import (
@@ -14,9 +13,10 @@ from qingpu_insight.model_artifacts import (
     DataSnapshot,
     MarketTrainingResult,
     TrainingManifest,
+    sha256_file,
 )
 from qingpu_insight.model_observatory import ModelObservatory
-from qingpu_insight.model_training_service import ModelTrainingService
+from qingpu_insight.model_release import OfficialModelStore
 from qingpu_insight.valuation import ValuationBundle
 
 
@@ -85,6 +85,59 @@ def manifest_fixture(
     )
 
 
+def _setup_official_store(
+    store: OfficialModelStore, market: str, bundle: ValuationBundle,
+) -> str:
+    import shutil
+    import tempfile
+
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        artifact_file = f"{market}.joblib"
+        joblib.dump(bundle, tmp / artifact_file)
+        artifact_hash = sha256_file(tmp / artifact_file)
+
+        manifest = TrainingManifest(
+            run_id=uuid4(),
+            created_at=datetime.now(UTC),
+            markets=[market],
+            source_commit="test",
+            source_dirty=False,
+            runtime_versions={"py": "3.12"},
+            data_snapshot=DataSnapshot(
+                sha256="a" * 64,
+                raw_count=0,
+                usable_counts={"resale": 0, "presale": 0},
+                excluded_counts={"resale": 0, "presale": 0},
+                station_counts={"A17": 0, "A18": 0, "A19": 0},
+                min_date=date(2023, 1, 1),
+                max_date=date(2024, 1, 1),
+            ),
+            results=[
+                MarketTrainingResult(
+                    market=market,
+                    selected_model="ridge",
+                    recommended=True,
+                    reason_codes=[],
+                    selection_metrics={},
+                    final_test_metrics={},
+                    artifact_file=artifact_file,
+                    artifact_sha256=artifact_hash,
+                    report_files={},
+                    report_sha256={},
+                )
+            ],
+        )
+        (tmp / "manifest.json").write_text(
+            manifest.model_dump_json(indent=2), encoding="utf-8"
+        )
+        record = store.import_candidate(tmp, manifest, market)
+        store.activate(market, record.version_id)
+        return record.version_id
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def observatory_fixture(
     tmp_path: Path,
     official_models: dict[str, ValuationBundle] | None = None,
@@ -92,9 +145,8 @@ def observatory_fixture(
 ) -> ModelObservatory:
     artifact_dir = tmp_path / "artifacts"
     artifact_dir.mkdir()
-    if official_models:
-        for market, bundle in official_models.items():
-            joblib.dump(bundle, artifact_dir / f"{market}.joblib")
+
+    official_store = OfficialModelStore(artifact_dir)
 
     candidate_store_dir = tmp_path / "candidates"
     candidate_store_dir.mkdir(parents=True, exist_ok=True)
@@ -157,12 +209,19 @@ def observatory_fixture(
     pd.DataFrame(rows).to_parquet(input_path, index=False)
 
     dummy_service = type("FakeModelTrainingService", (), {})()
+
+    if official_models:
+        for market, bundle in official_models.items():
+            joblib.dump(bundle, artifact_dir / f"{market}.joblib")
+            _setup_official_store(official_store, market, bundle)
+
     return ModelObservatory(
         artifact_dir=artifact_dir,
         candidate_store=candidate_store,
         model_training_service=dummy_service,  # type: ignore
         job_service=FakeJobService(),
         input_path=input_path,
+        official_store=official_store,
     )
 
 
@@ -192,6 +251,63 @@ class TestModelObservatoryStatus:
             "role": "official",
             "warning": "resale_model_unavailable",
         }
+
+    def test_official_store_version_id_in_status(self, tmp_path: Path) -> None:
+        artifact_dir = tmp_path / "artifacts2"
+        artifact_dir.mkdir()
+        store = OfficialModelStore(artifact_dir)
+        candidate_dir = tmp_path / "candidates2"
+        candidate_dir.mkdir()
+
+        from test_model_release import _setup_candidate
+        candidate_root, manifest, _ = _setup_candidate(
+            tmp_path / "src", "resale", recommended=True
+        )
+        run_id = str(manifest.run_id)
+        dest = candidate_dir / run_id
+        if dest.exists():
+            import shutil
+            shutil.rmtree(dest)
+        candidate_root.rename(dest)
+
+        record = store.import_candidate(dest, manifest, "resale")
+        store.activate("resale", record.version_id)
+
+        from qingpu_insight.model_artifacts import CandidateArtifactStore
+        cs = CandidateArtifactStore(candidate_dir)
+
+        input_path = tmp_path / "data2" / "processed" / "market_transactions.parquet"
+        input_path.parent.mkdir(parents=True, exist_ok=True)
+        rows = []
+        for ttype in ("resale", "presale"):
+            for i in range(100):
+                rows.append({
+                    "transaction_type": ttype, "analysis_eligible": True,
+                    "transaction_date": pd.Timestamp("2023-01-01") + pd.DateOffset(days=i),
+                    "station_code": ["A17", "A18", "A19"][i % 3],
+                })
+        pd.DataFrame(rows).to_parquet(input_path, index=False)
+
+        dummy_service = type("FakeModelTrainingService", (), {})()
+
+        class _FakeJobRepo:
+            def list_recent(self, limit=20, job_type=None): return []
+            def get(self, run_id): return None
+            def find_active_by_key(self, k): return None
+            def create_or_get(self, r): return r, True
+            def list_active(self, jt): return []
+            def update_summary(self, *a, **kw): return True
+            def transition(self, *a, **kw): return True
+
+        observatory = ModelObservatory(
+            artifact_dir=artifact_dir, candidate_store=cs,
+            model_training_service=dummy_service,
+            job_service=JobService(_FakeJobRepo()),
+            input_path=input_path,
+            official_store=store,
+        )
+        status = observatory.status()
+        assert status["official_models"]["resale"]["version_id"] == record.version_id
 
     def test_data_status_includes_cached_snapshot(self, tmp_path: Path) -> None:
         observatory = observatory_fixture(tmp_path)
@@ -227,3 +343,19 @@ class TestModelObservatoryStatus:
     def test_get_run_returns_none_for_missing(self, tmp_path: Path) -> None:
         observatory = observatory_fixture(tmp_path)
         assert observatory.get_run("nonexistent-run-id") is None
+
+    def test_get_run_includes_per_market_publishable_info(
+        self, tmp_path: Path
+    ) -> None:
+        manifest = manifest_fixture(markets=["resale", "presale"])
+        observatory = observatory_fixture(
+            tmp_path, candidate_runs=[manifest]
+        )
+        result = observatory.get_run(str(manifest.run_id))
+        assert result is not None
+        assert "markets" in result
+        for m in ("resale", "presale"):
+            assert m in result["markets"]
+            assert "publishable" in result["markets"][m]
+            assert "release_blockers" in result["markets"][m]
+            assert "current_official_version_id" in result["markets"][m]

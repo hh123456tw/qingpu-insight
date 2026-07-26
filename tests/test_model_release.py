@@ -9,19 +9,29 @@ import pandas as pd
 import pytest
 from sklearn.dummy import DummyRegressor
 
+from qingpu_insight.jobs import JobRun, JobService
 from qingpu_insight.model_artifacts import (
     DataSnapshot,
     MarketTrainingResult,
     TrainingManifest,
     sha256_file,
 )
-from qingpu_insight.model_release import OfficialModelStore
+from qingpu_insight.model_release import ModelReleaseService, OfficialModelStore
+from qingpu_insight.model_release_repository import (
+    InMemoryModelReleaseRepository,
+)
+from qingpu_insight.operation_previews import (
+    InMemoryOperationPreviewRepository,
+    OperationPreviewService,
+    PreviewAlreadyConsumed,
+    PreviewConfirmationMismatch,
+)
 from qingpu_insight.valuation import ValuationBundle
 
 
 def _make_bundle(market: str, model_version: str = "1.0") -> ValuationBundle:
     dummy = DummyRegressor(strategy="constant", constant=500_000)
-    dummy.fit(  # noqa: E501
+    dummy.fit(
         pd.DataFrame(
             {c: [0.0] for c in ["building_area_ping", "station_distance_m", "bedrooms",
                                  "living_rooms", "bathrooms", "building_age_years",
@@ -100,6 +110,374 @@ def _setup_candidate(
     return candidate_root, manifest, result
 
 
+class FakeJobRepository:
+    def __init__(self) -> None:
+        self._runs: dict[str, JobRun] = {}
+        self._keys: dict[str, str] = {}
+
+    def create_or_get(self, run: JobRun):
+        key = run.idempotency_key
+        if key in self._keys:
+            existing = self._runs[self._keys[key]]
+            return existing, False
+        self._runs[run.run_id] = run
+        self._keys[key] = run.run_id
+        return run, True
+
+    def get(self, run_id: str) -> JobRun | None:
+        return self._runs.get(run_id)
+
+    def find_active_by_key(self, idempotency_key):
+        run_id = self._keys.get(idempotency_key)
+        if run_id is None:
+            return None
+        run = self._runs.get(run_id)
+        if run is not None and run.status in ("pending", "running", "retry_wait"):
+            return run
+        return None
+
+    def list_recent(self, limit=20, job_type=None):
+        return list(self._runs.values())[:limit]
+
+    def list_active(self, job_type):
+        return []
+
+    def update_summary(self, run_id, expected_status, summary):
+        run = self._runs.get(run_id)
+        if run is not None and run.status == expected_status:
+            return True
+        return False
+
+    def transition(self, run_id, current_status, target_status, **kwargs):
+        run = self._runs.get(run_id)
+        if run is None or run.status != current_status:
+            return False
+        from dataclasses import replace
+        from datetime import datetime
+        now = datetime.now(UTC)
+        started = run.started_at or (
+            now if target_status == "running" else run.started_at
+        )
+        finished = (
+            now if target_status in ("succeeded", "failed") else run.finished_at
+        )
+        new_run = replace(
+            run,
+            status=target_status,
+            started_at=started,
+            finished_at=finished,
+            output_version=kwargs.get("output_version", run.output_version),
+            summary=kwargs.get("summary", run.summary),
+            error_code=kwargs.get("error_code", run.error_code),
+            error_message=kwargs.get("error_message", run.error_message),
+        )
+        self._runs[run_id] = new_run
+        return True
+
+
+class TestModelReleaseService:
+
+    def _create_service(
+        self, tmp_path: Path, market: str = "resale",
+    ) -> tuple[ModelReleaseService, OfficialModelStore, Path]:
+        artifact_dir = tmp_path / "artifacts"
+        artifact_dir.mkdir()
+
+        official_store = OfficialModelStore(artifact_dir)
+
+        candidate_dir = tmp_path / "candidates"
+        candidate_dir.mkdir()
+
+        from qingpu_insight.model_artifacts import CandidateArtifactStore
+        candidate_store = CandidateArtifactStore(candidate_dir)
+
+        release_repo = InMemoryModelReleaseRepository()
+        preview_repo = InMemoryOperationPreviewRepository()
+        preview_service = OperationPreviewService(
+            repository=preview_repo,
+            clock=lambda: datetime.now(UTC),
+            make_uuid=lambda: "test-preview-id",
+        )
+        job_repo = FakeJobRepository()
+        job_service = JobService(job_repo)
+
+        service = ModelReleaseService(
+            official_store=official_store,
+            release_repository=release_repo,
+            preview_service=preview_service,
+            job_service=job_service,
+            candidate_store=candidate_store,
+            artifact_dir=artifact_dir,
+        )
+        return service, official_store, candidate_dir
+
+    def test_preview_publish_creates_preview_with_correct_text(
+        self, tmp_path: Path
+    ) -> None:
+        service, _, candidate_dir = self._create_service(tmp_path)
+        candidate_root, manifest, _ = _setup_candidate(tmp_path / "src", "resale", recommended=True)
+
+        run_id = str(manifest.run_id)
+        dest = candidate_dir / run_id
+        if dest.exists():
+            import shutil
+            shutil.rmtree(dest)
+        candidate_root.rename(dest)
+
+        preview = service.preview_publish(run_id, "resale")
+        assert preview.operation == "model_publish"
+        assert preview.payload["run_id"] == run_id
+        assert preview.payload["market"] == "resale"
+        assert preview.confirmation_text == f"發布 resale {run_id}"
+
+    def test_preview_publish_rejects_not_recommended(
+        self, tmp_path: Path
+    ) -> None:
+        service, _, candidate_dir = self._create_service(tmp_path)
+        candidate_root, manifest, _ = _setup_candidate(
+            tmp_path / "src", "resale", recommended=False
+        )
+
+        run_id = str(manifest.run_id)
+        dest = candidate_dir / run_id
+        if dest.exists():
+            import shutil
+            shutil.rmtree(dest)
+        candidate_root.rename(dest)
+
+        with pytest.raises(ValueError, match="not recommended"):
+            service.preview_publish(run_id, "resale")
+
+    def test_preview_publish_rejects_nonexistent_run(
+        self, tmp_path: Path
+    ) -> None:
+        service, _, _ = self._create_service(tmp_path)
+        with pytest.raises(ValueError):
+            service.preview_publish("nonexistent-run", "resale")
+
+    def test_preview_rollback_creates_preview(
+        self, tmp_path: Path
+    ) -> None:
+        service, store, candidate_dir = self._create_service(tmp_path)
+
+        candidate_root, manifest, _ = _setup_candidate(tmp_path / "src", "resale", recommended=True)
+        run_id = str(manifest.run_id)
+        dest = candidate_dir / run_id
+        if dest.exists():
+            import shutil
+            shutil.rmtree(dest)
+        candidate_root.rename(dest)
+
+        record = store.import_candidate(dest, manifest, "resale")
+        store.activate("resale", record.version_id)
+
+        preview = service.preview_rollback("resale", record.version_id)
+        assert preview.operation == "model_rollback"
+        assert preview.confirmation_text == f"回滾 resale {record.version_id}"
+
+    def test_preview_rollback_rejects_nonexistent_version(
+        self, tmp_path: Path
+    ) -> None:
+        service, _, _ = self._create_service(tmp_path)
+        with pytest.raises((ValueError, FileNotFoundError)):
+            service.preview_rollback("resale", "nonexistent")
+
+    def test_submit_consumes_preview_and_creates_job(
+        self, tmp_path: Path
+    ) -> None:
+        service, _, candidate_dir = self._create_service(tmp_path)
+        candidate_root, manifest, _ = _setup_candidate(tmp_path / "src", "resale", recommended=True)
+        run_id = str(manifest.run_id)
+        dest = candidate_dir / run_id
+        if dest.exists():
+            import shutil
+            shutil.rmtree(dest)
+        candidate_root.rename(dest)
+
+        preview = service.preview_publish(run_id, "resale")
+        confirm_text = preview.confirmation_text
+
+        submission = service.submit(preview.preview_id, confirm_text)
+        assert submission.created
+        assert submission.run.job_type == "model_release"
+        assert submission.run.status == "pending"
+
+    def test_submit_rejects_mismatched_confirmation(
+        self, tmp_path: Path
+    ) -> None:
+        service, _, candidate_dir = self._create_service(tmp_path)
+        candidate_root, manifest, _ = _setup_candidate(tmp_path / "src", "resale", recommended=True)
+        run_id = str(manifest.run_id)
+        dest = candidate_dir / run_id
+        if dest.exists():
+            import shutil
+            shutil.rmtree(dest)
+        candidate_root.rename(dest)
+
+        preview = service.preview_publish(run_id, "resale")
+        with pytest.raises(PreviewConfirmationMismatch):
+            service.submit(preview.preview_id, "wrong text")
+
+    def test_submit_rejects_consumed_preview(
+        self, tmp_path: Path
+    ) -> None:
+        service, _, candidate_dir = self._create_service(tmp_path)
+        candidate_root, manifest, _ = _setup_candidate(tmp_path / "src", "resale", recommended=True)
+        run_id = str(manifest.run_id)
+        dest = candidate_dir / run_id
+        if dest.exists():
+            import shutil
+            shutil.rmtree(dest)
+        candidate_root.rename(dest)
+
+        preview = service.preview_publish(run_id, "resale")
+        confirm_text = preview.confirmation_text
+        service.submit(preview.preview_id, confirm_text)
+        with pytest.raises(PreviewAlreadyConsumed):
+            service.submit(preview.preview_id, confirm_text)
+
+    def _start_job(self, service: ModelReleaseService) -> str:
+        submission = service._job_service.create(
+            job_type="model_release",
+            idempotency_key="test:key",
+            trigger="manual",
+        )
+        service._job_service.start(submission.run.run_id)
+        return submission.run.run_id
+
+    def test_execute_publish_full_flow(
+        self, tmp_path: Path
+    ) -> None:
+        service, store, candidate_dir = self._create_service(tmp_path)
+        candidate_root, manifest, _ = _setup_candidate(tmp_path / "src", "resale", recommended=True)
+
+        run_id = str(manifest.run_id)
+        dest = candidate_dir / run_id
+        if dest.exists():
+            import shutil
+            shutil.rmtree(dest)
+        candidate_root.rename(dest)
+
+        preview = service.preview_publish(run_id, "resale")
+        job_run_id = self._start_job(service)
+
+        result = service.execute(job_run_id, preview)
+        assert result.market == "resale"
+        assert result.source_run_id == run_id
+
+        current_file = store.current("resale")
+        assert current_file is not None
+        assert current_file.version_id == result.version_id
+
+    def test_execute_rollback_full_flow(
+        self, tmp_path: Path
+    ) -> None:
+        service, store, candidate_dir = self._create_service(tmp_path)
+
+        candidate_root, manifest, _ = _setup_candidate(tmp_path / "src", "resale", recommended=True)
+        run_id = str(manifest.run_id)
+        dest = candidate_dir / run_id
+        if dest.exists():
+            import shutil
+            shutil.rmtree(dest)
+        candidate_root.rename(dest)
+
+        v1 = store.import_candidate(dest, manifest, "resale")
+        store.activate("resale", v1.version_id)
+
+        candidate_root2, manifest2, _ = _setup_candidate(
+            tmp_path / "src2", "resale", recommended=True
+        )
+        run_id2 = str(manifest2.run_id)
+        dest2 = candidate_dir / run_id2
+        if dest2.exists():
+            import shutil
+            shutil.rmtree(dest2)
+        candidate_root2.rename(dest2)
+
+        v2 = store.import_candidate(dest2, manifest2, "resale")
+        store.activate("resale", v2.version_id)
+
+        preview = service.preview_rollback("resale", v1.version_id)
+        job_run_id = self._start_job(service)
+
+        result = service.execute(job_run_id, preview)
+        assert result.market == "resale"
+
+        current_file = store.current("resale")
+        assert current_file is not None
+        assert current_file.version_id == v1.version_id
+
+    def test_execute_publish_failure_restores_file_pointer(
+        self, tmp_path: Path
+    ) -> None:
+        artifact_dir = tmp_path / "artifacts"
+        artifact_dir.mkdir()
+        official_store = OfficialModelStore(artifact_dir)
+
+        candidate_dir = tmp_path / "candidates"
+        candidate_dir.mkdir()
+        from qingpu_insight.model_artifacts import CandidateArtifactStore
+        candidate_store = CandidateArtifactStore(candidate_dir)
+
+        preview_repo = InMemoryOperationPreviewRepository()
+        preview_service = OperationPreviewService(
+            repository=preview_repo,
+            clock=lambda: datetime.now(UTC),
+            make_uuid=lambda: "test-preview-id",
+        )
+        job_repo = FakeJobRepository()
+        job_service = JobService(job_repo)
+
+        class FailingRepo(InMemoryModelReleaseRepository):
+            def register_version(self, record):
+                raise RuntimeError("MySQL failure")
+
+        failing_repo = FailingRepo()
+
+        candidate_root, manifest, _ = _setup_candidate(
+            tmp_path / "src", "resale", recommended=True
+        )
+        run_id = str(manifest.run_id)
+        dest = candidate_dir / run_id
+        if dest.exists():
+            import shutil
+            shutil.rmtree(dest)
+        candidate_root.rename(dest)
+
+        v1 = official_store.import_candidate(dest, manifest, "resale")
+        official_store.activate("resale", v1.version_id)
+
+        service = ModelReleaseService(
+            official_store=official_store,
+            release_repository=failing_repo,
+            preview_service=preview_service,
+            job_service=job_service,
+            candidate_store=candidate_store,
+            artifact_dir=artifact_dir,
+        )
+
+
+        job_submission = service._job_service.create(
+            job_type="model_release",
+            idempotency_key="test:failure:key",
+            trigger="manual",
+        )
+        service._job_service.start(job_submission.run.run_id)
+        failing_job_run_id = job_submission.run.run_id
+
+        with pytest.raises(RuntimeError, match="MySQL failure"):
+            service.execute(failing_job_run_id, preview_service.create_for(
+                "model_publish",
+                {"operation": "publish", "market": "resale", "run_id": run_id},
+                "irrelevant",
+            ))
+
+        current_file = official_store.current("resale")
+        assert current_file is not None
+        assert current_file.version_id == v1.version_id
+
+
 class TestOfficialModelStore:
     def test_import_candidate_verifies_hash_market_and_gate(self, tmp_path: Path) -> None:
         store = OfficialModelStore(tmp_path / "artifacts")
@@ -118,7 +496,7 @@ class TestOfficialModelStore:
         store = OfficialModelStore(tmp_path / "artifacts")
         empty_dir = tmp_path / "empty"
         empty_dir.mkdir()
-        manifest = TrainingManifest(  # dummy, won't matter
+        manifest = TrainingManifest(
             run_id=uuid4(),
             created_at=datetime.now(UTC),
             markets=["resale"],
@@ -152,7 +530,6 @@ class TestOfficialModelStore:
         candidate_dir, manifest, _ = _setup_candidate(
             tmp_path, "resale", recommended=True
         )
-        # Tamper the artifact so its hash no longer matches the manifest
         artifact_path = candidate_dir / "resale.joblib"
         artifact_path.write_bytes(b"tampered-data")
         with pytest.raises(ValueError, match="SHA256 mismatch"):
@@ -163,11 +540,9 @@ class TestOfficialModelStore:
         candidate_dir, manifest, _ = _setup_candidate(
             tmp_path, "resale", recommended=True
         )
-        # Swap the bundle's transaction type after creation
         bundle = joblib.load(candidate_dir / "resale.joblib")
         bundle.transaction_type = "presale"
         joblib.dump(bundle, candidate_dir / "resale.joblib")
-        # Recompute hash for the swapped bundle and update manifest
         new_hash = sha256_file(candidate_dir / "resale.joblib")
         manifest.results[0].artifact_sha256 = new_hash
         (candidate_dir / "manifest.json").write_text(

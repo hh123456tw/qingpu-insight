@@ -76,6 +76,7 @@ class AdminServices:
     model_training_service: object | None = None
     model_observatory: object | None = None
     official_data_service: object | None = None
+    model_release_service: object | None = None
 
 
 @dataclass(frozen=True)
@@ -175,9 +176,13 @@ def _create_production_admin_services(
         service.job_service, candidate_store, input_path,
         SourceVersionProvider("unknown", True),
     )
+    from qingpu_insight.model_release import OfficialModelStore as _OfficialModelStore
+
+    official_store = _OfficialModelStore(root / "artifacts")
     observatory = ModelObservatory(
         root / "artifacts", candidate_store, mts, service.job_service,
         input_path=input_path,
+        official_store=official_store,
     )
 
     for jt in ADMIN_JOB_TYPES:
@@ -188,6 +193,37 @@ def _create_production_admin_services(
     official_runner = ProductionOfficialDataRunner(root, connection_factory)
     official_service = OfficialDataUpdateService(service.job_service, official_runner, root)
 
+    from qingpu_insight.model_release import ModelReleaseService
+    from qingpu_insight.model_release_repository import MySQLModelReleaseRepository
+    from qingpu_insight.operation_previews import (
+        MySQLOperationPreviewRepository,
+        OperationPreviewService,
+    )
+
+    release_repo = MySQLModelReleaseRepository(
+        connection_factory
+    ) if connection_factory else None
+    preview_repo = (
+        MySQLOperationPreviewRepository(connection_factory)
+        if connection_factory
+        else None
+    )
+    preview_service = (
+        OperationPreviewService(repository=preview_repo) if preview_repo else None
+    )
+    model_release_service = (
+        ModelReleaseService(
+            official_store=official_store,
+            release_repository=release_repo,
+            preview_service=preview_service,
+            job_service=service.job_service,
+            candidate_store=candidate_store,
+            artifact_dir=root / "artifacts",
+        )
+        if release_repo and preview_service
+        else None
+    )
+
     return AdminServices(
         job_service=service.job_service,
         listing_update_service=service,
@@ -195,6 +231,7 @@ def _create_production_admin_services(
         model_training_service=mts,
         model_observatory=observatory,
         official_data_service=official_service,
+        model_release_service=model_release_service,
     )
 
 
@@ -662,6 +699,7 @@ def create_app(
             model_training_service=admin_services.model_training_service,
             model_observatory=admin_services.model_observatory,
             official_data_service=admin_services.official_data_service,
+            model_release_service=admin_services.model_release_service,
             root=root,
         )
     else:

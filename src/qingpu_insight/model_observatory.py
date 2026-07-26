@@ -10,7 +10,9 @@ from qingpu_insight.jobs import JobService
 from qingpu_insight.model_artifacts import (
     CandidateArtifactStore,
     TrainingManifest,
+    sha256_file,
 )
+from qingpu_insight.model_release import OfficialModelStore
 from qingpu_insight.model_training_service import ModelTrainingService, build_data_snapshot
 from qingpu_insight.valuation import ValuationBundle
 
@@ -23,6 +25,7 @@ class ModelObservatory:
         model_training_service: ModelTrainingService,
         job_service: JobService,
         input_path: Path | None = None,
+        official_store: OfficialModelStore | None = None,
     ) -> None:
         self._artifact_dir = artifact_dir
         self._candidate_store = candidate_store
@@ -31,33 +34,60 @@ class ModelObservatory:
         self._input_path = input_path
         self._cached_snapshot: dict[str, Any] | None = None
         self._cached_snapshot_key: tuple[str, int, float] | None = None
+        self._official_store = official_store
 
     def status(self) -> dict[str, Any]:
         official_models: dict[str, Any] = {}
         for market in ("resale", "presale"):
-            path = self._artifact_dir / f"{market}.joblib"
-            if not path.exists():
-                official_models[market] = {
-                    "available": False,
-                    "role": "official",
-                    "warning": f"{market}_model_unavailable",
-                }
-                continue
-            try:
-                bundle: ValuationBundle = joblib.load(path)
-                official_models[market] = {
-                    "available": True,
-                    "name": bundle.model_name,
-                    "version": bundle.model_version,
-                    "role": "official",
-                    "data_max_date": bundle.data_max_date,
-                }
-            except Exception:
-                official_models[market] = {
-                    "available": False,
-                    "role": "official",
-                    "warning": f"{market}_model_corrupt",
-                }
+            if self._official_store is not None:
+                current = self._official_store.current(market)
+                if current is not None:
+                    try:
+                        bundle = self._official_store.load(market, current.version_id)
+                        official_models[market] = {
+                            "available": True,
+                            "name": bundle.model_name,
+                            "version": bundle.model_version,
+                            "role": "official",
+                            "data_max_date": bundle.data_max_date,
+                            "version_id": current.version_id,
+                        }
+                    except Exception:
+                        official_models[market] = {
+                            "available": False,
+                            "role": "official",
+                            "warning": f"{market}_model_corrupt",
+                        }
+                else:
+                    official_models[market] = {
+                        "available": False,
+                        "role": "official",
+                        "warning": f"{market}_model_unavailable",
+                    }
+            else:
+                path = self._artifact_dir / f"{market}.joblib"
+                if not path.exists():
+                    official_models[market] = {
+                        "available": False,
+                        "role": "official",
+                        "warning": f"{market}_model_unavailable",
+                    }
+                    continue
+                try:
+                    bundle: ValuationBundle = joblib.load(path)
+                    official_models[market] = {
+                        "available": True,
+                        "name": bundle.model_name,
+                        "version": bundle.model_version,
+                        "role": "official",
+                        "data_max_date": bundle.data_max_date,
+                    }
+                except Exception:
+                    official_models[market] = {
+                        "available": False,
+                        "role": "official",
+                        "warning": f"{market}_model_corrupt",
+                    }
 
         try:
             candidates = self._candidate_store.list_recent(limit=9999)
@@ -161,5 +191,52 @@ class ModelObservatory:
                     r.model_dump(mode="json") for r in manifest.results
                 ],
             }
+
+            markets_info: dict[str, dict[str, Any]] = {}
+            for m_result in manifest.results:
+                m = m_result.market
+                blockers: list[str] = []
+                publishable = True
+
+                if not m_result.recommended:
+                    blockers.append("not_recommended")
+                    publishable = False
+
+                candidate_dir = self._candidate_store._root / str(manifest.run_id)
+                artifact_path = candidate_dir / m_result.artifact_file
+                if not artifact_path.exists():
+                    blockers.append("artifact_missing")
+                    publishable = False
+                else:
+                    actual_hash = sha256_file(artifact_path)
+                    if actual_hash != m_result.artifact_sha256:
+                        blockers.append("sha256_mismatch")
+                        publishable = False
+                    else:
+                        try:
+                            bundle: object = joblib.load(str(artifact_path))
+                            if not isinstance(bundle, ValuationBundle):
+                                blockers.append("not_a_valuation_bundle")
+                                publishable = False
+                            elif bundle.transaction_type != m:
+                                blockers.append("market_mismatch")
+                                publishable = False
+                        except Exception:
+                            blockers.append("corrupt_artifact")
+                            publishable = False
+
+                current_version_id: str | None = None
+                if self._official_store is not None:
+                    current = self._official_store.current(m)
+                    if current is not None:
+                        current_version_id = current.version_id
+
+                markets_info[m] = {
+                    "publishable": publishable,
+                    "release_blockers": blockers,
+                    "current_official_version_id": current_version_id,
+                }
+
+            result["markets"] = markets_info
 
         return result
