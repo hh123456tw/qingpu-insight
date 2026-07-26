@@ -3,12 +3,13 @@ import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from qingpu_insight import cli
+from qingpu_insight import cli, official_data
 from qingpu_insight.cli import main
 from qingpu_insight.downloads import DownloadRecord, record_file
 from qingpu_insight.jobs import JobRun, JobSubmission
@@ -557,11 +558,11 @@ def test_acquire_continues_after_one_season_fails_and_checkpoints_manifest(
     def fake_download_file(url: str, destination: Path) -> DownloadRecord:
         return create_record(url, destination)
 
-    monkeypatch.setattr(cli, "iter_seasons", lambda start, end: ("110S3", "110S4"))
-    monkeypatch.setattr(cli, "download_season", fake_download_season)
-    monkeypatch.setattr(cli, "download_current_table", fake_download_current)
-    monkeypatch.setattr(cli, "download_file", fake_download_file)
-    monkeypatch.setattr(cli, "extract_taoyuan_tables", lambda archive, destination: ())
+    monkeypatch.setattr(official_data, "_iter_seasons", lambda start, end: ("110S3", "110S4"))
+    monkeypatch.setattr(official_data, "download_season", fake_download_season)
+    monkeypatch.setattr(official_data, "download_current_table", fake_download_current)
+    monkeypatch.setattr(official_data, "download_file", fake_download_file)
+    monkeypatch.setattr(official_data, "extract_taoyuan_tables", lambda archive, destination: ())
 
     with pytest.raises(RuntimeError, match="110S3"):
         cli.acquire(tmp_path, "110S3", "110S4")

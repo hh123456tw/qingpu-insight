@@ -17,8 +17,7 @@ from typing import Any
 import pandas as pd
 import pymysql
 
-from qingpu_insight.addresses import build_doorplate_frame, match_addresses
-from qingpu_insight.archives import extract_taoyuan_tables
+from qingpu_insight.addresses import build_doorplate_frame
 from qingpu_insight.backup_repository import MySQLBackupRepository
 from qingpu_insight.backups import (
     BackupService,
@@ -27,15 +26,8 @@ from qingpu_insight.backups import (
     UnsafeRestoreTarget,
 )
 from qingpu_insight.config import get_settings
-from qingpu_insight.downloads import (
-    download_current_table,
-    download_file,
-    download_season,
-    write_manifest,
-)
 from qingpu_insight.evidence import UnknownCandidateError
-from qingpu_insight.feasibility import evaluate_feasibility
-from qingpu_insight.geo import assign_life_circle, station_points
+from qingpu_insight.geo import station_points
 from qingpu_insight.health import HealthService, ProductionHealthProbes
 from qingpu_insight.health_repository import MySQLHealthRepository
 from qingpu_insight.job_repository import MySQLJobRepository
@@ -82,22 +74,17 @@ from qingpu_insight.model_training_service import (
     ModelTrainingService,
     SourceVersionProvider,
 )
-from qingpu_insight.moi import read_moi_csv
 from qingpu_insight.mysql_loader import load_market_rows
+from qingpu_insight.official_data import (
+    OfficialDataError,
+    acquire_official,
+    analyse_official,
+)
 from qingpu_insight.publishing import MySQLVersionPublisher
 from qingpu_insight.report_composition import create_report_runtime
 from qingpu_insight.report_contracts import EvidencePack, ReportRequest
 from qingpu_insight.report_service import ReportService
-from qingpu_insight.reporting import write_report
 from qingpu_insight.valuation import ModelRegistry
-
-SOURCES = (
-    "https://data.gov.tw/dataset/77051",
-    "https://data.gov.tw/dataset/157689",
-    "https://www.tymetro.com.tw/tymetro-new/tw/_pages/travel-guide/A17",
-    "https://www.tymetro.com.tw/tymetro-new/tw/_pages/travel-guide/A18",
-    "https://www.tymetro.com.tw/tymetro-new/tw/_pages/travel-guide/A19",
-)
 
 _CONTACT_PATTERNS = (
     re.compile(r"(?<![\w.+-])[\w.+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?!\w)"),
@@ -106,86 +93,24 @@ _CONTACT_PATTERNS = (
 )
 
 
-def season_key(value: str) -> tuple[int, int]:
-    year, quarter = value.upper().split("S", maxsplit=1)
-    parsed = (int(year), int(quarter))
-    if parsed[0] < 101 or parsed[1] not in (1, 2, 3, 4):
-        raise ValueError(f"invalid ROC season: {value}")
-    return parsed
 
 
-def iter_seasons(start: str, end: str) -> tuple[str, ...]:
-    start_key = season_key(start)
-    end_key = season_key(end)
-    if start_key > end_key:
-        raise ValueError("start season must not be after end season")
-    values = []
-    year, quarter = start_key
-    while (year, quarter) <= end_key:
-        values.append(f"{year}S{quarter}")
-        quarter += 1
-        if quarter == 5:
-            year += 1
-            quarter = 1
-    return tuple(values)
+
+
 
 
 def acquire(root: Path, start: str, end: str) -> None:
-    settings = get_settings(root)
-    manifest = settings.raw_dir / "manifest.json"
-    errors: list[str] = []
-    for season in iter_seasons(start, end):
-        archive = settings.raw_dir / "seasons" / f"{season}.zip"
-        try:
-            record = download_season(settings.sources.moi_base_url, season, archive)
-            write_manifest([record], manifest)
-            extract_taoyuan_tables(archive, settings.raw_dir / "seasons" / season)
-        except Exception as error:
-            errors.append(f"{season}: {error}")
-    current = settings.raw_dir / "current"
-    for name in ("h_lvr_land_a.csv", "h_lvr_land_b.csv"):
-        try:
-            record = download_current_table(settings.sources.moi_base_url, name, current / name)
-            write_manifest([record], manifest)
-        except Exception as error:
-            errors.append(f"{name}: {error}")
-    try:
-        record = download_file(settings.sources.doorplate_url, settings.raw_dir / "doorplates.csv")
-        write_manifest([record], manifest)
-    except Exception as error:
-        errors.append(f"doorplates.csv: {error}")
-    if errors:
-        raise RuntimeError("acquisition incomplete: " + "; ".join(errors))
-
-
-def _transaction_files(raw_dir: Path) -> list[tuple[Path, str]]:
-    files: list[tuple[Path, str]] = []
-    for path in sorted(raw_dir.glob("seasons/*/h_lvr_land_[ab].csv")):
-        files.append((path, "resale" if path.name.endswith("_a.csv") else "presale"))
-    for path in sorted((raw_dir / "current").glob("h_lvr_land_[ab].csv")):
-        files.append((path, "resale" if path.name.endswith("_a.csv") else "presale"))
-    return files
+    acquire_official(root, start, end)
 
 
 def analyse(root: Path, allow_no_go: bool) -> int:
-    settings = get_settings(root)
-    files = _transaction_files(settings.raw_dir)
-    if not files:
-        raise FileNotFoundError("no MOI transaction CSV files found; run acquire first")
-    frames = [read_moi_csv(path, kind) for path, kind in files]
-    transactions = pd.concat(frames, ignore_index=True)
-    business_columns = [column for column in transactions.columns if column != "source_file"]
-    transactions = transactions.drop_duplicates(subset=business_columns)
-    doorplates = build_doorplate_frame(settings.raw_dir / "doorplates.csv")
-    located = match_addresses(transactions, doorplates)
-    stations = station_points(settings.stations, doorplates)
-    assigned = assign_life_circle(located, stations, settings.radius_m)
-    settings.processed_dir.mkdir(parents=True, exist_ok=True)
-    assigned.to_parquet(settings.processed_dir / "transactions.parquet", index=False)
-    result = evaluate_feasibility(assigned, settings.thresholds)
-    write_report(result, settings.report_dir, SOURCES)
-    print(f"M0 decision: {result.decision}")
-    return 0 if result.decision == "GO" or allow_no_go else 2
+    try:
+        decision = analyse_official(root)
+        print(f"M0 decision: {decision}")
+        return 0
+    except OfficialDataError:
+        print("M0 decision: NO-GO")
+        return 0 if allow_no_go else 2
 
 
 def market_build(root: Path, input_path: str, output_path: str, quality_output_path: str) -> int:

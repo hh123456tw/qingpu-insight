@@ -54,18 +54,23 @@ def _mysql_value(value: Any) -> Any:
     return value
 
 
-def load_market_rows(connection: Any, frame: pd.DataFrame, batch_size: int = 1000) -> int:
+def _insert_market_rows(connection: Any, frame: pd.DataFrame, batch_size: int = 1000) -> int:
     total = 0
+    for start in range(0, len(frame), batch_size):
+        batch = frame.iloc[start : start + batch_size]
+        rows = [
+            tuple(_mysql_value(value) for value in row)
+            for row in batch[list(INSERT_COLUMNS)].itertuples(index=False, name=None)
+        ]
+        with connection.cursor() as cursor:
+            cursor.executemany(_UPSERT_SQL, rows)
+        total += len(rows)
+    return total
+
+
+def load_market_rows(connection: Any, frame: pd.DataFrame, batch_size: int = 1000) -> int:
     try:
-        for start in range(0, len(frame), batch_size):
-            batch = frame.iloc[start : start + batch_size]
-            rows = [
-                tuple(_mysql_value(value) for value in row)
-                for row in batch[list(INSERT_COLUMNS)].itertuples(index=False, name=None)
-            ]
-            with connection.cursor() as cursor:
-                cursor.executemany(_UPSERT_SQL, rows)
-            total += len(rows)
+        total = _insert_market_rows(connection, frame, batch_size)
         connection.commit()
     except Exception:
         connection.rollback()
