@@ -1,11 +1,22 @@
+import calendar
 from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from qingpu_insight.model_features import FEATURE_COLUMNS
-from qingpu_insight.model_training import TimeSplit, run_model_experiment
+from qingpu_insight.model_training import (
+    RecentMedianBaseline,
+    TimeSplit,
+    candidate_estimators,
+    evaluate_candidate,
+    evaluate_fitted_candidate,
+    passes_release_gate,
+    run_model_experiment,
+    split_by_time,
+)
 
 
 @dataclass(frozen=True)
@@ -58,22 +69,22 @@ def run_feature_experiments(split: TimeSplit) -> tuple[FeatureExperiment, ...]:
     ))
 
     for ab_name, removed in ABLATIONS.items():
-        ablation_features = tuple(f for f in FEATURE_COLUMNS if f not in removed)
-        ablation_result = run_model_experiment(
-            split,
-            feature_columns=ablation_features,
-            estimators={enhanced_winner_name: all_candidates[enhanced_winner_name]},
-        )
-        ablation_selected = next(
-            c for c in ablation_result.selection_results if c.name == ablation_result.selected_name
-        )
-        experiments.append(FeatureExperiment(
-            name=ab_name,
-            feature_columns=ablation_features,
-            selected_model=ablation_result.selected_name,
-            metrics=ablation_selected.metrics.to_dict(orient="index"),
-            candidate_errors=ablation_result.candidate_errors,
-        ))
+            ablation_features = tuple(f for f in FEATURE_COLUMNS if f not in removed)
+            ablation_result = run_model_experiment(
+                split,
+                feature_columns=ablation_features,
+                estimators={enhanced_winner_name: all_candidates[enhanced_winner_name]},
+            )
+            ablation_selected = next(
+                c for c in ablation_result.selection_results if c.name == ablation_result.selected_name
+            )
+            experiments.append(FeatureExperiment(
+                name=ab_name,
+                feature_columns=ablation_features,
+                selected_model=ablation_result.selected_name,
+                metrics=ablation_selected.metrics.to_dict(orient="index"),
+                candidate_errors=ablation_result.candidate_errors,
+            ))
 
     return tuple(experiments)
 
@@ -165,4 +176,104 @@ def build_resale_diagnostics(
         "monthly_summary": monthly_summary,
         "building_type_summary": building_type_summary,
         "split_summary": split_summary,
+    }
+
+
+def run_annual_backtests(frame, selected_model_name, feature_columns):
+    max_date = frame["transaction_date"].max()
+    max_year = max_date.year
+    max_month = max_date.month
+
+    results = []
+    for offset in range(3):
+        year = max_year - offset
+        month = max_month
+        _, last_day = calendar.monthrange(year, month)
+        cutoff = pd.Timestamp(year, month, last_day)
+
+        filtered = frame[frame["transaction_date"] <= cutoff].copy()
+
+        if len(filtered) < 300:
+            continue
+
+        try:
+            split = split_by_time(filtered)
+        except ValueError:
+            continue
+
+        estimators = candidate_estimators(feature_columns=feature_columns)
+        candidate_est = estimators[selected_model_name]
+
+        candidate_result = evaluate_candidate(
+            selected_model_name, candidate_est, split.train, split.calibration,
+            feature_columns=feature_columns,
+        )
+
+        baseline = RecentMedianBaseline()
+        baseline.fit(split.train)
+        baseline_result = evaluate_fitted_candidate(
+            "baseline", baseline, split.calibration, feature_columns=feature_columns,
+        )
+
+        passed = passes_release_gate(candidate_result, baseline_result)
+
+        stations_within_limit = all(
+            candidate_result.station_mape.get(station, float("inf"))
+            <= baseline_result.station_mape[station] * 1.10
+            for station in baseline_result.station_mape
+        )
+
+        results.append({
+            "cutoff_date": cutoff,
+            "train_max_date": split.train["transaction_date"].max(),
+            "test_min_date": split.test["transaction_date"].min(),
+            "source_max_date": filtered["transaction_date"].max(),
+            "passed": passed,
+            "stations_within_limit": stations_within_limit,
+            "candidate_metrics": candidate_result.metrics.to_dict(orient="index"),
+            "baseline_metrics": baseline_result.metrics.to_dict(orient="index"),
+        })
+
+    return results
+
+
+def evaluate_release_checks(candidate_metrics, baseline_metrics, backtests, data_max_date, latest_official_date):
+    overall_mae_improved = (
+        candidate_metrics["overall"]["mae"] <= baseline_metrics["overall"]["mae"] * 0.98
+    )
+
+    stations_within_limit = all(
+        candidate_metrics.get(metric, {}).get("mape", float("inf"))
+        <= baseline_metrics[metric]["mape"] * 1.10
+        for metric in baseline_metrics
+        if metric.startswith("station:")
+    )
+
+    a18_baseline = baseline_metrics.get("station:A18", {}).get("mape", float("inf"))
+    a18_candidate = candidate_metrics.get("station:A18", {}).get("mape", float("inf"))
+    a18_improved = a18_candidate < a18_baseline
+
+    backtests_passed = sum(1 for b in backtests if b.get("passed")) >= 2
+
+    backtest_stations_within_limit = all(b.get("stations_within_limit") for b in backtests)
+
+    candidate_fresh = data_max_date >= latest_official_date - timedelta(days=180)
+
+    recommended = all((
+        overall_mae_improved,
+        stations_within_limit,
+        a18_improved,
+        backtests_passed,
+        backtest_stations_within_limit,
+        candidate_fresh,
+    ))
+
+    return {
+        "overall_mae_improved": overall_mae_improved,
+        "stations_within_limit": stations_within_limit,
+        "a18_improved": a18_improved,
+        "backtests_passed": backtests_passed,
+        "backtest_stations_within_limit": backtest_stations_within_limit,
+        "candidate_fresh": candidate_fresh,
+        "recommended": recommended,
     }

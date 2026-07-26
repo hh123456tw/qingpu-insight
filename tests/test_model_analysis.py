@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -8,6 +8,8 @@ import pytest
 from qingpu_insight.model_analysis import (
     ABLATIONS,
     build_resale_diagnostics,
+    evaluate_release_checks,
+    run_annual_backtests,
     run_feature_experiments,
 )
 from qingpu_insight.model_features import (
@@ -98,25 +100,32 @@ def model_frame():
     stations = ["A17", "A18", "A19"]
     bt_types = ["住宅大樓", "華廈"]
     rows = []
-    for i in range(800):
+    dates = pd.date_range("2021-01-01", "2026-06-30", periods=2000)
+    for d in dates:
+        age = float(np.random.uniform(0, 40))
+        beds = int(np.random.choice([2, 3, 4]))
+        station = np.random.choice(stations)
+        signal = age * 8000 + beds * 20000 + (800000 if station == "A17" else 0)
         rows.append({
-            "station_code": np.random.choice(stations),
+            "station_code": station,
             "station_distance_m": float(np.random.uniform(100, 1500)),
             "building_area_ping": float(np.random.uniform(20, 80)),
             "building_type": np.random.choice(bt_types),
-            "bedrooms": int(np.random.choice([2, 3, 4])),
+            "bedrooms": beds,
             "living_rooms": int(np.random.choice([1, 2])),
             "bathrooms": int(np.random.choice([1, 2])),
-            "building_age_years": float(np.random.uniform(0, 40)),
+            "building_age_years": age,
             "floor": int(np.random.randint(1, 15)),
             "total_floors": int(np.random.randint(5, 20)),
             "floor_ratio": float(np.random.uniform(0.1, 0.9)),
             "parking_type": np.random.choice(["坡道平面", "坡道機械", ""]),
             "parking_area_ping": float(np.random.uniform(0, 15)),
-            "transaction_year": 2024 + (i % 3),
-            "transaction_month": 1 + (i % 12),
-            "transaction_date": pd.Timestamp("2020-01-01") + pd.DateOffset(days=i),
-            "target_unit_price_twd": float(np.random.uniform(300000, 800000)),
+            "transaction_year": d.year,
+            "transaction_month": d.month,
+            "transaction_date": d,
+            "target_unit_price_twd": float(
+                np.random.uniform(300000, 500000) + signal
+            ),
         })
     df = pd.DataFrame(rows)
     return add_derived_features(df)
@@ -149,3 +158,52 @@ def test_feature_experiment_metrics_include_overall_and_a18(model_frame):
     for exp in experiments:
         assert "overall" in exp.metrics
         assert "station:A18" in exp.metrics
+
+
+def _metrics(mae, a17=10.0, a18=20.0, a19=10.0):
+    return {
+        "overall": {"mae": mae},
+        "station:A17": {"mape": a17},
+        "station:A18": {"mape": a18},
+        "station:A19": {"mape": a19},
+    }
+
+
+def _backtest(passed, stations_within_limit=True):
+    return {
+        "passed": passed,
+        "stations_within_limit": stations_within_limit,
+    }
+
+
+def test_backtests_never_train_on_future_rows(model_frame):
+    rows = run_annual_backtests(
+        model_frame,
+        selected_model_name="hist_gradient_boosting",
+        feature_columns=FEATURE_COLUMNS,
+    )
+    assert len(rows) == 3
+    for row in rows:
+        assert row["train_max_date"] < row["test_min_date"]
+        assert row["source_max_date"] <= row["cutoff_date"]
+
+
+def test_release_checks_require_strict_a18_improvement():
+    checks = evaluate_release_checks(
+        _metrics(98.0), _metrics(100.0),
+        [_backtest(True), _backtest(True), _backtest(False)],
+        date(2026, 6, 12), date(2026, 6, 12),
+    )
+    assert checks["overall_mae_improved"] is True
+    assert checks["a18_improved"] is False
+    assert checks["recommended"] is False
+
+
+def test_release_checks_require_two_passing_backtests():
+    checks = evaluate_release_checks(
+        _metrics(97.0, a18=18.0), _metrics(100.0),
+        [_backtest(True), _backtest(False), _backtest(False)],
+        date(2026, 6, 12), date(2026, 6, 12),
+    )
+    assert checks["backtests_passed"] is False
+    assert checks["recommended"] is False
