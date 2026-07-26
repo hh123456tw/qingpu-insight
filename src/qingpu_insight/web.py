@@ -49,6 +49,10 @@ from qingpu_insight.market_metrics import (
 )
 from qingpu_insight.market_repository import MarketDataSource, repository_from_env
 from qingpu_insight.model_features import ValuationInput, build_model_frame
+from qingpu_insight.official_data import (
+    OfficialDataUpdateService,
+    ProductionOfficialDataRunner,
+)
 from qingpu_insight.report_composition import create_report_runtime
 from qingpu_insight.report_repository import CorruptReportError
 from qingpu_insight.valuation import ModelRegistry, valuate
@@ -71,6 +75,7 @@ class AdminServices:
     executor: LocalJobExecutor
     model_training_service: object | None = None
     model_observatory: object | None = None
+    official_data_service: object | None = None
 
 
 @dataclass(frozen=True)
@@ -180,12 +185,16 @@ def _create_production_admin_services(
             if jt == "model_training":
                 candidate_store.discard_staging(interrupted.run_id)
 
+    official_runner = ProductionOfficialDataRunner(root, connection_factory)
+    official_service = OfficialDataUpdateService(service.job_service, official_runner, root)
+
     return AdminServices(
         job_service=service.job_service,
         listing_update_service=service,
         executor=executor,
         model_training_service=mts,
         model_observatory=observatory,
+        official_data_service=official_service,
     )
 
 
@@ -652,6 +661,7 @@ def create_app(
             listing_update_service=admin_services.listing_update_service,
             model_training_service=admin_services.model_training_service,
             model_observatory=admin_services.model_observatory,
+            official_data_service=admin_services.official_data_service,
         )
     else:
         admin_runtime = AdminRuntime(job_service=None, executor=None)
