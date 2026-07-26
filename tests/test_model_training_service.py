@@ -132,10 +132,10 @@ def service_fixture(
 @pytest.fixture
 def market_parquet(tmp_path: Path) -> Path:
     np.random.seed(42)
-    n_per_market = 800
+    n_per_market = 3000
     total = n_per_market * 2
-    base = pd.Timestamp("2020-01-01")
-    total_days = 1825
+    base = pd.Timestamp("2017-01-01")
+    total_days = 2922
 
     stations = ["A17", "A18", "A19"]
     types = ["住宅大樓", "華廈"]
@@ -229,15 +229,15 @@ def test_execute_writes_traceable_candidate_without_touching_official_models(
 
     assert manifest.run_id == UUID(run.run_id)
     assert manifest.markets == ["resale"]
-    assert manifest.data_snapshot.raw_count == 1_600
+    assert manifest.data_snapshot.raw_count == 6_000
     assert manifest.data_snapshot.usable_counts == {
-        "resale": 800,
-        "presale": 800,
+        "resale": 3000,
+        "presale": 3000,
     }
     assert manifest.data_snapshot.station_counts == {
-        "A17": 534,
-        "A18": 534,
-        "A19": 532,
+        "A17": 2000,
+        "A18": 2000,
+        "A19": 2000,
     }
     assert sha256_file(official) == before
     assert jobs.get(run.run_id).status == "succeeded"
@@ -262,12 +262,12 @@ def test_execute_fails_atomically_when_a_market_raises(
     call_count = 0
     original_run = mts.run_model_experiment
 
-    def failing_run(split, estimators=None):
+    def failing_run(split, estimators=None, feature_columns=mts.FEATURE_COLUMNS):
         nonlocal call_count
         call_count += 1
         if call_count > 1:
             raise RuntimeError("presale experiment failed")
-        return original_run(split, estimators)
+        return original_run(split, estimators, feature_columns=feature_columns)
 
     monkeypatch.setattr(mts, "run_model_experiment", failing_run)
 
@@ -282,3 +282,30 @@ def test_execute_fails_atomically_when_a_market_raises(
     assert not (candidate_root / run.run_id).exists()
     assert sha256_file(official_resale) == before_resale
     assert sha256_file(official_presale) == before_presale
+
+
+def test_resale_training_writes_schema_v2_analysis(tmp_path, market_parquet):
+    service, jobs = service_fixture(tmp_path, input_path=market_parquet)
+    run = service.submit(ModelTrainingRequest(("resale",))).run
+    jobs.start(run.run_id)
+    manifest = service.execute(run.run_id, ModelTrainingRequest(("resale",)))
+    result = manifest.results[0]
+    assert manifest.schema_version == 2
+    assert result.market == "resale"
+    assert result.feature_contract_version == 2
+    assert result.diagnostics["station_counts"]["A18"] > 0
+    assert len(result.feature_experiments) == 7
+    assert len(result.backtests) == 3
+    assert "a18_improved" in result.release_checks
+    assert result.recommended is result.release_checks["recommended"]
+
+
+def test_presale_training_does_not_run_resale_analysis(tmp_path, market_parquet):
+    service, jobs = service_fixture(tmp_path, input_path=market_parquet)
+    run = service.submit(ModelTrainingRequest(("presale",))).run
+    jobs.start(run.run_id)
+    manifest = service.execute(run.run_id, ModelTrainingRequest(("presale",)))
+    result = manifest.results[0]
+    assert result.market == "presale"
+    assert result.feature_experiments == []
+    assert result.backtests == []

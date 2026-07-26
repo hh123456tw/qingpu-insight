@@ -8,7 +8,12 @@ import joblib
 import numpy as np
 import pandas as pd
 
-from qingpu_insight.model_features import FEATURE_COLUMNS, ValuationInput, input_frame
+from qingpu_insight.model_features import (
+    BASE_FEATURE_COLUMNS,
+    FEATURE_COLUMNS,
+    ValuationInput,
+    input_frame,
+)
 
 
 @dataclass
@@ -26,6 +31,7 @@ class ValuationBundle:
     data_min_date: str
     data_max_date: str
     metrics: dict[str, Any]
+    feature_columns: tuple[str, ...] = BASE_FEATURE_COLUMNS
 
 
 class ModelUnavailableError(Exception):
@@ -380,10 +386,11 @@ def train_artifact(
     split: Any,
     bundle: ValuationBundle,
     artifact_dir: Path,
+    feature_columns: tuple[str, ...] = FEATURE_COLUMNS,
 ) -> Path:
     from sklearn.inspection import permutation_importance
 
-    calibration_pred = selected.estimator.predict(split.calibration[list(FEATURE_COLUMNS)])
+    calibration_pred = selected.estimator.predict(split.calibration[list(feature_columns)])
     radius = float(
         np.quantile(
             np.abs(split.calibration["target_unit_price_twd"].values - calibration_pred),
@@ -393,7 +400,7 @@ def train_artifact(
 
     imp = permutation_importance(
         selected.estimator,
-        split.calibration[list(FEATURE_COLUMNS)],
+        split.calibration[list(feature_columns)],
         split.calibration["target_unit_price_twd"],
         scoring="neg_mean_absolute_error",
         n_repeats=5,
@@ -401,11 +408,11 @@ def train_artifact(
     )
     importance_list = [
         {"feature": name, "importance": float(imp.importances_mean[i])}
-        for i, name in enumerate(FEATURE_COLUMNS)
+        for i, name in enumerate(feature_columns)
     ]
     importance_list.sort(key=lambda x: x["importance"], reverse=True)
 
-    contract_str = json.dumps(list(FEATURE_COLUMNS), sort_keys=True)
+    contract_str = json.dumps(list(feature_columns), sort_keys=True)
     contract_hash = hashlib.sha256(contract_str.encode()).hexdigest()
     version = _model_version(transaction_type, bundle.data_max_date, contract_hash)
 
@@ -413,8 +420,8 @@ def train_artifact(
     feature_ranges: dict[str, tuple[float, float]] = {}
     feature_hard_ranges: dict[str, tuple[float, float]] = {}
     feature_medians: dict[str, float] = {}
-    for col in FEATURE_COLUMNS:
-        if col in ("station_code", "building_type", "parking_type"):
+    for col in feature_columns:
+        if col in ("station_code", "building_type", "parking_type", "station_building_type", "building_age_band", "area_band", "floor_band"):
             continue
         values = train_frame[col].dropna()
         if len(values) > 0:
@@ -436,6 +443,7 @@ def train_artifact(
         data_min_date=str(split.train["transaction_date"].min().date()),
         data_max_date=str(split.train["transaction_date"].max().date()),
         metrics=selected.metrics.to_dict(orient="index"),
+        feature_columns=feature_columns,
     )
 
     artifact_dir.mkdir(parents=True, exist_ok=True)

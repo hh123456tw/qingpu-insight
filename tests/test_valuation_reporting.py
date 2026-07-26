@@ -1,6 +1,7 @@
 import pandas as pd
 import pytest
 
+from qingpu_insight.model_features import add_derived_features
 from qingpu_insight.model_training import (
     ModelExperiment,
     TimeSplit,
@@ -103,6 +104,7 @@ def _build_experiment_frame(
         )
 
     frame = pd.DataFrame(rows)
+    frame = add_derived_features(frame)
     return TimeSplit(
         train=frame.iloc[:n_train],
         calibration=frame.iloc[n_train : n_train + n_cal],
@@ -159,11 +161,11 @@ def test_write_evaluation_creates_json(tmp_path, trained_bundle, experiment):
     assert path.exists()
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["transaction_type"] == "resale"
-    assert payload["selected_model"] == "ridge"
+    assert payload["selected_model"] == trained_bundle.model_name
     assert "selection_metrics" in payload
     assert "final_test_metrics" in payload
-    assert payload["selection_metrics"]["ridge"]["overall"]["count"] == 100
-    assert payload["final_test_metrics"]["ridge"]["overall"]["count"] == 200
+    assert payload["selection_metrics"][exp.selected_name]["overall"]["count"] == 100
+    assert payload["final_test_metrics"][exp.selected_name]["overall"]["count"] == 200
     assert payload["recommendation"] == {
         "status": "recommended",
         "reason_codes": [],

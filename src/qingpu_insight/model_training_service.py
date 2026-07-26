@@ -19,10 +19,17 @@ from qingpu_insight.model_artifacts import (
     TrainingManifest,
     sha256_file,
 )
-from qingpu_insight.model_features import build_model_frame
+from qingpu_insight.model_analysis import (
+    build_resale_diagnostics,
+    evaluate_release_checks,
+    run_annual_backtests,
+    run_feature_experiments,
+)
+from qingpu_insight.model_features import FEATURE_COLUMNS, build_model_frame
 from qingpu_insight.model_training import (
     BaselineEvaluationError,
     ModelExperiment,
+    candidate_estimators,
     leakage_audit,
     run_model_experiment,
     split_by_time,
@@ -107,6 +114,12 @@ def market_result_from_files(
     evaluation_path: Path,
     card_path: Path,
     stage: Path,
+    diagnostics: dict[str, object] | None = None,
+    feature_experiments: list[dict[str, object]] | None = None,
+    backtests: list[dict[str, object]] | None = None,
+    release_checks: dict[str, bool] | None = None,
+    feature_columns: list[str] | None = None,
+    feature_contract_version: int = 0,
 ) -> MarketTrainingResult:
     selection_metrics: dict[str, dict[str, object]] = {}
     for c in experiment.selection_results:
@@ -128,7 +141,11 @@ def market_result_from_files(
     return MarketTrainingResult(
         market=market,
         selected_model=experiment.selected_name,
-        recommended=experiment.recommended,
+        recommended=(
+            release_checks.get("recommended", experiment.recommended)
+            if release_checks
+            else experiment.recommended
+        ),
         reason_codes=list(experiment.reason_codes),
         selection_metrics=selection_metrics,
         final_test_metrics=final_test_metrics,
@@ -136,6 +153,12 @@ def market_result_from_files(
         artifact_sha256=sha256_file(artifact_path),
         report_files=report_files,
         report_sha256=report_sha256,
+        feature_contract_version=feature_contract_version,
+        feature_columns=feature_columns or [],
+        diagnostics=diagnostics or {},
+        feature_experiments=feature_experiments or [],
+        backtests=backtests or [],
+        release_checks=release_checks or {},
     )
 
 
@@ -273,11 +296,52 @@ class ModelTrainingService:
                 )
                 model_frame = build_model_frame(frame, market)
                 split = split_by_time(model_frame)
+                is_resale = market == "resale"
+
+                diagnostics: dict[str, object] = {}
+                analysis_experiments: list[dict[str, object]] = []
+                serialized_backtests: list[dict[str, object]] = []
+                release_checks: dict[str, bool] = {}
+                enhanced_features: tuple[str, ...] = FEATURE_COLUMNS
+                feature_contract_ver = 0
+
                 try:
-                    experiment = run_model_experiment(split)
+                    if is_resale:
+                        diagnostics = build_resale_diagnostics(
+                            model_frame, split
+                        )
+                        exp_list = run_feature_experiments(split)
+                        analysis_experiments = [
+                            {
+                                "name": fe.name,
+                                "feature_columns": list(fe.feature_columns),
+                                "selected_model": fe.selected_model,
+                                "metrics": fe.metrics,
+                                "candidate_errors": fe.candidate_errors,
+                            }
+                            for fe in exp_list
+                        ]
+                        enhanced_name = exp_list[1].selected_model
+                        enhanced_features = exp_list[1].feature_columns
+                        all_candidates = candidate_estimators(
+                            feature_columns=enhanced_features
+                        )
+                        experiment = run_model_experiment(
+                            split,
+                            feature_columns=enhanced_features,
+                            estimators=all_candidates,
+                        )
+                        feature_contract_ver = 2
+                    else:
+                        experiment = run_model_experiment(split)
                 except BaselineEvaluationError as exc:
-                    raise ModelTrainingError("baseline_failed", str(exc)) from exc
-                locked = experiment.final_test_results[experiment.selected_name]
+                    raise ModelTrainingError(
+                        "baseline_failed", str(exc)
+                    ) from exc
+
+                locked = experiment.final_test_results[
+                    experiment.selected_name
+                ]
                 seed_bundle = ValuationBundle(
                     transaction_type=market,
                     model_name="",
@@ -294,16 +358,66 @@ class ModelTrainingService:
                         split.train["transaction_date"].max().date()
                     ),
                     metrics={},
+                    feature_columns=enhanced_features,
                 )
                 try:
                     artifact_path = train_artifact(
-                        market, locked, split, seed_bundle, stage
+                        market,
+                        locked,
+                        split,
+                        seed_bundle,
+                        stage,
+                        feature_columns=enhanced_features,
                     )
                     bundle: ValuationBundle = joblib.load(artifact_path)
                 except Exception as exc:
                     raise ModelTrainingError(
                         "candidate_write_failed", str(exc)
                     ) from exc
+
+                if is_resale:
+                    try:
+                        raw_backtests = run_annual_backtests(
+                            model_frame, enhanced_name, enhanced_features
+                        )
+                        serialized_backtests = []
+                        for bt in raw_backtests:
+                            bt_copy = dict(bt)
+                            for key in (
+                                "cutoff_date",
+                                "train_max_date",
+                                "test_min_date",
+                                "source_max_date",
+                            ):
+                                if key in bt_copy and isinstance(
+                                    bt_copy[key], pd.Timestamp
+                                ):
+                                    bt_copy[key] = str(bt_copy[key].date())
+                            serialized_backtests.append(bt_copy)
+
+                        baseline_metrics = (
+                            experiment.final_test_results["baseline"]
+                            .metrics.to_dict(orient="index")
+                        )
+                        candidate_metrics = (
+                            experiment.final_test_results[
+                                experiment.selected_name
+                            ]
+                            .metrics.to_dict(orient="index")
+                        )
+                        data_max_ts = pd.Timestamp(bundle.data_max_date)
+                        release_checks = evaluate_release_checks(
+                            candidate_metrics,
+                            baseline_metrics,
+                            serialized_backtests,
+                            data_max_ts,
+                            data_max_ts,
+                        )
+                    except Exception as exc:
+                        raise ModelTrainingError(
+                            "candidate_write_failed", str(exc)
+                        ) from exc
+
                 self._jobs.progress(
                     run_id,
                     {
@@ -314,7 +428,20 @@ class ModelTrainingService:
                 try:
                     report_dir = stage / "reports"
                     evaluation_path = write_evaluation(
-                        bundle, experiment, split, report_dir
+                        bundle,
+                        experiment,
+                        split,
+                        report_dir,
+                        diagnostics=diagnostics if is_resale else None,
+                        feature_experiments=(
+                            analysis_experiments if is_resale else None
+                        ),
+                        backtests=(
+                            serialized_backtests if is_resale else None
+                        ),
+                        release_checks=(
+                            release_checks if is_resale else None
+                        ),
                     )
                     card_path = write_model_card(
                         bundle, experiment, leakage_audit(split), report_dir
@@ -334,6 +461,18 @@ class ModelTrainingService:
                             evaluation_path=evaluation_path,
                             card_path=card_path,
                             stage=stage,
+                            diagnostics=diagnostics if is_resale else None,
+                            feature_experiments=(
+                                analysis_experiments if is_resale else None
+                            ),
+                            backtests=(
+                                serialized_backtests if is_resale else None
+                            ),
+                            release_checks=(
+                                release_checks if is_resale else None
+                            ),
+                            feature_columns=list(enhanced_features),
+                            feature_contract_version=feature_contract_ver,
                         )
                     )
                 except Exception as exc:
@@ -346,6 +485,9 @@ class ModelTrainingService:
                 run_id,
                 {"stage": "writing_artifacts", "completed_markets": list(completed)},
             )
+            schema_version: Literal[1, 2] = (
+                2 if "resale" in markets else 1
+            )
             manifest = TrainingManifest(
                 run_id=UUID(run_id),
                 created_at=self._clock(),
@@ -355,6 +497,7 @@ class ModelTrainingService:
                 runtime_versions=runtime_versions(),
                 data_snapshot=snapshot,
                 results=results,
+                schema_version=schema_version,
             )
             (stage / "manifest.json").write_text(
                 manifest.model_dump_json(indent=2),

@@ -14,6 +14,10 @@ def write_evaluation(
     experiment: ModelExperiment,
     split: TimeSplit,
     report_dir: Path,
+    diagnostics: dict[str, object] | None = None,
+    feature_experiments: list[dict[str, object]] | None = None,
+    backtests: list[dict[str, object]] | None = None,
+    release_checks: dict[str, bool] | None = None,
 ) -> Path:
     leakage = leakage_audit(split)
     test_pred = bundle.pipeline.predict(split.test[list(FEATURE_COLUMNS)])
@@ -68,7 +72,17 @@ def write_evaluation(
         "average_interval_width_twd_per_ping": round(avg_interval_width, 2),
         "feature_ranges": bundle.feature_ranges,
         "data_date": bundle.data_max_date,
+        "recency_weighting": {"half_life_months": 24, "minimum": 0.10},
     }
+
+    if diagnostics is not None:
+        report["diagnostics"] = diagnostics
+    if feature_experiments is not None:
+        report["feature_experiments"] = feature_experiments
+    if backtests is not None:
+        report["backtests"] = backtests
+    if release_checks is not None:
+        report["release_checks"] = release_checks
 
     report_dir.mkdir(parents=True, exist_ok=True)
     path = report_dir / f"{bundle.transaction_type}-evaluation.json"
