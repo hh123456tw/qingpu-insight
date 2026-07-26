@@ -1,10 +1,74 @@
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from qingpu_insight.model_features import FEATURE_COLUMNS
-from qingpu_insight.model_training import TimeSplit
+from qingpu_insight.model_training import TimeSplit, run_model_experiment
+
+
+@dataclass(frozen=True)
+class FeatureExperiment:
+    name: str
+    feature_columns: tuple[str, ...]
+    selected_model: str | None
+    metrics: dict[str, Any]
+    candidate_errors: dict[str, str]
+
+
+ABLATIONS = {
+    "without_transaction_trend": ("transaction_month_index",),
+    "without_station_building_type": ("station_building_type",),
+    "without_age_band": ("building_age_band",),
+    "without_area_band": ("area_band",),
+    "without_floor_band": ("floor_band",),
+}
+
+
+def run_feature_experiments(split: TimeSplit) -> tuple[FeatureExperiment, ...]:
+    from qingpu_insight.model_features import BASE_FEATURE_COLUMNS
+    experiments: list[FeatureExperiment] = []
+
+    base_result = run_model_experiment(split, feature_columns=BASE_FEATURE_COLUMNS)
+    base_selected = next(
+        c for c in base_result.selection_results if c.name == base_result.selected_name
+    )
+    experiments.append(FeatureExperiment(
+        name="base",
+        feature_columns=BASE_FEATURE_COLUMNS,
+        selected_model=base_result.selected_name,
+        metrics=base_selected.metrics.to_dict(orient="index"),
+        candidate_errors=base_result.candidate_errors,
+    ))
+
+    enhanced_result = run_model_experiment(split, feature_columns=FEATURE_COLUMNS)
+    enhanced_selected = next(
+        c for c in enhanced_result.selection_results if c.name == enhanced_result.selected_name
+    )
+    experiments.append(FeatureExperiment(
+        name="enhanced",
+        feature_columns=FEATURE_COLUMNS,
+        selected_model=enhanced_result.selected_name,
+        metrics=enhanced_selected.metrics.to_dict(orient="index"),
+        candidate_errors=enhanced_result.candidate_errors,
+    ))
+
+    for ab_name, removed in ABLATIONS.items():
+        ablation_features = tuple(f for f in FEATURE_COLUMNS if f not in removed)
+        ablation_result = run_model_experiment(split, feature_columns=ablation_features)
+        ablation_selected = next(
+            c for c in ablation_result.selection_results if c.name == ablation_result.selected_name
+        )
+        experiments.append(FeatureExperiment(
+            name=ab_name,
+            feature_columns=ablation_features,
+            selected_model=ablation_result.selected_name,
+            metrics=ablation_selected.metrics.to_dict(orient="index"),
+            candidate_errors=ablation_result.candidate_errors,
+        ))
+
+    return tuple(experiments)
 
 
 def build_resale_diagnostics(

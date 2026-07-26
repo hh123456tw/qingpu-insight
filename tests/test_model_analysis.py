@@ -5,7 +5,16 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from qingpu_insight.model_analysis import build_resale_diagnostics
+from qingpu_insight.model_analysis import (
+    ABLATIONS,
+    build_resale_diagnostics,
+    run_feature_experiments,
+)
+from qingpu_insight.model_features import (
+    BASE_FEATURE_COLUMNS,
+    FEATURE_COLUMNS,
+    add_derived_features,
+)
 from qingpu_insight.model_training import split_by_time
 
 
@@ -81,3 +90,62 @@ def test_diagnostics_are_json_serializable(large_model_frame):
         large_model_frame, split_by_time(large_model_frame)
     )
     json.dumps(payload)
+
+
+@pytest.fixture
+def model_frame():
+    np.random.seed(42)
+    stations = ["A17", "A18", "A19"]
+    bt_types = ["住宅大樓", "華廈"]
+    rows = []
+    for i in range(800):
+        rows.append({
+            "station_code": np.random.choice(stations),
+            "station_distance_m": float(np.random.uniform(100, 1500)),
+            "building_area_ping": float(np.random.uniform(20, 80)),
+            "building_type": np.random.choice(bt_types),
+            "bedrooms": int(np.random.choice([2, 3, 4])),
+            "living_rooms": int(np.random.choice([1, 2])),
+            "bathrooms": int(np.random.choice([1, 2])),
+            "building_age_years": float(np.random.uniform(0, 40)),
+            "floor": int(np.random.randint(1, 15)),
+            "total_floors": int(np.random.randint(5, 20)),
+            "floor_ratio": float(np.random.uniform(0.1, 0.9)),
+            "parking_type": np.random.choice(["坡道平面", "坡道機械", ""]),
+            "parking_area_ping": float(np.random.uniform(0, 15)),
+            "transaction_year": 2024 + (i % 3),
+            "transaction_month": 1 + (i % 12),
+            "transaction_date": pd.Timestamp("2020-01-01") + pd.DateOffset(days=i),
+            "target_unit_price_twd": float(np.random.uniform(300000, 800000)),
+        })
+    df = pd.DataFrame(rows)
+    return add_derived_features(df)
+
+
+def test_feature_experiments_use_identical_time_rows(model_frame):
+    split = split_by_time(model_frame)
+    experiments = run_feature_experiments(split)
+
+    expected_names = [
+        "base", "enhanced",
+        "without_transaction_trend", "without_station_building_type",
+        "without_age_band", "without_area_band", "without_floor_band",
+    ]
+    assert [e.name for e in experiments] == expected_names
+
+    assert experiments[0].feature_columns == BASE_FEATURE_COLUMNS
+    assert experiments[1].feature_columns == FEATURE_COLUMNS
+
+    for i, (ab_name, removed) in enumerate(ABLATIONS.items(), start=2):
+        assert experiments[i].name == ab_name
+        for r in removed:
+            assert r not in experiments[i].feature_columns
+
+
+def test_feature_experiment_metrics_include_overall_and_a18(model_frame):
+    split = split_by_time(model_frame)
+    experiments = run_feature_experiments(split)
+
+    for exp in experiments:
+        assert "overall" in exp.metrics
+        assert "station:A18" in exp.metrics
