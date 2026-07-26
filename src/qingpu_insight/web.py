@@ -4,6 +4,7 @@ import os
 import re
 import secrets
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from ipaddress import ip_address
@@ -19,6 +20,7 @@ from flask import Flask, jsonify, render_template, request, send_file, session
 from werkzeug.datastructures import MultiDict
 from werkzeug.exceptions import HTTPException
 
+from qingpu_insight.admin_dashboard import AdminDashboardService, ReadinessItem
 from qingpu_insight.admin_web import AdminRuntime, create_admin_blueprint
 from qingpu_insight.backup_repository import MySQLBackupRepository
 from qingpu_insight.config import get_settings
@@ -182,6 +184,105 @@ def _create_production_admin_services(
         executor=executor,
         model_training_service=mts,
         model_observatory=observatory,
+    )
+
+
+def _create_admin_dashboard_service(
+    root: Path | None,
+    connection_factory: object | None,
+    admin_services: AdminServices | None,
+    ops_services: OpsServices | None,
+) -> AdminDashboardService | None:
+    import shutil
+    from pathlib import Path as _Path
+
+    probes: dict[str, object] = {}
+
+    if connection_factory is not None:
+
+        def _mysql_probe() -> ReadinessItem:
+            try:
+                conn = connection_factory()
+                conn.ping()
+                conn.close()
+                return ReadinessItem(
+                    "mysql", "ready", "MySQL 連線正常。", {"reachable": True}
+                )
+            except Exception:
+                return ReadinessItem(
+                    "mysql", "blocked", "MySQL 無法連線。", {"reachable": False}
+                )
+
+        probes["mysql"] = _mysql_probe
+
+    for binary_name, code in (
+        ("chromedriver", "chrome"),
+        ("ollama", "ollama"),
+        ("mysqldump", "mysqldump"),
+        ("mysql", "mysql_client"),
+    ):
+
+        def _make_binary_probe(
+            name: str = binary_name, probe_code: str = code
+        ) -> Callable[[], ReadinessItem]:
+            def _probe() -> ReadinessItem:
+                found = shutil.which(name)
+                if found:
+                    return ReadinessItem(
+                        probe_code, "ready", f"{name} 可用。", {"path": found}
+                    )
+                return ReadinessItem(
+                    probe_code,
+                    "warning",
+                    f"找不到 {name}。",
+                    {"path": None},
+                )
+
+            return _probe
+
+        probes[code] = _make_binary_probe()
+
+    for dir_key, dir_path in (
+        ("data_dir", root / "data" if root else _Path()),
+        ("candidates_dir", root / "candidates" if root else _Path()),
+    ):
+
+        def _make_dir_probe(
+            key: str = dir_key, path: _Path = dir_path
+        ) -> Callable[[], ReadinessItem]:
+            def _probe() -> ReadinessItem:
+                if path.exists():
+                    return ReadinessItem(
+                        key, "ready", "目錄存在。", {"path": str(path)}
+                    )
+                return ReadinessItem(
+                    key,
+                    "warning",
+                    "目錄不存在。",
+                    {"path": str(path)},
+                )
+
+            return _probe
+
+        probes[dir_key] = _make_dir_probe()
+
+    jobs = admin_services.job_service if admin_services is not None else None
+    health_repo = (
+        ops_services.health_repository if ops_services is not None else None
+    )
+    backup_repo = (
+        ops_services.backup_repository if ops_services is not None else None
+    )
+    model_obs = (
+        admin_services.model_observatory if admin_services is not None else None
+    )
+
+    return AdminDashboardService(
+        probes=probes,
+        jobs=jobs,
+        health_repository=health_repo,
+        backup_repository=backup_repo,
+        model_observatory=model_obs,
     )
 
 
@@ -543,7 +644,7 @@ def create_app(
     app.extensions["qingpu_admin_shutdown"] = shutdown_admin
 
     if admin_services is not None:
-        runtime = AdminRuntime(
+        admin_runtime = AdminRuntime(
             job_service=admin_services.job_service,
             executor=admin_services.executor,
             listing_update_service=admin_services.listing_update_service,
@@ -551,8 +652,8 @@ def create_app(
             model_observatory=admin_services.model_observatory,
         )
     else:
-        runtime = AdminRuntime(job_service=None, executor=None)
-    app.register_blueprint(create_admin_blueprint(runtime))
+        admin_runtime = AdminRuntime(job_service=None, executor=None)
+    app.register_blueprint(create_admin_blueprint(admin_runtime))
 
     @app.before_request
     def ensure_session():
@@ -948,6 +1049,29 @@ def create_app(
         report_services = ReportServices(service=report_service, repository=report_repository)
 
     app.extensions["qingpu_report_services"] = report_services
+
+    # ------------------------------------------------------------------
+    # Dashboard / readiness service (M4.2)
+    # ------------------------------------------------------------------
+
+    dashboard_service: AdminDashboardService | None = None
+    if root is not None:
+        try:
+            _connection_factory = None
+            if os.environ.get("QINGPU_DATABASE_URL"):
+                from qingpu_insight.cli import create_mysql_connection_factory
+
+                _connection_factory = create_mysql_connection_factory()
+            dashboard_service = _create_admin_dashboard_service(
+                root, _connection_factory, admin_services, ops_services,
+            )
+        except Exception:
+            app.logger.warning("dashboard service composition failed")
+
+    if dashboard_service is not None:
+        from dataclasses import replace
+
+        admin_runtime = replace(admin_runtime, dashboard_service=dashboard_service)
 
     _REPORT_SEMAPHORE = BoundedSemaphore(1)
 
