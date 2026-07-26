@@ -19,3 +19,4 @@ outputs/valuations/
 /data/locks/
 /outputs/backups/
 /instance/secrets.env
+/outputs/m45-admin-acceptance/

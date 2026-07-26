@@ -27,6 +27,80 @@
 - Rule Provider 真實 CLI smoke：`success=true`、Fact Accuracy `1.0`、Coverage `1.0`。
 - 正式使用方式是 **Windows 本機執行**；公開雲端部署不在目前必要範圍。
 
+## 管理操作中心
+
+瀏覽器開啟 `http://127.0.0.1:5000` 後，首頁連結至 `/admin` 進入管理操作中心。  
+所有管理端路由僅接受本機（127.0.0.1／localhost）存取。
+
+```powershell
+# 兩種啟動方式
+.\.venv\Scripts\qingpu-web.exe
+python -m qingpu_insight.web
+```
+
+### 八個分類
+
+| 分類 | ID | 說明 |
+|------|-----|------|
+| 總覽 | `#admin-overview` | 系統就緒狀態、待辦事項 |
+| 資料 | `#admin-data` | 一鍵資料更新（指定季度範圍，可選檢查點） |
+| 刊登 | `#admin-listings` | 591 一鍵更新（中古屋→預售屋→租屋，獨立順序執行） |
+| 模型 | `#admin-models` | 模型訓練只建立候選，獨立發布／回滾 |
+| LLM | `#admin-llm` | Rule／Ollama／Gemini 設定與 smoke test；LLM 固定案例 benchmark |
+| 備份 | `#admin-backups` | 備份建立、隔離還原演練、正式資料庫還原（保留 control table） |
+| 工作 | `#admin-jobs` | 各類工作歷史與狀態 |
+| 診斷 | `#admin-diagnostics` | 診斷資訊 |
+
+### 必要條件
+
+- **MySQL 8** 必須可用才能進行任何資料異動操作（資料更新、刊登更新、模型訓練、備份等）。
+- 唯讀功能（市場分析、估價、報告查閱）不需要 MySQL。
+- `QINGPU_DATABASE_URL` 與 `QINGPU_SECRET_KEY`（至少 32 字元、三種字元類別）必須同時存在。
+
+### 功能說明
+
+**一鍵資料更新**  
+指定季度範圍（如 `110S3`～`115S2`），可選從預設 `acquire`、`analyse`、`market_build` 或 `mysql_publish` 檢查點繼續。背景依序執行：下載官方資料 → 地理編碼 → 建立市場資料集 → 發布至 MySQL。
+
+**591 一鍵更新**  
+三類（中古屋、預售屋、租屋）獨立順序執行。每類完成才進入下一類，失敗不影響其他類，可個別重試。
+
+**模型訓練**  
+選擇 `resale`／`presale` 啟動訓練。結果寫入 `artifacts/candidates/<run_id>/`，**不會自動發布**。需透過發布預覽流程（輸入確認文字）手動發布，或選擇版本回滾。
+
+**備份與還原**  
+- 建立備份：建立 MySQL dump 至 `outputs/backups/`
+- 隔離還原演練：在隔離資料庫驗證備份完整性
+- 正式資料庫還原：需先取得預覽、輸入確認文字後提交；保留 `schema_migrations`、`health_log`、`backup_records` 等 control table 不被覆寫
+
+**LLM 設定與測試**  
+- Rule：離線規則式報告，不需 LLM
+- Ollama：需設定 `QINGPU_OLLAMA_MODEL` 環境變數
+- Gemini：可在頁面上設定／刪除 API Key（存入 `instance/secrets.env`），或透過 `QINGPU_GEMINI_API_KEY` 環境變數
+- Smoke test：指定 provider 執行單次測試
+- Benchmark：指定 provider 與模型名稱，執行 `benchmarks/m44_cases.json` 固定案例，產出 `outputs/m44-benchmark/<run_id>/`
+
+### 安全限制
+
+| 機制 | 說明 |
+|------|------|
+| 本機存取 | 所有管理端路由驗證 `REMOTE_ADDR` 與 `Host` header |
+| CSRF | 所有資料異動 POST 需要 `X-Qingpu-CSRF` header 匹配 session token |
+| 白名單參數 | API 只接受預先定義的欄位，拒絕未知或路徑參數 |
+| Secret 強度 | `QINGPU_SECRET_KEY` 必須符合強度政策 |
+| 錯誤遮罩 | 內部錯誤不洩漏 DB URL、SQL、traceback、HTML、電話 |
+
+### 路徑
+
+| 用途 | 路徑 |
+|------|------|
+| 官方候選模型 | `artifacts/candidates/<run_id>/` |
+| 正式版本模型 | `artifacts/resale.joblib`、`artifacts/presale.joblib` |
+| 備份 | `outputs/backups/` |
+| Benchmark | `outputs/m44-benchmark/<run_id>/` |
+| Secret | `instance/secrets.env`（不提交 Git） |
+| 官方資料品質報告 | `outputs/admin/official-data/<run_id>/quality.json` |
+
 ## 五分鐘啟動
 
 ### 前置需求

@@ -109,34 +109,7 @@
     </div>
   </section>
 
-  <section class="job-panel" aria-labelledby="job-title">
-    <h2 id="job-title">資料更新</h2>
-    <div class="job-controls">
-      <label>類型
-        <select id="job-types">
-          <option value="sale,newhouse,rental">出售＋新屋＋出租</option>
-          <option value="sale">僅出售</option>
-          <option value="newhouse">僅新屋</option>
-          <option value="rental">僅出租</option>
-        </select>
-      </label>
-      <label>頁數
-        <input id="job-max-pages" type="number" min="1" max="100" value="10">
-      </label>
-      <button id="job-submit" type="button">開始更新</button>
-    </div>
-    <div id="job-status" role="status" aria-live="polite"></div>
-  </section>
 
-  <section class="ops-panel" aria-labelledby="ops-title">
-    <h2 id="ops-title">系統維運</h2>
-    <div class="ops-kpis">
-      <article><span>健康狀態</span><strong id="ops-status">—</strong></article>
-      <article><span>檢查時間</span><strong id="ops-checked-at">—</strong></article>
-      <article><span>檢查項目</span><strong id="ops-items-count">—</strong></article>
-      <article><span>最近備份</span><strong id="ops-latest-backup">—</strong></article>
-    </div>
-  </section>
   <section class="report-panel" aria-labelledby="report-title">
     <h2 id="report-title">智慧購屋報告</h2>
     <form id="report-form">
@@ -252,7 +225,6 @@
 </main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-<script src="{{ url_for('static', filename='job_polling.js') }}"></script>
 <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>

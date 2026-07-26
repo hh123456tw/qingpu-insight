@@ -334,6 +334,18 @@ class TestReportApi:
         assert response.status_code == 201
 
 
+def test_homepage_keeps_user_features_and_moves_ops_to_admin(client) -> None:
+    home = BeautifulSoup(client.get("/").get_data(as_text=True), "html.parser")
+    admin_page = BeautifulSoup(client.get("/admin/").get_data(as_text=True), "html.parser")
+    assert home.select_one("#valuation-form") is not None
+    assert home.select_one("#report-form") is not None
+    assert home.select_one("#job-submit") is None
+    assert home.select_one(".ops-panel") is None
+    assert home.select_one('a[href="/admin"]') is not None
+    assert admin_page.select_one("#admin-data") is not None
+    assert admin_page.select_one("#admin-backups") is not None
+
+
 def test_homepage_contains_market_dashboard_contract(client) -> None:
     response = client.get("/")
     html = response.get_data(as_text=True)
@@ -3312,6 +3324,7 @@ class TestProductionRestoreApi:
     def test_providers_get_status(self, admin_app, admin_client) -> None:
         app, _, _, _ = admin_app
         from dataclasses import replace
+
         from qingpu_insight.provider_ops import ProviderOpsService
 
         class _Rule:
@@ -3351,6 +3364,7 @@ class TestProductionRestoreApi:
     def test_set_gemini_key(self, admin_app, admin_client) -> None:
         app, _, _, _ = admin_app
         from dataclasses import replace
+
         from qingpu_insight.provider_ops import ProviderOpsService
 
         class _Rule:
@@ -3420,6 +3434,7 @@ class TestProductionRestoreApi:
     def test_provider_smoke_submit(self, admin_app, admin_client) -> None:
         app, _, _, _ = admin_app
         from dataclasses import replace
+
         from qingpu_insight.provider_ops import ProviderOpsService
 
         class _Rule:
@@ -3458,5 +3473,174 @@ class TestProductionRestoreApi:
             json={"provider": "rule"},
         )
         assert response.status_code == 403
+
+    # ------------------------------------------------------------------
+    # LLM Benchmark tests (Task 15)
+    # ------------------------------------------------------------------
+
+    def _setup_benchmark(self, admin_app, monkeypatch, tmp_path):
+        from dataclasses import replace
+
+        from qingpu_insight.provider_ops import ProviderOpsService
+
+        class _Rule:
+            def generate(self, pack, repair_codes=()):
+                return type("R", (), {"provider": "rule", "model": "rule"})()
+
+        svc = ProviderOpsService(
+            rule_provider=_Rule(),
+            provider_factory=lambda n: None,
+            env={"QINGPU_OLLAMA_MODEL": "test"},
+        )
+        runner = _StubBenchmarkRunner()
+        svc.set_benchmark_runner(runner)
+        app, repo, _, _ = admin_app
+        app.extensions["qingpu_admin_runtime"] = replace(
+            app.extensions["qingpu_admin_runtime"],
+            provider_ops_service=svc,
+        )
+        return app, repo
+
+    def test_benchmark_submit_success(self, admin_app, admin_client, monkeypatch, tmp_path) -> None:
+        self._setup_benchmark(admin_app, monkeypatch, tmp_path)
+        response = admin_client.post(
+            "/api/admin/llm-benchmark-runs",
+            json={"provider": "ollama", "model": "llama3"},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 202
+        body = response.get_json()
+        assert body["provider"] == "ollama"
+        assert body["model"] == "llama3"
+        assert body["status"] == "pending"
+
+    def test_benchmark_submit_rejects_extra_fields(self, admin_app, admin_client) -> None:
+        response = admin_client.post(
+            "/api/admin/llm-benchmark-runs",
+            json={"provider": "ollama", "model": "llama3", "cases": ["custom"]},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+        assert "cases" in response.get_json()["error"]["fields"]
+
+    def test_benchmark_submit_rejects_invalid_provider(self, admin_app, admin_client) -> None:
+        response = admin_client.post(
+            "/api/admin/llm-benchmark-runs",
+            json={"provider": "rule", "model": "test"},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+        assert response.get_json()["error"]["fields"]["provider"] == "ollama_or_gemini"
+
+    def test_benchmark_submit_rejects_missing_model(self, admin_app, admin_client) -> None:
+        response = admin_client.post(
+            "/api/admin/llm-benchmark-runs",
+            json={"provider": "ollama"},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+        assert "model" in response.get_json()["error"]["fields"]
+
+    def test_benchmark_submit_requires_csrf(self, admin_app, admin_client) -> None:
+        response = admin_client.post(
+            "/api/admin/llm-benchmark-runs",
+            json={"provider": "ollama", "model": "llama3"},
+        )
+        assert response.status_code == 403
+
+    def test_benchmark_report_validates_uuid(self, admin_app, admin_client) -> None:
+        response = admin_client.get("/api/admin/llm-benchmark-runs/not-a-uuid/reports/json")
+        assert response.status_code == 400
+        assert response.get_json()["error"]["fields"]["run_id"] == "invalid_uuid"
+
+    def test_benchmark_report_validates_type(self, admin_app, admin_client) -> None:
+        response = admin_client.get(
+            "/api/admin/llm-benchmark-runs/00000000-0000-4000-8000-000000000000/reports/pdf"
+        )
+        assert response.status_code == 400
+        assert response.get_json()["error"]["fields"]["report_type"] == "json_or_markdown"
+
+    def test_benchmark_report_returns_404_for_nonexistent_job(
+        self, admin_app, admin_client,
+    ) -> None:
+        response = admin_client.get(
+            "/api/admin/llm-benchmark-runs/"
+            "00000000-0000-4000-8000-000000000000/reports/json"
+        )
+        assert response.status_code == 404
+
+    def test_benchmark_report_happy_path(self, market_frame, tmp_path, monkeypatch) -> None:
+        from qingpu_insight.jobs import JobService
+        from qingpu_insight.provider_ops import ProviderOpsService
+        from qingpu_insight.web import AdminServices, create_app
+
+        monkeypatch.chdir(tmp_path)
+        cases_dir = tmp_path / "benchmarks"
+        cases_dir.mkdir(parents=True, exist_ok=True)
+        cases_path = cases_dir / "m44_cases.json"
+        import json as _json
+        cases_path.write_text(_json.dumps([]))
+
+        repo = MemoryAdminJobRepository()
+        job_service = JobService(repo)
+        executor = FakeAdminExecutor()
+        listing_service = StubListingUpdateService(job_service)
+
+        app = create_app(
+            root=tmp_path,
+            data_source=InMemoryMarketDataSource(market_frame),
+            admin_services=AdminServices(
+                job_service, listing_service, executor,
+            ),
+        )
+        from dataclasses import replace
+        svc = ProviderOpsService(
+            rule_provider=type("R", (), {"generate": lambda s, p, rc=(): None})(),
+            provider_factory=lambda n: type("P", (), {"generate": lambda s, p, rc=(): None})(),
+            env={"QINGPU_OLLAMA_MODEL": "test"},
+        )
+        runner = _StubBenchmarkRunner()
+        svc.set_benchmark_runner(runner)
+        app.extensions["qingpu_admin_runtime"] = replace(
+            app.extensions["qingpu_admin_runtime"],
+            provider_ops_service=svc,
+            root=tmp_path,
+            dashboard_service=StubDashboardService(),
+        )
+
+        submission = job_service.create("llm_benchmark", "benchmark:active", "manual")
+        run = submission.run
+        job_service.start(run.run_id)
+        job_service.succeed(run.run_id, "v1", {"schema_success": 1.0})
+
+        report_dir = tmp_path / "outputs" / "m44-benchmark" / run.run_id
+        report_dir.mkdir(parents=True)
+        report_path = report_dir / "benchmark_results.json"
+        expected_data = {"result": "ok"}
+        report_path.write_text(_json.dumps(expected_data), encoding="utf-8")
+
+        with app.test_client() as client:
+            with client.session_transaction() as sess:
+                sess["_csrf_token"] = "test-token"
+            response = client.get(
+                f"/api/admin/llm-benchmark-runs/{run.run_id}/reports/json",
+                headers={"X-Qingpu-CSRF": "test-token"},
+            )
+
+        assert response.status_code == 200
+        assert response.get_json() == expected_data
+
+
+class _StubBenchmarkRunner:
+    def run(self, model: str, cases: list, output_dir) -> dict:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "benchmark_results.json").write_text('{"result": "ok"}')
+        (output_dir / "benchmark_results.md").write_text("# Benchmark")
+        return {
+            "schema_success": 1.0, "fact_accuracy": 0.95,
+            "required_section_success": 1.0, "p50_latency_ms": 150.0,
+            "p95_latency_ms": 300.0,
+            "reports": {"json": "benchmark_results.json", "markdown": "benchmark_results.md"},
+        }
 
 
