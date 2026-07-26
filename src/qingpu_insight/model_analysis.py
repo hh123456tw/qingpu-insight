@@ -9,7 +9,7 @@ from qingpu_insight.model_training import TimeSplit
 
 def build_resale_diagnostics(
     frame: pd.DataFrame, split: TimeSplit
-) -> dict[str, Any]:
+) -> dict[str, object]:
     station_counts = frame["station_code"].value_counts().to_dict()
     missing_rates = {
         col: round(float(frame[col].isna().mean()), 6)
@@ -50,7 +50,7 @@ def build_resale_diagnostics(
         for _, row in bt.iterrows()
     ]
 
-    def _summarize(name: str, df: pd.DataFrame) -> dict[str, Any]:
+    def _summarize(df: pd.DataFrame) -> dict[str, Any]:
         n = len(df)
         if n == 0:
             return {
@@ -81,9 +81,9 @@ def build_resale_diagnostics(
         }
 
     split_summary = {
-        "train": _summarize("train", split.train),
-        "calibration": _summarize("calibration", split.calibration),
-        "test": _summarize("test", split.test),
+        "train": _summarize(split.train),
+        "calibration": _summarize(split.calibration),
+        "test": _summarize(split.test),
     }
 
     return {
