@@ -3046,3 +3046,242 @@ class TestBackupAdminApi:
         assert "items" in response.get_json()
 
 
+# ------------------------------------------------------------------
+# Production Restore API tests (Task 13)
+# ------------------------------------------------------------------
+
+
+class StubProductionRestoreService:
+    def __init__(self, job_service) -> None:
+        self.job_service = job_service
+        self._previews: dict[str, object] = {}
+
+    def preview(self, backup_id: str) -> object:
+        from datetime import UTC, datetime, timedelta
+
+        from qingpu_insight.operation_previews import OperationPreview
+
+        preview_id = f"restore-preview-{uuid.uuid4().hex[:8]}"
+        preview = OperationPreview(
+            preview_id=preview_id,
+            operation="database_restore",
+            payload={"backup_id": backup_id},
+            confirmation_text=f"還原資料庫 {backup_id[:8]}",
+            expires_at=datetime.now(UTC) + timedelta(seconds=300),
+            consumed_at=None,
+        )
+        self._previews[preview_id] = preview
+        return preview
+
+    def submit(self, preview_id: str, confirmation_text: str) -> object:
+        preview = self._previews.get(preview_id)
+        if preview is None:
+            raise ValueError(f"preview {preview_id!r} not found")
+        if preview.confirmation_text != confirmation_text:
+            raise ValueError("confirmation text mismatch")
+        return self.job_service.create(
+            "database_restore",
+            f"database_restore:{preview.payload['backup_id']}",
+            "manual",
+        )
+
+
+@pytest.fixture
+def restore_app(market_frame: pd.DataFrame):
+    from qingpu_insight.jobs import JobService
+    from qingpu_insight.web import AdminServices, create_app
+
+    repo = MemoryAdminJobRepository()
+    job_service = JobService(repo)
+    listing_service = StubListingUpdateService(job_service)
+    executor = FakeAdminExecutor()
+    rrs = StubProductionRestoreService(job_service)
+    app = create_app(
+        data_source=InMemoryMarketDataSource(market_frame),
+        admin_services=AdminServices(
+            job_service=job_service,
+            listing_update_service=listing_service,
+            executor=executor,
+        ),
+    )
+    from dataclasses import replace
+    app.extensions["qingpu_admin_runtime"] = replace(
+        app.extensions["qingpu_admin_runtime"],
+        dashboard_service=StubDashboardService(),
+        restore_service=rrs,
+    )
+    return app, repo, rrs, executor
+
+
+@pytest.fixture
+def restore_client(restore_app) -> FlaskClient:
+    app, _, _, _ = restore_app
+    with app.test_client() as client:
+        with client.session_transaction() as sess:
+            sess["_csrf_token"] = "test-token"
+        yield client
+
+
+class TestProductionRestoreApi:
+    def test_restore_preview_success(self, restore_client) -> None:
+        response = restore_client.post(
+            "/api/ops/restore-previews",
+            json={"backup_id": "test-backup-id"},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 200
+        body = response.get_json()
+        assert "preview_id" in body
+        assert "confirmation_text" in body
+        assert body["backup_id"] == "test-backup-id"
+        assert "還原資料庫" in body["confirmation_text"]
+
+    def test_restore_preview_rejects_missing_backup_id(self, restore_client) -> None:
+        response = restore_client.post(
+            "/api/ops/restore-previews",
+            json={},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+        fields = response.get_json()["error"]["fields"]
+        assert "backup_id" in fields
+
+    def test_restore_preview_rejects_extra_fields(self, restore_client) -> None:
+        response = restore_client.post(
+            "/api/ops/restore-previews",
+            json={"backup_id": "b1", "force": True},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+        fields = response.get_json()["error"]["fields"]
+        assert "force" in fields
+
+    def test_restore_preview_rejects_missing_csrf(self, restore_client) -> None:
+        response = restore_client.post(
+            "/api/ops/restore-previews",
+            json={"backup_id": "b1"},
+        )
+        assert response.status_code == 403
+
+    def test_restore_submit_success(self, restore_client) -> None:
+        preview = restore_client.post(
+            "/api/ops/restore-previews",
+            json={"backup_id": "test-backup-id"},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        ).get_json()
+
+        response = restore_client.post(
+            "/api/ops/restores",
+            json={
+                "preview_id": preview["preview_id"],
+                "confirmation_text": preview["confirmation_text"],
+            },
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 202
+        body = response.get_json()
+        assert body["job_type"] == "database_restore"
+        assert body["status"] == "pending"
+        assert body["created"] is True
+
+    def test_restore_submit_rejects_missing_preview_id(self, restore_client) -> None:
+        response = restore_client.post(
+            "/api/ops/restores",
+            json={"confirmation_text": "還原資料庫 abc"},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+        fields = response.get_json()["error"]["fields"]
+        assert "preview_id" in fields
+
+    def test_restore_submit_rejects_missing_confirmation(self, restore_client) -> None:
+        response = restore_client.post(
+            "/api/ops/restores",
+            json={"preview_id": "pv-123"},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+        fields = response.get_json()["error"]["fields"]
+        assert "confirmation_text" in fields
+
+    def test_restore_submit_rejects_wrong_confirmation(self, restore_client) -> None:
+        preview = restore_client.post(
+            "/api/ops/restore-previews",
+            json={"backup_id": "test-backup-id"},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        ).get_json()
+
+        response = restore_client.post(
+            "/api/ops/restores",
+            json={
+                "preview_id": preview["preview_id"],
+                "confirmation_text": "wrong text",
+            },
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+
+    def test_restore_submit_rejects_extra_fields(self, restore_client) -> None:
+        response = restore_client.post(
+            "/api/ops/restores",
+            json={"preview_id": "pv-123", "confirmation_text": "x", "force": True},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+        fields = response.get_json()["error"]["fields"]
+        assert "force" in fields
+
+    def test_restore_submit_rejects_csrf(self, restore_client) -> None:
+        response = restore_client.post(
+            "/api/ops/restores",
+            json={"preview_id": "pv-123", "confirmation_text": "x"},
+        )
+        assert response.status_code == 403
+
+    def test_restore_preview_rejects_non_json(self, restore_client) -> None:
+        response = restore_client.post(
+            "/api/ops/restore-previews",
+            data="not json",
+            content_type="text/plain",
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+
+    def test_restore_submit_rejects_non_json(self, restore_client) -> None:
+        response = restore_client.post(
+            "/api/ops/restores",
+            data="not json",
+            content_type="text/plain",
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+
+    def test_restore_preview_unavailable_without_service(self, admin_app, admin_client) -> None:
+        app, _, _, _ = admin_app
+        from dataclasses import replace
+        app.extensions["qingpu_admin_runtime"] = replace(
+            app.extensions["qingpu_admin_runtime"],
+            restore_service=None,
+        )
+        response = admin_client.post(
+            "/api/ops/restore-previews",
+            json={"backup_id": "b1"},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 503
+
+    def test_restore_submit_unavailable_without_service(self, admin_app, admin_client) -> None:
+        app, _, _, _ = admin_app
+        from dataclasses import replace
+        app.extensions["qingpu_admin_runtime"] = replace(
+            app.extensions["qingpu_admin_runtime"],
+            restore_service=None,
+        )
+        response = admin_client.post(
+            "/api/ops/restores",
+            json={"preview_id": "pv-123", "confirmation_text": "x"},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 503
+
+

@@ -4,6 +4,7 @@ import json
 import os
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from ipaddress import ip_address
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ from urllib.parse import urlsplit
 from flask import Blueprint, current_app, jsonify, render_template, request, session
 
 from qingpu_insight.official_data import _season_key
+from qingpu_insight.operation_previews import OperationPreview
 
 
 @dataclass(frozen=True)
@@ -29,6 +31,7 @@ class AdminRuntime:
     provider_ops_service: object | None = None
     secrets_store: object | None = None
     root: object | None = None
+    restore_service: object | None = None
 
 
 ADMIN_JOB_TYPES = frozenset({
@@ -502,6 +505,149 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
                     submission.run.run_id,
                     lambda: rt.backup_service.execute_restore_drill(
                         submission.run.run_id, backup_id,
+                    ),
+                )
+            except Exception:
+                err = {"code": "enqueue_failed", "message": "工作無法啟動。"}
+                return jsonify({"error": err}), 503
+
+        body = _admin_public_job(submission.run)
+        body["created"] = submission.created
+        return jsonify(body), 202 if submission.created else 200
+
+    # ------------------------------------------------------------------
+    # Production Restore API (Task 13)
+    # ------------------------------------------------------------------
+
+    _RESTORE_PREVIEW_ALLOWED = frozenset({"backup_id"})
+    _RESTORE_ALLOWED = frozenset({"preview_id", "confirmation_text"})
+
+    @bp.post("/api/ops/restore-previews")
+    def ops_restore_previews():
+        if request.headers.get("X-Qingpu-CSRF", "") != session.get("_csrf_token", ""):
+            return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
+
+        rt = current_app.extensions.get("qingpu_admin_runtime")
+        if rt is None or rt.restore_service is None:
+            err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
+            return jsonify({"error": err}), 503
+
+        if request.mimetype != "application/json":
+            err = {"code": "invalid_request", "message": "Request body must be JSON.",
+                   "fields": {"body": "application_json"}}
+            return jsonify({"error": err}), 400
+
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            err = {"code": "invalid_request", "message": "Request body must be a JSON object.",
+                   "fields": {"body": "object"}}
+            return jsonify({"error": err}), 400
+
+        extra = set(payload.keys()) - _RESTORE_PREVIEW_ALLOWED
+        if extra:
+            fields = {k: "not_allowed" for k in extra}
+            err = {"code": "invalid_request", "message": "Request validation failed.",
+                   "fields": fields}
+            return jsonify({"error": err}), 400
+
+        fields: dict[str, str] = {}
+        backup_id = payload.get("backup_id", "")
+        if not backup_id:
+            fields["backup_id"] = "required"
+
+        if fields:
+            err = {"code": "invalid_request", "message": "Request validation failed.",
+                   "fields": fields}
+            return jsonify({"error": err}), 400
+
+        try:
+            preview = rt.restore_service.preview(backup_id)
+        except ValueError as e:
+            err = {"code": "invalid_request", "message": str(e)}
+            return jsonify({"error": err}), 400
+
+        return jsonify({
+            "preview_id": preview.preview_id,
+            "confirmation_text": preview.confirmation_text,
+            "expires_at": (
+                preview.expires_at.isoformat()
+                if hasattr(preview.expires_at, "isoformat")
+                else str(preview.expires_at)
+            ),
+            "backup_id": backup_id,
+        })
+
+    @bp.post("/api/ops/restores")
+    def ops_restores():
+        if request.headers.get("X-Qingpu-CSRF", "") != session.get("_csrf_token", ""):
+            return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
+
+        rt = current_app.extensions.get("qingpu_admin_runtime")
+        if rt is None or rt.restore_service is None or rt.executor is None:
+            err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
+            return jsonify({"error": err}), 503
+
+        if request.mimetype != "application/json":
+            err = {"code": "invalid_request", "message": "Request body must be JSON.",
+                   "fields": {"body": "application_json"}}
+            return jsonify({"error": err}), 400
+
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            err = {"code": "invalid_request", "message": "Request body must be a JSON object.",
+                   "fields": {"body": "object"}}
+            return jsonify({"error": err}), 400
+
+        extra = set(payload.keys()) - _RESTORE_ALLOWED
+        if extra:
+            fields = {k: "not_allowed" for k in extra}
+            err = {"code": "invalid_request", "message": "Request validation failed.",
+                   "fields": fields}
+            return jsonify({"error": err}), 400
+
+        fields: dict[str, str] = {}
+        preview_id = payload.get("preview_id", "")
+        if not preview_id:
+            fields["preview_id"] = "required"
+
+        confirmation_text = payload.get("confirmation_text", "")
+        if not confirmation_text:
+            fields["confirmation_text"] = "required"
+
+        if fields:
+            err = {"code": "invalid_request", "message": "Request validation failed.",
+                   "fields": fields}
+            return jsonify({"error": err}), 400
+
+        try:
+            submission = rt.restore_service.submit(preview_id, confirmation_text)
+        except (ValueError, RuntimeError) as e:
+            err = {"code": "invalid_request", "message": str(e)}
+            return jsonify({"error": err}), 400
+
+        if submission.created:
+            try:
+                idempotency_key = getattr(submission.run, "idempotency_key", "")
+                backup_id = ""
+                if idempotency_key.startswith("database_restore:"):
+                    backup_id = idempotency_key[len("database_restore:"):]
+                if not backup_id:
+                    err = {"code": "invalid_request", "message": "無法取得備份ID。"}
+                    return jsonify({"error": err}), 400
+
+                preview_stub = OperationPreview(
+                    preview_id=preview_id,
+                    operation="database_restore",
+                    payload={"backup_id": backup_id},
+                    confirmation_text=confirmation_text,
+                    expires_at=datetime.now(UTC),
+                    consumed_at=datetime.now(UTC),
+                )
+
+                rt.executor.submit(
+                    submission.run.run_id,
+                    lambda: rt.restore_service.execute(
+                        submission.run.run_id, preview_stub,
                     ),
                 )
             except Exception:

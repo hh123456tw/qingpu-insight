@@ -512,6 +512,87 @@
       });
   }
 
+  var pendingRestorePreview = null;
+
+  function startRestorePreview() {
+    var backupId = document.getElementById("restore-backup-id").value.trim();
+    if (!backupId) return;
+    var statusEl = document.getElementById("restore-status");
+    var previewArea = document.getElementById("restore-preview-area");
+
+    statusEl.textContent = "正在取得預覽…";
+    statusEl.className = "admin-bk-status";
+    previewArea.style.display = "none";
+
+    fetch("/api/ops/restore-previews", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Qingpu-CSRF": getCSRFToken() },
+      body: JSON.stringify({ backup_id: backupId }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.error) {
+          statusEl.textContent = data.error.message || "預覽失敗";
+          statusEl.className = "admin-bk-status admin-od-error";
+          return;
+        }
+        pendingRestorePreview = data;
+        previewArea.style.display = "block";
+        statusEl.textContent = "";
+        document.getElementById("restore-preview-detail").textContent =
+          "確認文字: " + data.confirmation_text;
+        document.getElementById("restore-confirm-input").value = "";
+        document.getElementById("restore-confirm-btn").disabled = true;
+        document.getElementById("restore-error").style.display = "none";
+      })
+      .catch(function () {
+        statusEl.textContent = "網路錯誤";
+        statusEl.className = "admin-bk-status admin-od-error";
+      });
+  }
+
+  function submitRestore() {
+    if (!pendingRestorePreview) return;
+    var confirmBtn = document.getElementById("restore-confirm-btn");
+    var errorEl = document.getElementById("restore-error");
+    var statusEl = document.getElementById("restore-status");
+
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = "提交中…";
+    statusEl.textContent = "";
+    statusEl.className = "admin-bk-status";
+
+    fetch("/api/ops/restores", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Qingpu-CSRF": getCSRFToken() },
+      body: JSON.stringify({
+        preview_id: pendingRestorePreview.preview_id,
+        confirmation_text: pendingRestorePreview.confirmation_text,
+      }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.error) {
+          errorEl.textContent = data.error.message || "提交失敗";
+          errorEl.style.display = "block";
+          confirmBtn.disabled = false;
+          confirmBtn.textContent = "確認還原";
+          return;
+        }
+        pendingRestorePreview = null;
+        document.getElementById("restore-preview-area").style.display = "none";
+        statusEl.textContent = "還原工作已啟動 (run_id: " + data.run_id.slice(0, 8) + ")";
+        statusEl.className = "admin-bk-status admin-od-ok";
+        confirmBtn.textContent = "確認還原";
+      })
+      .catch(function () {
+        errorEl.textContent = "網路錯誤";
+        errorEl.style.display = "block";
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = "確認還原";
+      });
+  }
+
   if (typeof document !== "undefined") {
     document.addEventListener("DOMContentLoaded", function () {
       setupOfficialDataForm();
@@ -553,6 +634,31 @@
 
       var bkCreateBtn = document.getElementById("bk-create-btn");
       if (bkCreateBtn) bkCreateBtn.addEventListener("click", startBackupCreate);
+
+      var restorePreviewBtn = document.getElementById("restore-preview-btn");
+      if (restorePreviewBtn) restorePreviewBtn.addEventListener("click", startRestorePreview);
+
+      var restoreConfirmBtn = document.getElementById("restore-confirm-btn");
+      if (restoreConfirmBtn) restoreConfirmBtn.addEventListener("click", submitRestore);
+
+      var restoreCancelBtn = document.getElementById("restore-cancel-btn");
+      if (restoreCancelBtn) {
+        restoreCancelBtn.addEventListener("click", function () {
+          pendingRestorePreview = null;
+          document.getElementById("restore-preview-area").style.display = "none";
+        });
+      }
+
+      var restoreInput = document.getElementById("restore-confirm-input");
+      if (restoreInput) {
+        restoreInput.addEventListener("input", function () {
+          var match = canConfirmDangerousAction(
+            restoreInput.value,
+            pendingRestorePreview ? pendingRestorePreview.confirmation_text : ""
+          );
+          document.getElementById("restore-confirm-btn").disabled = !match;
+        });
+      }
     });
   }
 

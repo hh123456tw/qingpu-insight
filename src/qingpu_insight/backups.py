@@ -43,6 +43,29 @@ class RestoreEvidence:
     checked_at: datetime
 
 
+RESTORABLE_TABLES: tuple[str, ...] = (
+    "data_refreshes", "market_transactions", "listing_batches",
+    "listing_snapshots", "listing_current", "listing_events",
+    "listing_valuations", "dataset_versions", "dataset_version_batches",
+    "dataset_version_rows", "dataset_version_events", "published_datasets",
+    "buyer_reports",
+)
+
+MUTATION_JOB_TYPES: frozenset[str] = frozenset({
+    "official_data_update", "listing_update", "model_release",
+    "backup_create", "database_restore",
+})
+
+
+@dataclass(frozen=True)
+class ProductionRestoreResult:
+    backup_id: str
+    safety_backup_id: str
+    rollback_database: str
+    table_names: list[str]
+    row_counts: list[int]
+
+
 def validate_restore_database(name: str) -> None:
     if not re.match(r"\Aqingpu_restore_drill_[a-f0-9]{16}\Z", name):
         raise UnsafeRestoreTarget(
@@ -342,6 +365,237 @@ class BackupService:
             raise primary_error
         self._repository.mark_restore(backup_id, "succeeded", checked_at)
         return evidence
+
+
+class ProductionRestoreService:
+    def __init__(
+        self,
+        config: object,
+        runner: ProcessRunner,
+        repository: object,
+        backup_dir: Path,
+        backup_service: BackupService,
+        job_service: object,
+        preview_service: object,
+        pymysql_connect: Callable[..., pymysql.Connection] = pymysql.connect,
+        health_service: object | None = None,
+    ) -> None:
+        self._config = config
+        self._runner = runner
+        self._repository = repository
+        self._backup_dir = backup_dir
+        self._backup_service = backup_service
+        self._job_service = job_service
+        self._preview_service = preview_service
+        self._pymysql_connect = pymysql_connect
+        self._health_service = health_service
+
+    def preview(self, backup_id: str) -> object:
+        record = self._repository.get(backup_id)
+        if record is None:
+            raise ValueError(f"Backup {backup_id} not found")
+        return self._preview_service.create_for(
+            operation="database_restore",
+            payload={"backup_id": backup_id},
+            confirmation_text=f"還原資料庫 {backup_id[:8]}",
+        )
+
+    def submit(self, preview_id: str, confirmation_text: str) -> object:
+        preview = self._preview_service.consume(preview_id, confirmation_text)
+        backup_id = str(preview.payload.get("backup_id", ""))
+        return self._job_service.create(
+            "database_restore",
+            f"database_restore:{backup_id}",
+            "manual",
+            input_version=backup_id,
+        )
+
+    def execute(self, run_id: str, preview: object) -> ProductionRestoreResult:
+        backup_id = str(preview.payload.get("backup_id", ""))
+        self._job_service.start(run_id)
+        try:
+            return self._execute_inner(run_id, backup_id)
+        except Exception:
+            self._job_service.fail(run_id, "restore_failed", "Production restore failed")
+            raise
+
+    def _execute_inner(self, run_id: str, backup_id: str) -> ProductionRestoreResult:
+        record = self._repository.get(backup_id)
+        if record is None:
+            raise ValueError(f"Backup {backup_id} not found")
+
+        backup_path = resolve_backup_path(self._backup_dir, record.path, backup_id)
+        if not backup_path.exists():
+            raise ValueError(f"Backup file {backup_path} not found")
+
+        actual_sha = hash_file(backup_path)
+        if actual_sha != record.sha256:
+            raise ValueError("Checksum mismatch")
+
+        for jt in MUTATION_JOB_TYPES:
+            try:
+                active_list = self._job_service.list_active(jt)
+            except Exception:
+                active_list = []
+            for active in active_list:
+                if getattr(active, "run_id", None) != run_id:
+                    raise RuntimeError(f"Active mutation job ({jt}) exists")
+
+        safety = self._backup_service.create()
+        if safety.status != "completed" or not safety.sha256:
+            raise RuntimeError("Safety backup not completed")
+
+        stage_id = uuid.uuid4().hex[:16]
+        stage_db = f"qingpu_restore_stage_{stage_id}"
+        env = {"MYSQL_PWD": self._config.mysql_password}
+
+        create_result = self._runner.run(
+            ["mysql", f"--host={self._config.mysql_host}",
+             f"--port={self._config.mysql_port}",
+             f"--user={self._config.mysql_user}",
+             "-e", f"CREATE DATABASE `{stage_db}`"],
+            env,
+        )
+        if create_result.returncode != 0:
+            raise RuntimeError("Failed to create stage database")
+
+        import_result = self._runner.run(
+            ["mysql", f"--host={self._config.mysql_host}",
+             f"--port={self._config.mysql_port}",
+             f"--user={self._config.mysql_user}",
+             stage_db],
+            env, stdin_path=backup_path,
+        )
+        if import_result.returncode != 0:
+            raise RuntimeError("Import to stage failed")
+
+        stage_conn = self._pymysql_connect(
+            host=self._config.mysql_host,
+            port=self._config.mysql_port,
+            user=self._config.mysql_user,
+            password=self._config.mysql_password,
+            database=stage_db,
+            charset="utf8mb4",
+        )
+        try:
+            row_counts: list[int] = []
+            table_names = list(RESTORABLE_TABLES)
+            with stage_conn.cursor() as cur:
+                for table in table_names:
+                    cur.execute(f"SELECT COUNT(*) FROM `{table}`")
+                    row = cur.fetchone()
+                    if row is None:
+                        raise RuntimeError(f"Table {table} not found in stage")
+                    row_counts.append(int(row[0]))
+        finally:
+            stage_conn.close()
+
+        rollback_id = uuid.uuid4().hex[:16]
+        rollback_db = f"qingpu_restore_rollback_{rollback_id}"
+
+        create_rb_result = self._runner.run(
+            ["mysql", f"--host={self._config.mysql_host}",
+             f"--port={self._config.mysql_port}",
+             f"--user={self._config.mysql_user}",
+             "-e", f"CREATE DATABASE `{rollback_db}`"],
+            env,
+        )
+        if create_rb_result.returncode != 0:
+            raise RuntimeError("Failed to create rollback database")
+
+        for table in table_names:
+            dump_args = [
+                "mysqldump",
+                f"--host={self._config.mysql_host}",
+                f"--port={self._config.mysql_port}",
+                f"--user={self._config.mysql_user}",
+                self._config.mysql_database,
+                table,
+            ]
+            dump_result = self._runner.run(dump_args, env)
+            if dump_result.returncode != 0:
+                raise RuntimeError(f"Failed to dump {table}")
+            import_rb_args = [
+                "mysql",
+                f"--host={self._config.mysql_host}",
+                f"--port={self._config.mysql_port}",
+                f"--user={self._config.mysql_user}",
+                rollback_db,
+            ]
+            import_rb_result = self._runner.run(
+                import_rb_args, env, stdin=dump_result.stdout,
+            )
+            if import_rb_result.returncode != 0:
+                raise RuntimeError(f"Failed to import {table} into rollback")
+
+        rename_parts: list[str] = []
+        for table in table_names:
+            rename_parts.append(
+                f"`{self._config.mysql_database}`.`{table}`"
+                f" TO `{rollback_db}`.`{table}`"
+            )
+        for table in table_names:
+            rename_parts.append(
+                f"`{stage_db}`.`{table}`"
+                f" TO `{self._config.mysql_database}`.`{table}`"
+            )
+        rename_sql = f"RENAME TABLE {', '.join(rename_parts)}"
+        rename_result = self._runner.run(
+            ["mysql", f"--host={self._config.mysql_host}",
+             f"--port={self._config.mysql_port}",
+             f"--user={self._config.mysql_user}",
+             "-e", rename_sql],
+            env,
+        )
+        if rename_result.returncode != 0:
+            raise RuntimeError("RENAME TABLE failed")
+
+        health_ok = True
+        if self._health_service is not None:
+            try:
+                summary = self._health_service.run()
+                if getattr(summary, "status", None) == "critical":
+                    health_ok = False
+            except Exception:
+                health_ok = False
+
+        result = ProductionRestoreResult(
+            backup_id=backup_id,
+            safety_backup_id=safety.backup_id,
+            rollback_database=rollback_db,
+            table_names=table_names,
+            row_counts=row_counts,
+        )
+
+        if not health_ok:
+            self._job_service.fail(
+                run_id, "health_check_failed",
+                "Health check failed after restore; rollback DB retained",
+            )
+            return result
+
+        self._runner.run(
+            ["mysql", f"--host={self._config.mysql_host}",
+             f"--port={self._config.mysql_port}",
+             f"--user={self._config.mysql_user}",
+             "-e", f"DROP DATABASE IF EXISTS `{stage_db}`"],
+            env,
+        )
+        self._runner.run(
+            ["mysql", f"--host={self._config.mysql_host}",
+             f"--port={self._config.mysql_port}",
+             f"--user={self._config.mysql_user}",
+             "-e", f"DROP DATABASE IF EXISTS `{rollback_db}`"],
+            env,
+        )
+
+        self._job_service.succeed(run_id, backup_id, {
+            "backup_id": backup_id,
+            "safety_backup_id": safety.backup_id,
+            "table_names": table_names,
+            "row_counts": row_counts,
+        })
+        return result
 
 
 class BackupJobService:

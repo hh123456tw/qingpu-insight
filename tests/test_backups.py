@@ -21,6 +21,7 @@ from qingpu_insight.backups import (
     resolve_backup_path,
     validate_restore_database,
 )
+from qingpu_insight.jobs import JobSubmission
 
 CONFIG = SimpleNamespace(
     mysql_host="localhost",
@@ -852,7 +853,138 @@ def test_hash_file_reads_in_bounded_chunks(tmp_path: Path) -> None:
     assert result == hashlib.sha256(content).hexdigest()
 
 
-def test_restore_runner_receives_file_stream_not_dump_text(tmp_path: Path) -> None:
+# === Production Restore Service tests ===
+
+
+RESTORABLE_TABLES: tuple[str, ...] = (
+    "data_refreshes", "market_transactions", "listing_batches",
+    "listing_snapshots", "listing_current", "listing_events",
+    "listing_valuations", "dataset_versions", "dataset_version_batches",
+    "dataset_version_rows", "dataset_version_events", "published_datasets",
+    "buyer_reports",
+)
+
+
+def test_restorable_tables_whitelist() -> None:
+    from qingpu_insight.backups import RESTORABLE_TABLES as RT
+    assert RT == RESTORABLE_TABLES
+
+
+class FakeProductionRestoreHealthService:
+    def __init__(self, status: str = "healthy") -> None:
+        self._status = status
+        self.call_count = 0
+
+    def run(self):
+        from qingpu_insight.health import HealthSummary
+        self.call_count += 1
+        return HealthSummary(status=self._status, checked_at=NOW)
+
+
+class FakeProductionRestoreBackupService:
+    def __init__(self, fail: bool = False) -> None:
+        self._fail = fail
+        self.calls: list[BackupRecord] = []
+
+    def create(self) -> BackupRecord:
+        if self._fail:
+            record = BackupRecord(
+                backup_id=str(uuid.uuid4()),
+                status="completed",
+                path="",
+                sha256="",
+                size_bytes=0,
+                created_at=NOW,
+            )
+        else:
+            record = BackupRecord(
+                backup_id=str(uuid.uuid4()),
+                status="completed",
+                path="",
+                sha256="abc" * 10,
+                size_bytes=100,
+                created_at=NOW,
+            )
+        self.calls.append(record)
+        return record
+
+
+class FakeStageConnection:
+    def __init__(self, row_values: list[int] | None = None) -> None:
+        self._row_values = row_values or [5] * len(RESTORABLE_TABLES)
+        self.closed = False
+
+    def cursor(self):
+        return FakeStageCursor(self._row_values)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakeStageCursor:
+    def __init__(self, row_values: list[int]) -> None:
+        self._row_values = row_values
+        self._index = 0
+        self.executed: list[str] = []
+
+    def execute(self, sql: str, params: tuple = ()) -> int:
+        self.executed.append(sql)
+        return 1
+
+    def fetchone(self):
+        if self._index < len(self._row_values):
+            val = self._row_values[self._index]
+            self._index += 1
+            return (val,)
+        return None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+
+class FakeProductionRestoreJobService:
+    def __init__(self) -> None:
+        self.started: list[str] = []
+        self.succeeded: list[tuple[str, str, dict]] = []
+        self.failed: list[tuple[str, str, str]] = []
+        self._active: dict[str, list] = {}
+
+    def start(self, run_id: str) -> None:
+        self.started.append(run_id)
+
+    def succeed(self, run_id: str, output: str, summary: dict) -> None:
+        self.succeeded.append((run_id, output, summary))
+
+    def fail(self, run_id: str, code: str, msg: str) -> None:
+        self.failed.append((run_id, code, msg))
+
+    def create(self, job_type, idempotency_key, trigger, input_version=None):
+        from qingpu_insight.jobs import JobRun
+        run = JobRun(
+            run_id=str(uuid.uuid4()),
+            job_type=job_type,
+            trigger=trigger,
+            idempotency_key=idempotency_key,
+            status="pending",
+            started_at=None,
+            finished_at=None,
+            attempt=1,
+            input_version=input_version,
+            output_version=None,
+            summary={},
+            error_code=None,
+            error_message=None,
+        )
+        return JobSubmission(run=run, created=True)
+
+    def list_active(self, job_type: str) -> list:
+        return self._active.get(job_type, [])
+
+
+def test_production_restore_safety_backup_fails(tmp_path: Path) -> None:
     backup_id = str(uuid.uuid4())
     content = b"mysql dump content\n"
     sha256 = hashlib.sha256(content).hexdigest()
@@ -868,26 +1000,316 @@ def test_restore_runner_receives_file_stream_not_dump_text(tmp_path: Path) -> No
         created_at=NOW,
     ))
 
-    runner = RecordingRunner(returncodes=[0, 0, 0])
-    drill_conn = FakeDrillConnection()
-    drill_conn.cursor_instance.results = [
-        (5,), (10,), (3,), (20,), ("ds-001", "v2"),
-    ]
+    runner = RecordingRunner(returncodes=[0])
+    fake_backup = FakeProductionRestoreBackupService(fail=True)
+    fake_jobs = FakeProductionRestoreJobService()
 
-    def connect(**kwargs: Any) -> FakeDrillConnection:
-        return drill_conn
+    from qingpu_insight.backups import ProductionRestoreService
 
-    service = BackupService(
-        config=CONFIG, runner=runner, repository=repo, backup_dir=tmp_path,
-        pymysql_connect=connect,
+    service = ProductionRestoreService(
+        config=CONFIG,
+        runner=runner,
+        repository=repo,
+        backup_dir=tmp_path,
+        backup_service=fake_backup,
+        job_service=fake_jobs,
+        preview_service=object(),
     )
 
-    evidence = service.restore_drill(backup_id)
-    assert evidence is not None
+    with pytest.raises(RuntimeError, match="Safety backup not completed"):
+        service._execute_inner("run-1", backup_id)
 
-    import_args = runner.calls[1]
-    assert import_args[0] == "mysql"
+    assert fake_backup.calls
+    assert not fake_jobs.succeeded
 
+
+def test_production_restore_health_fails(tmp_path: Path) -> None:
+    backup_id = str(uuid.uuid4())
+    content = b"mysql dump content\n"
+    sha256 = hashlib.sha256(content).hexdigest()
+    (tmp_path / f"{backup_id}.sql").write_bytes(content)
+
+    repo = RecordingRepository()
+    repo.create(BackupRecord(
+        backup_id=backup_id,
+        status="completed",
+        path=f"{backup_id}.sql",
+        sha256=sha256,
+        size_bytes=len(content),
+        created_at=NOW,
+    ))
+
+    table_count = len(RESTORABLE_TABLES)
+    # Total calls: create_stage(1) + import_stage(1) + create_rollback(1)
+    # + mysqldump(table_count) + mysql_import_rollback(table_count)
+    # + rename(1) + drop_stage(1) + drop_rollback(1)
+    total_calls = 1 + 1 + 1 + table_count + table_count + 1 + 1 + 1
+    runner = RecordingRunner(returncodes=[0] * total_calls)
+    runner._stdout = "-- Dump content\n"
+
+    fake_backup = FakeProductionRestoreBackupService(fail=False)
+    fake_jobs = FakeProductionRestoreJobService()
+    fake_health = FakeProductionRestoreHealthService(status="critical")
+    stage_conn = FakeStageConnection()
+
+    def connect(**kwargs):
+        return stage_conn
+
+    from qingpu_insight.backups import ProductionRestoreService
+
+    service = ProductionRestoreService(
+        config=CONFIG,
+        runner=runner,
+        repository=repo,
+        backup_dir=tmp_path,
+        backup_service=fake_backup,
+        job_service=fake_jobs,
+        preview_service=object(),
+        pymysql_connect=connect,
+        health_service=fake_health,
+    )
+
+    result = service._execute_inner("run-1", backup_id)
+
+    assert result.backup_id == backup_id
+    assert result.safety_backup_id != ""
+    assert result.rollback_database != ""
+    assert result.rollback_database.startswith("qingpu_restore_rollback_")
+    assert len(result.table_names) == table_count
+    assert len(result.row_counts) == table_count
+    assert all(c == 5 for c in result.row_counts)
+
+    assert len(fake_jobs.failed) == 1
+    assert fake_jobs.failed[0][1] == "health_check_failed"
+    assert not fake_jobs.succeeded
+
+    assert fake_health.call_count > 0
+
+
+def test_production_restore_happy_path(tmp_path: Path) -> None:
+    backup_id = str(uuid.uuid4())
+    content = b"mysql dump content\n"
+    sha256 = hashlib.sha256(content).hexdigest()
+    (tmp_path / f"{backup_id}.sql").write_bytes(content)
+
+    repo = RecordingRepository()
+    repo.create(BackupRecord(
+        backup_id=backup_id,
+        status="completed",
+        path=f"{backup_id}.sql",
+        sha256=sha256,
+        size_bytes=len(content),
+        created_at=NOW,
+    ))
+
+    table_count = len(RESTORABLE_TABLES)
+    total_calls = 1 + 1 + 1 + table_count + table_count + 1 + 1 + 1
+    runner = RecordingRunner(returncodes=[0] * total_calls)
+    runner._stdout = "-- Dump content\n"
+
+    fake_backup = FakeProductionRestoreBackupService(fail=False)
+    fake_jobs = FakeProductionRestoreJobService()
+    fake_health = FakeProductionRestoreHealthService(status="healthy")
+    stage_conn = FakeStageConnection()
+
+    def connect(**kwargs):
+        return stage_conn
+
+    from qingpu_insight.backups import ProductionRestoreService
+
+    service = ProductionRestoreService(
+        config=CONFIG,
+        runner=runner,
+        repository=repo,
+        backup_dir=tmp_path,
+        backup_service=fake_backup,
+        job_service=fake_jobs,
+        preview_service=object(),
+        pymysql_connect=connect,
+        health_service=fake_health,
+    )
+
+    result = service._execute_inner("run-1", backup_id)
+
+    assert result.backup_id == backup_id
+    assert result.safety_backup_id != ""
+    assert result.rollback_database.startswith("qingpu_restore_rollback_")
+    assert len(result.table_names) == table_count
+    assert result.table_names == list(RESTORABLE_TABLES)
+    assert len(result.row_counts) == table_count
+    assert all(c == 5 for c in result.row_counts)
+
+    assert len(fake_jobs.succeeded) == 1
+    assert fake_jobs.succeeded[0][0] == "run-1"
+    assert not fake_jobs.failed
+
+    create_stage_calls = [c for c in runner.calls if "CREATE DATABASE" in c[-1]]
+    drop_stage_calls = [c for c in runner.calls if "DROP DATABASE" in c[-1] and "stage" in c[-1]]
+    drop_rollback_calls = [
+        c for c in runner.calls
+        if "DROP DATABASE" in c[-1] and "rollback" in c[-1]
+    ]
+
+    assert len(create_stage_calls) >= 1
+    assert len(drop_stage_calls) == 1
+    assert len(drop_rollback_calls) == 1
+    assert fake_health.call_count > 0
+
+
+def test_production_restore_runner_receives_file_stream(tmp_path: Path) -> None:
+    backup_id = str(uuid.uuid4())
+    content = b"mysql dump content\n"
+    sha256 = hashlib.sha256(content).hexdigest()
+    (tmp_path / f"{backup_id}.sql").write_bytes(content)
+
+    repo = RecordingRepository()
+    repo.create(BackupRecord(
+        backup_id=backup_id,
+        status="completed",
+        path=f"{backup_id}.sql",
+        sha256=sha256,
+        size_bytes=len(content),
+        created_at=NOW,
+    ))
+
+    table_count = len(RESTORABLE_TABLES)
+    total_calls = 1 + 1 + 1 + table_count + table_count + 1 + 1 + 1
+    runner = RecordingRunner(returncodes=[0] * total_calls)
+    runner._stdout = "-- Dump content\n"
+
+    fake_backup = FakeProductionRestoreBackupService(fail=False)
+    fake_jobs = FakeProductionRestoreJobService()
+    fake_health = FakeProductionRestoreHealthService(status="healthy")
+    stage_conn = FakeStageConnection()
+
+    def connect(**kwargs):
+        return stage_conn
+
+    from qingpu_insight.backups import ProductionRestoreService
+
+    service = ProductionRestoreService(
+        config=CONFIG,
+        runner=runner,
+        repository=repo,
+        backup_dir=tmp_path,
+        backup_service=fake_backup,
+        job_service=fake_jobs,
+        preview_service=object(),
+        pymysql_connect=connect,
+        health_service=fake_health,
+    )
+
+    service._execute_inner("run-1", backup_id)
+
+    import_call = runner.calls[1]
+    assert import_call[0] == "mysql"
     stdin_path = runner.stdin_paths[1]
     assert stdin_path is not None
     assert stdin_path.read_bytes() == content
+
+
+def test_production_restore_preview_and_submit_roundtrip() -> None:
+    from qingpu_insight.operation_previews import (
+        InMemoryOperationPreviewRepository,
+        OperationPreviewService,
+    )
+
+    preview_repo = InMemoryOperationPreviewRepository()
+    preview_service = OperationPreviewService(
+        repository=preview_repo,
+        clock=lambda: NOW,
+        make_uuid=lambda: "test-preview-uuid",
+    )
+
+    from qingpu_insight.backups import ProductionRestoreService
+    from qingpu_insight.jobs import JobService
+
+    job_repo = RecordingJobRepository()
+    job_service = JobService(job_repo)
+
+    repo = RecordingRepository()
+    backup_id = str(uuid.uuid4())
+    repo.create(BackupRecord(
+        backup_id=backup_id,
+        status="completed",
+        path=f"{backup_id}.sql",
+        sha256="abc",
+        size_bytes=100,
+        created_at=NOW,
+    ))
+
+    service = ProductionRestoreService(
+        config=CONFIG,
+        runner=RecordingRunner(),
+        repository=repo,
+        backup_dir=Path("/tmp"),
+        backup_service=FakeProductionRestoreBackupService(),
+        job_service=job_service,
+        preview_service=preview_service,
+    )
+
+    preview = service.preview(backup_id)
+    assert preview.operation == "database_restore"
+    assert preview.payload == {"backup_id": backup_id}
+    assert preview.confirmation_text == f"還原資料庫 {backup_id[:8]}"
+
+    submission = service.submit(preview.preview_id, preview.confirmation_text)
+    assert submission.created is True
+    assert submission.run.job_type == "database_restore"
+    assert submission.run.input_version == backup_id
+
+
+def test_production_restore_preview_raises_for_missing_backup() -> None:
+    from qingpu_insight.operation_previews import (
+        InMemoryOperationPreviewRepository,
+        OperationPreviewService,
+    )
+
+    preview_repo = InMemoryOperationPreviewRepository()
+    preview_service = OperationPreviewService(
+        repository=preview_repo,
+        clock=lambda: NOW,
+    )
+
+    from qingpu_insight.backups import ProductionRestoreService
+
+    repo = RecordingRepository()
+
+    service = ProductionRestoreService(
+        config=CONFIG,
+        runner=RecordingRunner(),
+        repository=repo,
+        backup_dir=Path("/tmp"),
+        backup_service=FakeProductionRestoreBackupService(),
+        job_service=object(),
+        preview_service=preview_service,
+    )
+
+    with pytest.raises(ValueError, match="not found"):
+        service.preview("nonexistent-backup")
+
+
+def test_restorable_tables_match_existing_literals() -> None:
+    from qingpu_insight.backups import RESTORABLE_TABLES as RT
+    assert "data_refreshes" in RT
+    assert "market_transactions" in RT
+    assert "listing_current" in RT
+    assert "published_datasets" in RT
+    assert "buyer_reports" in RT
+    assert len(RT) == 13
+
+
+def test_production_restore_result_dataclass() -> None:
+    from qingpu_insight.backups import ProductionRestoreResult
+    result = ProductionRestoreResult(
+        backup_id="b1",
+        safety_backup_id="s1",
+        rollback_database="qingpu_restore_rollback_abc123",
+        table_names=["t1", "t2"],
+        row_counts=[10, 20],
+    )
+    assert result.backup_id == "b1"
+    assert result.safety_backup_id == "s1"
+    assert result.rollback_database == "qingpu_restore_rollback_abc123"
+    assert result.table_names == ["t1", "t2"]
+    assert result.row_counts == [10, 20]

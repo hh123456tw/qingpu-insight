@@ -100,12 +100,27 @@
         </div>
         <div id="bk-status" class="admin-bk-status"></div>
         <table id="bk-table" class="admin-bk-table" style="width:100%;border-collapse:collapse;margin-top:12px">
-          <thead><tr>
-            <th>備份ID</th><th>建立時間</th><th>大小</th><th>SHA256</th><th>還原狀態</th><th>操作</th>
-          </tr></thead>
-          <tbody></tbody>
-        </table>
-      </div></section>
+            <thead><tr>
+              <th>備份ID</th><th>建立時間</th><th>大小</th><th>SHA256</th><th>還原狀態</th><th>操作</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+          <h3>正式資料庫還原</h3>
+          <div class="admin-field-row">
+            <label>備份ID <input type="text" id="restore-backup-id" class="admin-input" placeholder="輸入備份ID"></label>
+            <button id="restore-preview-btn" class="mutation-btn admin-btn">取得還原預覽</button>
+          </div>
+          <div id="restore-preview-area" style="display:none">
+            <p id="restore-preview-detail"></p>
+            <div class="admin-field-row">
+              <label>請輸入確認文字 <input type="text" id="restore-confirm-input" class="admin-input" placeholder="輸入確認文字"></label>
+              <button id="restore-confirm-btn" class="mutation-btn admin-btn" disabled>確認還原</button>
+              <button id="restore-cancel-btn" class="admin-btn admin-btn-secondary">取消</button>
+            </div>
+            <p id="restore-error" class="admin-od-error" style="display:none"></p>
+          </div>
+          <div id="restore-status" class="admin-bk-status"></div>
+        </div></section>
     <section id="admin-jobs"><h2>工作</h2><div class="admin-content"></div></section>
     <section id="admin-diagnostics"><h2>診斷</h2><div class="admin-content"></div></section>
   </main>
