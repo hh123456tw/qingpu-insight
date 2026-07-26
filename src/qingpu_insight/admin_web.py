@@ -446,4 +446,70 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
 
         return jsonify({"items": items, "limit": limit})
 
+    # ------------------------------------------------------------------
+    # Backup / Restore-Drill API (Task 12)
+    # ------------------------------------------------------------------
+
+    @bp.post("/api/admin/backups")
+    def admin_backup_create():
+        if request.headers.get("X-Qingpu-CSRF", "") != session.get("_csrf_token", ""):
+            return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
+
+        rt = current_app.extensions.get("qingpu_admin_runtime")
+        if rt is None or rt.backup_service is None or rt.executor is None:
+            err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
+            return jsonify({"error": err}), 503
+
+        try:
+            submission = rt.backup_service.submit_create()
+        except Exception:
+            err = {"code": "admin_unavailable", "message": "管理功能暫時無法使用。"}
+            return jsonify({"error": err}), 503
+
+        if submission.created:
+            try:
+                rt.executor.submit(
+                    submission.run.run_id,
+                    lambda: rt.backup_service.execute_create(submission.run.run_id),
+                )
+            except Exception:
+                err = {"code": "enqueue_failed", "message": "工作無法啟動。"}
+                return jsonify({"error": err}), 503
+
+        body = _admin_public_job(submission.run)
+        body["created"] = submission.created
+        return jsonify(body), 202 if submission.created else 200
+
+    @bp.post("/api/admin/backups/<backup_id>/restore-drills")
+    def admin_backup_restore_drill(backup_id: str):
+        if request.headers.get("X-Qingpu-CSRF", "") != session.get("_csrf_token", ""):
+            return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
+
+        rt = current_app.extensions.get("qingpu_admin_runtime")
+        if rt is None or rt.backup_service is None or rt.executor is None:
+            err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
+            return jsonify({"error": err}), 503
+
+        try:
+            submission = rt.backup_service.submit_restore_drill(backup_id)
+        except Exception:
+            err = {"code": "admin_unavailable", "message": "管理功能暫時無法使用。"}
+            return jsonify({"error": err}), 503
+
+        if submission.created:
+            try:
+                rt.executor.submit(
+                    submission.run.run_id,
+                    lambda: rt.backup_service.execute_restore_drill(
+                        submission.run.run_id, backup_id,
+                    ),
+                )
+            except Exception:
+                err = {"code": "enqueue_failed", "message": "工作無法啟動。"}
+                return jsonify({"error": err}), 503
+
+        body = _admin_public_job(submission.run)
+        body["created"] = submission.created
+        return jsonify(body), 202 if submission.created else 200
+
     return bp

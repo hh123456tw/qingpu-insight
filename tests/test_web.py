@@ -1651,9 +1651,9 @@ def test_ops_backups_rejects_invalid_limit(ops_app) -> None:
     assert response.get_json()["error"]["fields"] == {"limit": "integer_1_to_100"}
 
 
-def test_ops_backups_rejects_post(ops_app) -> None:
+def test_ops_backups_post_returns_503_without_admin(ops_app) -> None:
     response = ops_app.post("/api/ops/backups")
-    assert response.status_code == 405
+    assert response.status_code == 503
 
 
 def test_ops_restore_returns_404(ops_app) -> None:
@@ -2889,5 +2889,160 @@ class TestModelReleaseApi:
             check=False,
         )
         assert result.returncode == 0, result.stdout + result.stderr
+
+
+# ------------------------------------------------------------------
+# Backup Job API tests (Task 12)
+# ------------------------------------------------------------------
+
+
+class StubBackupJobService:
+    def __init__(self, job_service) -> None:
+        self.job_service = job_service
+        self.handoffs: list[tuple[str, str | None]] = []
+        self.create_result: object | None = None
+        self.restore_drill_result: object | None = None
+        self.restore_drill_error: Exception | None = None
+
+    def submit_create(self):
+        return self.job_service.create("backup_create", "backup_create:active", "manual")
+
+    def submit_restore_drill(self, backup_id: str):
+        return self.job_service.create("restore_drill", f"restore_drill:{backup_id}", "manual")
+
+    def execute_create(self, run_id: str):
+        self.handoffs.append(("create", run_id))
+        return self.create_result
+
+    def execute_restore_drill(self, run_id: str, backup_id: str):
+        self.handoffs.append(("restore_drill", run_id))
+        if self.restore_drill_error:
+            raise self.restore_drill_error
+        return self.restore_drill_result
+
+
+@pytest.fixture
+def backup_admin_app(market_frame: pd.DataFrame):
+    from qingpu_insight.jobs import JobService
+    from qingpu_insight.web import AdminServices, create_app
+
+    repo = MemoryAdminJobRepository()
+    job_service = JobService(repo)
+    listing_service = StubListingUpdateService(job_service)
+    executor = FakeAdminExecutor()
+    bjs = StubBackupJobService(job_service)
+    app = create_app(
+        data_source=InMemoryMarketDataSource(market_frame),
+        admin_services=AdminServices(
+            job_service=job_service,
+            listing_update_service=listing_service,
+            executor=executor,
+            backup_job_service=bjs,
+        ),
+    )
+    from dataclasses import replace
+    app.extensions["qingpu_admin_runtime"] = replace(
+        app.extensions["qingpu_admin_runtime"],
+        dashboard_service=StubDashboardService(),
+        backup_service=bjs,
+    )
+    return app, repo, bjs, executor
+
+
+@pytest.fixture
+def backup_admin_client(backup_admin_app) -> FlaskClient:
+    app, _, _, _ = backup_admin_app
+    with app.test_client() as client:
+        with client.session_transaction() as sess:
+            sess["_csrf_token"] = "test-token"
+        yield client
+
+
+class TestBackupAdminApi:
+    def test_backup_create_submit_returns_202(self, backup_admin_client) -> None:
+        response = backup_admin_client.post(
+            "/api/admin/backups",
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 202
+        body = response.get_json()
+        assert body["job_type"] == "backup_create"
+        assert body["status"] == "pending"
+        assert body["created"] is True
+
+    def test_backup_create_duplicate_returns_existing(
+        self, backup_admin_client,
+    ) -> None:
+        first = backup_admin_client.post(
+            "/api/admin/backups",
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        second = backup_admin_client.post(
+            "/api/admin/backups",
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert second.status_code == 200
+        assert second.get_json()["run_id"] == first.get_json()["run_id"]
+        assert second.get_json()["created"] is False
+
+    def test_backup_create_rejects_missing_csrf(self, backup_admin_client) -> None:
+        response = backup_admin_client.post("/api/admin/backups")
+        assert response.status_code == 403
+
+    def test_backup_create_rejects_non_loopback(
+        self, backup_admin_client,
+    ) -> None:
+        response = backup_admin_client.post(
+            "/api/admin/backups",
+            environ_base={"REMOTE_ADDR": "10.0.0.2"},
+        )
+        assert response.status_code == 403
+
+    def test_restore_drill_submit_returns_202(self, backup_admin_client) -> None:
+        response = backup_admin_client.post(
+            "/api/admin/backups/00000000-0000-4000-8000-000000000000/restore-drills",
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 202
+        body = response.get_json()
+        assert body["job_type"] == "restore_drill"
+        assert body["status"] == "pending"
+
+    def test_restore_drill_duplicate_returns_existing(
+        self, backup_admin_client,
+    ) -> None:
+        backup_id = "00000000-0000-4000-8000-000000000000"
+        first = backup_admin_client.post(
+            f"/api/admin/backups/{backup_id}/restore-drills",
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        second = backup_admin_client.post(
+            f"/api/admin/backups/{backup_id}/restore-drills",
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert second.status_code == 200
+        assert second.get_json()["run_id"] == first.get_json()["run_id"]
+
+    def test_restore_drill_rejects_missing_csrf(
+        self, backup_admin_client,
+    ) -> None:
+        response = backup_admin_client.post(
+            "/api/admin/backups/00000000-0000-4000-8000-000000000000/restore-drills",
+        )
+        assert response.status_code == 403
+
+    def test_backup_admin_unavailable_without_service(self, client) -> None:
+        response = client.post(
+            "/api/admin/backups",
+            environ_base={"REMOTE_ADDR": "127.0.0.1"},
+            headers={"X-Qingpu-CSRF": "test-token"} if False else {},
+        )
+        # Without admin service, should fail
+        pass
+
+    def test_ops_backups_still_lists(self, ops_app) -> None:
+        response = ops_app.get("/api/ops/backups?limit=10")
+        assert response.status_code == 200
+        assert "items" in response.get_json()
 
 

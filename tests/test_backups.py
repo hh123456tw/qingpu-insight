@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from qingpu_insight.backups import (
+    BackupJobService,
     BackupRecord,
     BackupService,
     RecordingRunner,
@@ -575,6 +576,271 @@ def test_metadata_failure_does_not_skip_drop(tmp_path: Path) -> None:
         service.restore_drill(backup_id)
 
     assert runner.calls[-1][-1].startswith("DROP DATABASE")
+
+
+# === BackupJobService tests ===
+
+
+class RecordingJobRepository:
+    def __init__(self) -> None:
+        self._runs: dict[str, Any] = {}
+
+    def create_or_get(self, run) -> tuple[Any, bool]:
+        active = self.find_active_by_key(run.idempotency_key)
+        if active is not None:
+            return active, False
+        self._runs[run.run_id] = run
+        return run, True
+
+    def get(self, run_id: str) -> Any | None:
+        return self._runs.get(run_id)
+
+    def find_active_by_key(self, idempotency_key: str) -> Any | None:
+        for run in self._runs.values():
+            if run.idempotency_key == idempotency_key and run.status in (
+                "pending", "running", "retry_wait",
+            ):
+                return run
+        return None
+
+    def list_recent(self, limit: int = 20, job_type: str | None = None) -> list:
+        all_runs = reversed(list(self._runs.values()))
+        if job_type is not None:
+            all_runs = (r for r in all_runs if r.job_type == job_type)
+        return list(all_runs)[:limit]
+
+    def list_active(self, job_type: str) -> list:
+        return [
+            r for r in self._runs.values()
+            if r.job_type == job_type and r.status in ("pending", "running", "retry_wait")
+        ]
+
+    def transition(
+        self, run_id, current_status, target_status, *,
+        output_version=None, summary=None, error_code=None, error_message=None,
+    ) -> bool:
+        run = self._runs.get(run_id)
+        if run is None or run.status != current_status:
+            return False
+        from dataclasses import replace
+        started_at = run.started_at
+        if target_status == "running" and started_at is None:
+            started_at = datetime.now(UTC)
+        finished_at = run.finished_at
+        if target_status in {"succeeded", "failed", "skipped"}:
+            finished_at = datetime.now(UTC)
+        self._runs[run_id] = replace(
+            run,
+            status=target_status,
+            started_at=started_at,
+            finished_at=finished_at,
+            output_version=output_version or run.output_version,
+            summary=summary if summary is not None else run.summary,
+            error_code=error_code or run.error_code,
+            error_message=error_message or run.error_message,
+        )
+        return True
+
+    def update_summary(self, run_id, expected_status, summary) -> bool:
+        run = self._runs.get(run_id)
+        if run is None or run.status != expected_status:
+            return False
+        from dataclasses import replace
+        self._runs[run_id] = replace(run, summary=summary)
+        return True
+
+
+class TestBackupJobService:
+    def test_submit_create_creates_backup_create_job(self) -> None:
+        from qingpu_insight.jobs import JobService
+
+        job_repo = RecordingJobRepository()
+        job_service = JobService(job_repo)
+        runner = RecordingRunner()
+        repo = RecordingRepository()
+        svc = BackupService(config=CONFIG, runner=runner, repository=repo, backup_dir=Path("/tmp"))
+        bjs = BackupJobService(job_service=job_service, backup_service=svc)
+
+        submission = bjs.submit_create()
+
+        assert submission.created is True
+        assert submission.run.job_type == "backup_create"
+        assert submission.run.idempotency_key == "backup_create:active"
+        assert submission.run.status == "pending"
+
+    def test_submit_create_returns_existing_when_active(self) -> None:
+        from qingpu_insight.jobs import JobService
+
+        job_repo = RecordingJobRepository()
+        job_service = JobService(job_repo)
+        runner = RecordingRunner()
+        repo = RecordingRepository()
+        svc = BackupService(config=CONFIG, runner=runner, repository=repo, backup_dir=Path("/tmp"))
+        bjs = BackupJobService(job_service=job_service, backup_service=svc)
+
+        first = bjs.submit_create()
+        second = bjs.submit_create()
+
+        assert second.created is False
+        assert second.run.run_id == first.run.run_id
+
+    def test_submit_restore_drill_creates_restore_drill_job(self) -> None:
+        from qingpu_insight.jobs import JobService
+
+        job_repo = RecordingJobRepository()
+        job_service = JobService(job_repo)
+        runner = RecordingRunner()
+        repo = RecordingRepository()
+        svc = BackupService(config=CONFIG, runner=runner, repository=repo, backup_dir=Path("/tmp"))
+        bjs = BackupJobService(job_service=job_service, backup_service=svc)
+
+        backup_id = str(uuid.uuid4())
+        submission = bjs.submit_restore_drill(backup_id)
+
+        assert submission.created is True
+        assert submission.run.job_type == "restore_drill"
+        assert submission.run.idempotency_key == f"restore_drill:{backup_id}"
+        assert submission.run.status == "pending"
+
+    def test_submit_restore_drill_returns_existing_when_active(self) -> None:
+        from qingpu_insight.jobs import JobService
+
+        job_repo = RecordingJobRepository()
+        job_service = JobService(job_repo)
+        runner = RecordingRunner()
+        repo = RecordingRepository()
+        svc = BackupService(config=CONFIG, runner=runner, repository=repo, backup_dir=Path("/tmp"))
+        bjs = BackupJobService(job_service=job_service, backup_service=svc)
+
+        backup_id = str(uuid.uuid4())
+        first = bjs.submit_restore_drill(backup_id)
+        second = bjs.submit_restore_drill(backup_id)
+
+        assert second.created is False
+        assert second.run.run_id == first.run.run_id
+
+    def test_execute_create_success(self, tmp_path: Path) -> None:
+        from qingpu_insight.jobs import JobService
+
+        content = b"known dump content\n"
+        runner = RecordingRunner(dump_content=content)
+        repo = RecordingRepository()
+        svc = BackupService(config=CONFIG, runner=runner, repository=repo, backup_dir=tmp_path)
+        job_repo = RecordingJobRepository()
+        job_service = JobService(job_repo)
+        bjs = BackupJobService(job_service=job_service, backup_service=svc)
+
+        submission = bjs.submit_create()
+        record = bjs.execute_create(submission.run.run_id)
+
+        assert record.status == "completed"
+        assert record.sha256 == hashlib.sha256(content).hexdigest()
+        final_run = job_service.get(submission.run.run_id)
+        assert final_run is not None
+        assert final_run.status == "succeeded"
+        assert final_run.output_version == record.sha256
+        assert final_run.summary == {
+            "backup_id": record.backup_id,
+            "size_bytes": record.size_bytes,
+            "sha256": record.sha256,
+        }
+
+    def test_execute_create_dump_failed(self, tmp_path: Path) -> None:
+        from qingpu_insight.jobs import JobService
+
+        runner = RecordingRunner(returncode=1)
+        repo = RecordingRepository()
+        svc = BackupService(config=CONFIG, runner=runner, repository=repo, backup_dir=tmp_path)
+        job_repo = RecordingJobRepository()
+        job_service = JobService(job_repo)
+        bjs = BackupJobService(job_service=job_service, backup_service=svc)
+
+        submission = bjs.submit_create()
+        record = bjs.execute_create(submission.run.run_id)
+
+        assert record.status == "dump_failed"
+        final_run = job_service.get(submission.run.run_id)
+        assert final_run is not None
+        assert final_run.status == "failed"
+
+    def test_execute_restore_drill_success(self, tmp_path: Path) -> None:
+        from qingpu_insight.jobs import JobService
+
+        backup_id = str(uuid.uuid4())
+        content = b"mysql dump content\n"
+        sha256 = hashlib.sha256(content).hexdigest()
+        (tmp_path / f"{backup_id}.sql").write_bytes(content)
+
+        repo = RecordingRepository()
+        repo.create(BackupRecord(
+            backup_id=backup_id,
+            status="completed",
+            path=f"{backup_id}.sql",
+            sha256=sha256,
+            size_bytes=len(content),
+            created_at=NOW,
+        ))
+
+        runner = RecordingRunner()
+        drill_conn = FakeDrillConnection()
+        drill_conn.cursor_instance.results = [
+            (5,), (10,), (3,), (20,), ("ds-001", "v2"),
+        ]
+
+        def connect(**kwargs: Any) -> FakeDrillConnection:
+            return drill_conn
+
+        svc = BackupService(
+            config=CONFIG, runner=runner, repository=repo, backup_dir=tmp_path,
+            pymysql_connect=connect,
+        )
+        job_repo = RecordingJobRepository()
+        job_service = JobService(job_repo)
+        bjs = BackupJobService(job_service=job_service, backup_service=svc)
+
+        submission = bjs.submit_restore_drill(backup_id)
+        evidence = bjs.execute_restore_drill(submission.run.run_id, backup_id)
+
+        assert evidence.database_name.startswith("qingpu_restore_drill_")
+        assert evidence.row_counts == [5, 10, 3, 20]
+        final_run = job_service.get(submission.run.run_id)
+        assert final_run is not None
+        assert final_run.status == "succeeded"
+        assert final_run.summary["database_name"] == evidence.database_name
+        assert final_run.summary["row_counts"] == [5, 10, 3, 20]
+
+    def test_execute_restore_drill_checksum_mismatch(self, tmp_path: Path) -> None:
+        from qingpu_insight.jobs import JobService
+
+        backup_id = str(uuid.uuid4())
+        content = b"mysql dump content\n"
+        (tmp_path / f"{backup_id}.sql").write_bytes(b"different content\n")
+
+        repo = RecordingRepository()
+        repo.create(BackupRecord(
+            backup_id=backup_id,
+            status="completed",
+            path=f"{backup_id}.sql",
+            sha256=hashlib.sha256(content).hexdigest(),
+            size_bytes=len(content),
+            created_at=NOW,
+        ))
+
+        runner = RecordingRunner()
+        svc = BackupService(
+            config=CONFIG, runner=runner, repository=repo, backup_dir=tmp_path,
+        )
+        job_repo = RecordingJobRepository()
+        job_service = JobService(job_repo)
+        bjs = BackupJobService(job_service=job_service, backup_service=svc)
+
+        submission = bjs.submit_restore_drill(backup_id)
+        with pytest.raises(ValueError, match="Checksum mismatch"):
+            bjs.execute_restore_drill(submission.run.run_id, backup_id)
+
+        final_run = job_service.get(submission.run.run_id)
+        assert final_run is not None
+        assert final_run.status == "failed"
 
 
 def test_hash_file_reads_in_bounded_chunks(tmp_path: Path) -> None:

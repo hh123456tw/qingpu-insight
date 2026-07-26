@@ -59,6 +59,23 @@ from qingpu_insight.valuation import ModelRegistry, valuate
 from qingpu_insight.valuation_store import FileValuationStore
 
 
+def _parse_mysql_url_to_config() -> SimpleNamespace:
+    import os
+    from urllib import parse as urlparse
+
+    url = os.environ.get("QINGPU_DATABASE_URL")
+    if not url:
+        raise RuntimeError("QINGPU_DATABASE_URL is required")
+    parsed = urlparse.urlparse(url)
+    return SimpleNamespace(
+        mysql_host=parsed.hostname or "localhost",
+        mysql_port=parsed.port or 3306,
+        mysql_user=urlparse.unquote(parsed.username or ""),
+        mysql_password=urlparse.unquote(parsed.password or ""),
+        mysql_database=parsed.path.lstrip("/"),
+    )
+
+
 class ApiInputError(Exception):
     def __init__(self, message: str, fields: dict[str, str] | None = None) -> None:
         super().__init__(message)
@@ -77,6 +94,7 @@ class AdminServices:
     model_observatory: object | None = None
     official_data_service: object | None = None
     model_release_service: object | None = None
+    backup_job_service: object | None = None
 
 
 @dataclass(frozen=True)
@@ -224,6 +242,22 @@ def _create_production_admin_services(
         else None
     )
 
+    _backup_job_svc = None
+    try:
+        from qingpu_insight.backup_repository import MySQLBackupRepository
+        from qingpu_insight.backups import BackupJobService, BackupService, RealRunner
+        from qingpu_insight.cli import create_mysql_connection_factory as _create_mysql_connection_factory
+
+        _backup_dir = root / "outputs" / "backups"
+        _backup_dir.mkdir(parents=True, exist_ok=True)
+        _bk_cf = connection_factory or _create_mysql_connection_factory()
+        _backup_repo = MySQLBackupRepository(_bk_cf)
+        _mysql_config = _parse_mysql_url_to_config()
+        _backup_svc = BackupService(_mysql_config, RealRunner(), _backup_repo, _backup_dir)
+        _backup_job_svc = BackupJobService(service.job_service, _backup_svc)
+    except Exception:
+        pass
+
     return AdminServices(
         job_service=service.job_service,
         listing_update_service=service,
@@ -232,6 +266,7 @@ def _create_production_admin_services(
         model_observatory=observatory,
         official_data_service=official_service,
         model_release_service=model_release_service,
+        backup_job_service=_backup_job_svc,
     )
 
 
@@ -700,6 +735,7 @@ def create_app(
             model_observatory=admin_services.model_observatory,
             official_data_service=admin_services.official_data_service,
             model_release_service=admin_services.model_release_service,
+            backup_service=admin_services.backup_job_service,
             root=root,
         )
     else:
@@ -1356,7 +1392,59 @@ def create_app(
 
     @app.post("/api/ops/backups")
     def ops_backups_post():
-        return jsonify({"error": {"code": "method_not_allowed", "message": "不支援此操作。"}}), 405
+        rt = app.extensions.get("qingpu_admin_runtime")
+        if rt is None or rt.backup_service is None or rt.executor is None:
+            return jsonify(
+                {"error": {"code": "ops_unavailable", "message": "維運功能未啟用。"}}
+            ), 503
+        try:
+            submission = rt.backup_service.submit_create()
+        except Exception:
+            return jsonify(
+                {"error": {"code": "ops_unavailable", "message": "維運功能暫時無法使用。"}}
+            ), 503
+        if submission.created:
+            try:
+                rt.executor.submit(
+                    submission.run.run_id,
+                    lambda: rt.backup_service.execute_create(submission.run.run_id),
+                )
+            except Exception:
+                return jsonify(
+                    {"error": {"code": "enqueue_failed", "message": "工作無法啟動。"}}
+                ), 503
+        body = _public_job(submission.run)
+        body["created"] = submission.created
+        return jsonify(body), 202 if submission.created else 200
+
+    @app.post("/api/ops/backups/<backup_id>/restore-drills")
+    def ops_restore_drill(backup_id: str):
+        rt = app.extensions.get("qingpu_admin_runtime")
+        if rt is None or rt.backup_service is None or rt.executor is None:
+            return jsonify(
+                {"error": {"code": "ops_unavailable", "message": "維運功能未啟用。"}}
+            ), 503
+        try:
+            submission = rt.backup_service.submit_restore_drill(backup_id)
+        except Exception:
+            return jsonify(
+                {"error": {"code": "ops_unavailable", "message": "維運功能暫時無法使用。"}}
+            ), 503
+        if submission.created:
+            try:
+                rt.executor.submit(
+                    submission.run.run_id,
+                    lambda: rt.backup_service.execute_restore_drill(
+                        submission.run.run_id, backup_id,
+                    ),
+                )
+            except Exception:
+                return jsonify(
+                    {"error": {"code": "enqueue_failed", "message": "工作無法啟動。"}}
+                ), 503
+        body = _public_job(submission.run)
+        body["created"] = submission.created
+        return jsonify(body), 202 if submission.created else 200
 
     @app.route("/api/ops/restore", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
     def ops_restore():

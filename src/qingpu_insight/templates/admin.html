@@ -94,7 +94,18 @@
       <div id="mr-history" class="mr-history"></div>
     </div></section>
     <section id="admin-llm"><h2>LLM</h2><div class="admin-content"></div></section>
-    <section id="admin-backups"><h2>備份</h2><div class="admin-content"></div></section>
+    <section id="admin-backups"><h2>備份</h2><div class="admin-content">
+        <div class="admin-field-row">
+          <button id="bk-create-btn" class="mutation-btn admin-btn">建立備份</button>
+        </div>
+        <div id="bk-status" class="admin-bk-status"></div>
+        <table id="bk-table" class="admin-bk-table" style="width:100%;border-collapse:collapse;margin-top:12px">
+          <thead><tr>
+            <th>備份ID</th><th>建立時間</th><th>大小</th><th>SHA256</th><th>還原狀態</th><th>操作</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div></section>
     <section id="admin-jobs"><h2>工作</h2><div class="admin-content"></div></section>
     <section id="admin-diagnostics"><h2>診斷</h2><div class="admin-content"></div></section>
   </main>

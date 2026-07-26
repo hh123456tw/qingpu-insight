@@ -420,6 +420,98 @@
     });
   }
 
+  function loadBackups() {
+    return fetch("/api/ops/backups?limit=20")
+      .then(function (r) { if (r.ok) return r.json(); })
+      .then(function (data) {
+        if (!data) return;
+        var tbody = document.querySelector("#bk-table tbody");
+        if (!tbody) return;
+        tbody.innerHTML = "";
+        for (var i = 0; i < data.items.length; i++) {
+          var bk = data.items[i];
+          var tr = document.createElement("tr");
+          var shortId = bk.backup_id.slice(0, 8);
+          var shortSha = bk.sha256 ? bk.sha256.slice(0, 16) : "";
+          var sizeStr = bk.size_bytes > 0 ? (bk.size_bytes / 1024).toFixed(1) + " KB" : "";
+          var restoreLabel = bk.restore_status || "—";
+          var drillBtn = document.createElement("button");
+          drillBtn.className = "mutation-btn admin-btn admin-btn-small";
+          drillBtn.textContent = "隔離還原演練";
+          drillBtn.dataset.backupId = bk.backup_id;
+          drillBtn.addEventListener("click", function (e) {
+            startRestoreDrill(e.currentTarget.dataset.backupId);
+          });
+          var tdDrill = document.createElement("td");
+          tdDrill.appendChild(drillBtn);
+          tr.innerHTML = "<td>" + shortId + "</td><td>" + (bk.created_at || "") + "</td><td>" + sizeStr + "</td><td>" + shortSha + "</td><td>" + restoreLabel + "</td>";
+          tr.appendChild(tdDrill);
+          tbody.appendChild(tr);
+        }
+      });
+  }
+
+  function startBackupCreate() {
+    var btn = document.getElementById("bk-create-btn");
+    var statusEl = document.getElementById("bk-status");
+    if (!btn || !statusEl) return;
+    btn.disabled = true;
+    btn.textContent = "建立中…";
+    statusEl.textContent = "";
+    statusEl.className = "admin-bk-status";
+
+    fetch("/api/admin/backups", {
+      method: "POST",
+      headers: { "X-Qingpu-CSRF": getCSRFToken() },
+    })
+      .then(function (r) { return r.json().then(function (d) { return { status: r.status, body: d }; }); })
+      .then(function (result) {
+        btn.disabled = false;
+        btn.textContent = "建立備份";
+        if (result.body.error) {
+          statusEl.textContent = result.body.error.message || "備份啟動失敗";
+          statusEl.className = "admin-bk-status admin-od-error";
+        } else {
+          statusEl.textContent = "備份工作已啟動 (run_id: " + result.body.run_id.slice(0, 8) + ")";
+          statusEl.className = "admin-bk-status admin-od-ok";
+          setTimeout(loadBackups, 3000);
+        }
+      })
+      .catch(function () {
+        btn.disabled = false;
+        btn.textContent = "建立備份";
+        statusEl.textContent = "網路錯誤，請稍後再試。";
+        statusEl.className = "admin-bk-status admin-od-error";
+      });
+  }
+
+  function startRestoreDrill(backupId) {
+    var statusEl = document.getElementById("bk-status");
+    if (!statusEl) return;
+    statusEl.textContent = "還原演練啟動中…";
+    statusEl.className = "admin-bk-status";
+
+    fetch("/api/admin/backups/" + backupId + "/restore-drills", {
+      method: "POST",
+      headers: { "X-Qingpu-CSRF": getCSRFToken() },
+    })
+      .then(function (r) { return r.json().then(function (d) { return { status: r.status, body: d }; }); })
+      .then(function (result) {
+        if (result.body.error) {
+          statusEl.textContent = result.body.error.message || "還原演練啟動失敗";
+          statusEl.className = "admin-bk-status admin-od-error";
+        } else {
+          statusEl.textContent = "還原演練工作已啟動 (run_id: " + result.body.run_id.slice(0, 8) + ")";
+          statusEl.className = "admin-bk-status admin-od-ok";
+          setTimeout(loadBackups, 3000);
+        }
+      })
+      .catch(function () {
+        statusEl.textContent = "網路錯誤，請稍後再試。";
+        statusEl.className = "admin-bk-status admin-od-error";
+      });
+  }
+
   if (typeof document !== "undefined") {
     document.addEventListener("DOMContentLoaded", function () {
       setupOfficialDataForm();
@@ -456,6 +548,11 @@
           retrySingleType(type, mp);
         }
       });
+
+      loadBackups();
+
+      var bkCreateBtn = document.getElementById("bk-create-btn");
+      if (bkCreateBtn) bkCreateBtn.addEventListener("click", startBackupCreate);
     });
   }
 

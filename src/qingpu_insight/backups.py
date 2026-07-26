@@ -344,6 +344,66 @@ class BackupService:
         return evidence
 
 
+class BackupJobService:
+    def __init__(self, job_service: object, backup_service: BackupService) -> None:
+        self._job_service = job_service
+        self._backup_service = backup_service
+
+    def submit_create(self):
+        return self._job_service.create(
+            "backup_create", "backup_create:active", "manual",
+        )
+
+    def submit_restore_drill(self, backup_id: str):
+        return self._job_service.create(
+            "restore_drill", f"restore_drill:{backup_id}", "manual",
+        )
+
+    def execute_create(self, run_id: str) -> BackupRecord:
+        self._job_service.start(run_id)
+        try:
+            record = self._backup_service.create()
+            if record.status == "completed":
+                self._job_service.succeed(
+                    run_id, record.sha256, {
+                        "backup_id": record.backup_id,
+                        "size_bytes": record.size_bytes,
+                        "sha256": record.sha256,
+                    },
+                )
+            else:
+                self._job_service.fail(
+                    run_id, record.status,
+                    f"backup status: {record.status}",
+                )
+            return record
+        except Exception:
+            _safe_fail(self._job_service, run_id, "backup_create_failed")
+            raise
+
+    def execute_restore_drill(self, run_id: str, backup_id: str) -> RestoreEvidence:
+        self._job_service.start(run_id)
+        try:
+            evidence = self._backup_service.restore_drill(backup_id)
+            self._job_service.succeed(
+                run_id, backup_id, {
+                    "database_name": evidence.database_name,
+                    "table_names": evidence.table_names,
+                    "row_counts": evidence.row_counts,
+                },
+            )
+            return evidence
+        except Exception:
+            _safe_fail(self._job_service, run_id, "restore_drill_failed")
+            raise
+
+
+def _safe_fail(job_service, run_id: str, error_code: str) -> None:
+    run = job_service.get(run_id)
+    if run is not None and run.status == "running":
+        job_service.fail(run_id, error_code, f"{error_code}")
+
+
 def _cleanup(path: str) -> None:
     try:
         os.unlink(path)
