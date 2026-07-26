@@ -1,4 +1,5 @@
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import joblib
@@ -553,3 +554,89 @@ def test_train_artifact_round_trip(tmp_path):
     assert loaded.transaction_type == "resale"
     assert loaded.model_name == "baseline"
     assert loaded.metrics["overall"]["mae"] == 50000
+
+
+class TestModelRegistryOfficialPreference:
+    def test_registry_prefers_official_manifest_over_legacy_file(self, tmp_path: Path) -> None:
+        from datetime import UTC, date, datetime
+        from uuid import uuid4
+
+        from qingpu_insight.model_artifacts import (
+            DataSnapshot,
+            MarketTrainingResult,
+            TrainingManifest,
+            sha256_file,
+        )
+        from qingpu_insight.model_release import OfficialModelStore
+
+        # Write legacy bundle
+        def _make_bundle(market: str, model_version: str = "1.0") -> ValuationBundle:
+            dummy = DummyRegressor(strategy="constant", constant=500_000)
+            dummy.fit(np.zeros((5, 5)), np.ones(5))
+            return ValuationBundle(
+                transaction_type=market,
+                model_name="ridge",
+                model_version=model_version,
+                pipeline=dummy,
+                interval_abs_residual_twd_per_ping=1000.0,
+                feature_ranges={},
+                feature_hard_ranges={},
+                feature_medians={},
+                global_importance=[],
+                reference_rows=pd.DataFrame(),
+                data_min_date="2024-01-01",
+                data_max_date="2024-12-31",
+                metrics={},
+            )
+
+        legacy_bundle = _make_bundle("resale", model_version="legacy")
+        joblib.dump(legacy_bundle, tmp_path / "resale.joblib")
+
+        # Write official version
+        candidate_dir = tmp_path / "candidate"
+        candidate_dir.mkdir()
+        official_bundle = _make_bundle("resale", model_version="official-v2")
+        joblib.dump(official_bundle, candidate_dir / "resale.joblib")
+        artifact_hash = sha256_file(candidate_dir / "resale.joblib")
+
+        manifest = TrainingManifest(
+            run_id=uuid4(),
+            created_at=datetime.now(UTC),
+            markets=["resale"],
+            source_commit="test",
+            source_dirty=False,
+            runtime_versions={"python": "3.11"},
+            data_snapshot=DataSnapshot(
+                sha256="a" * 64,
+                raw_count=100,
+                usable_counts={"resale": 80, "presale": 0},
+                excluded_counts={"resale": 20, "presale": 0},
+                station_counts={"A17": 50, "A18": 30, "A19": 20},
+                min_date=date(2024, 1, 1),
+                max_date=date(2024, 12, 31),
+            ),
+            results=[
+                MarketTrainingResult(
+                    market="resale",
+                    selected_model="ridge",
+                    recommended=True,
+                    reason_codes=["best"],
+                    selection_metrics={"cv": {"mae": 1000.0}},
+                    final_test_metrics={"test": {"mae": 1200.0}},
+                    artifact_file="resale.joblib",
+                    artifact_sha256=artifact_hash,
+                    report_files={},
+                    report_sha256={},
+                )
+            ],
+        )
+        (candidate_dir / "manifest.json").write_text(
+            manifest.model_dump_json(indent=2), encoding="utf-8"
+        )
+
+        store = OfficialModelStore(tmp_path)
+        record = store.import_candidate(candidate_dir, manifest, "resale")
+        store.activate("resale", record.version_id)
+
+        bundle = ModelRegistry(tmp_path).load("resale")
+        assert bundle.model_version == "official-v2"

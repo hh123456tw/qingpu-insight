@@ -37,6 +37,61 @@ class ModelRegistry:
         self._artifact_dir = artifact_dir
         self._bundles: dict[str, ValuationBundle] = {}
 
+    def load(self, transaction_type: str) -> ValuationBundle:
+        official_dir = self._artifact_dir / "official" / transaction_type
+        current_json = official_dir / "current.json"
+
+        if current_json.exists():
+            try:
+                data = json.loads(current_json.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                raise ModelUnavailableError(
+                    f"corrupt current manifest for {transaction_type}"
+                ) from None
+
+            required = [
+                "schema_version",
+                "market",
+                "version_id",
+                "source_run_id",
+                "artifact_file",
+                "artifact_sha256",
+                "activated_at",
+            ]
+            if not all(k in data for k in required):
+                raise ModelUnavailableError(
+                    f"corrupt current manifest for {transaction_type}: missing fields"
+                )
+
+            artifact_path = (self._artifact_dir / data["artifact_file"]).resolve()
+            root = self._artifact_dir.resolve()
+            if not str(artifact_path).startswith(str(root)):
+                raise ModelUnavailableError(
+                    f"artifact path {data['artifact_file']} is outside artifact directory"
+                )
+
+            if not artifact_path.exists():
+                raise ModelUnavailableError(
+                    f"official artifact not found: {data['artifact_file']}"
+                )
+
+            actual_hash = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+            if actual_hash != data["artifact_sha256"]:
+                raise ModelUnavailableError(
+                    f"SHA256 mismatch for official artifact {data['artifact_file']}"
+                )
+
+            bundle: ValuationBundle = joblib.load(str(artifact_path))
+            if bundle.transaction_type != transaction_type:
+                raise ModelUnavailableError(
+                    f"loaded bundle is for {bundle.transaction_type}, not {transaction_type}"
+                )
+
+            self._bundles[transaction_type] = bundle
+            return bundle
+
+        return self.get(transaction_type)
+
     def get(self, transaction_type: str) -> ValuationBundle:
         if transaction_type not in self._bundles:
             path = self._artifact_dir / f"{transaction_type}.joblib"
