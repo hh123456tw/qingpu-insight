@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="csrf-token" content="{{ csrf_token }}">
+<title>模型觀測台 - 青埔智價</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='models_admin.css') }}">
+</head>
+<body class="ma-page">
+  <a class="ma-back" href="/">&larr; 回首頁</a>
+  <h1>模型觀測台</h1>
+
+  <section id="ma-official" aria-labelledby="ma-official-title">
+    <h2 id="ma-official-title">官方模型</h2>
+    <div class="ma-cards" id="ma-official-cards"></div>
+  </section>
+
+  <section id="ma-data" aria-labelledby="ma-data-title">
+    <h2 id="ma-data-title">資料快照</h2>
+    <div class="ma-grid" id="ma-data-grid"></div>
+  </section>
+
+  <section aria-labelledby="ma-train-title">
+    <h2 id="ma-train-title">訓練</h2>
+    <div class="ma-notice" id="ma-permanent-notice">模型訓練完成後不會自動發佈。請手動確認並發佈模型以更新 API。</div>
+    <form class="ma-form" id="ma-train-form">
+      <label>市場
+        <select id="ma-market-select">
+          <option value="resale">中古屋</option>
+          <option value="presale">預售屋</option>
+          <option value="all">全部</option>
+        </select>
+      </label>
+      <button type="submit" id="ma-submit-btn">開始訓練</button>
+      <span id="ma-submit-notice" class="ma-reason"></span>
+    </form>
+  </section>
+
+  <section id="ma-active" aria-labelledby="ma-active-title">
+    <h2 id="ma-active-title">進行中工作</h2>
+    <div id="ma-active-status" class="ma-status" role="status" aria-live="polite"></div>
+  </section>
+
+  <section id="ma-history" aria-labelledby="ma-history-title">
+    <h2 id="ma-history-title">近期訓練記錄</h2>
+    <div class="ma-table-wrap">
+      <table class="ma-table" id="ma-history-table">
+        <thead>
+          <tr>
+            <th>狀態</th>
+            <th>市場</th>
+            <th>觸發方式</th>
+            <th>開始時間</th>
+            <th>結束時間</th>
+          </tr>
+        </thead>
+        <tbody id="ma-history-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="ma-detail" aria-labelledby="ma-detail-title">
+    <h2 id="ma-detail-title">工作詳細</h2>
+    <div id="ma-detail-content"></div>
+  </section>
+
+  <script src="{{ url_for('static', filename='job_polling.js') }}"></script>
+  <script src="{{ url_for('static', filename='models_admin.js') }}"></script>
+  <script>
+    var ma = QingpuModelAdmin;
+    var polling = QingpuJobPolling;
+
+    var STATUS_POLL_DELAY_MS = 2000;
+    var STATUS_POLL_MAX_ATTEMPTS = 300;
+    var STATUS_POLL_MAX_FAILURES = 5;
+
+    var REASON_LABELS = {
+      data_quality: "資料品質不足",
+      feature_missing: "特徵遺失",
+      convergence_failure: "收斂失敗",
+      validation_failed: "驗證未通過",
+      candidate_rejected: "候選模型被拒絕",
+      other: "其他原因",
+    };
+
+    function setText(el, text) {
+      if (text == null) text = "";
+      el.textContent = text;
+    }
+
+    function renderMetricTable(container, metrics) {
+      if (!metrics || typeof metrics !== "object") {
+        container.textContent = "無指標資料";
+        return;
+      }
+      var table = document.createElement("table");
+      table.className = "ma-table";
+      var thead = document.createElement("thead");
+      var tr = document.createElement("tr");
+      var th1 = document.createElement("th");
+      th1.textContent = "指標";
+      var th2 = document.createElement("th");
+      th2.textContent = "數值";
+      tr.appendChild(th1);
+      tr.appendChild(th2);
+      thead.appendChild(tr);
+      table.appendChild(thead);
+      var tbody = document.createElement("tbody");
+      var keys = Object.keys(metrics).sort();
+      for (var i = 0; i < keys.length; i++) {
+        var row = document.createElement("tr");
+        var td1 = document.createElement("td");
+        td1.textContent = keys[i];
+        var td2 = document.createElement("td");
+        td2.textContent = metrics[keys[i]] != null ? String(metrics[keys[i]]) : "-";
+        row.appendChild(td1);
+        row.appendChild(td2);
+        tbody.appendChild(row);
+      }
+      table.appendChild(tbody);
+      container.appendChild(table);
+    }
+
+    function renderWarnings(container, warnings) {
+      if (!warnings || warnings.length === 0) {
+        container.textContent = "無警告";
+        return;
+      }
+      var list = document.createElement("ul");
+      list.className = "ma-reason-list";
+      for (var i = 0; i < warnings.length; i++) {
+        var li = document.createElement("li");
+        var reason = warnings[i];
+        var code = reason.code || "";
+        var msg = reason.message || code;
+        var label = REASON_LABELS[code] || code;
+        li.textContent = label + (msg !== code ? ": " + msg : "");
+        list.appendChild(li);
+      }
+      container.appendChild(list);
+    }
+
+    function renderOfficialCards(statusData) {
+      var container = document.getElementById("ma-official-cards");
+      container.innerHTML = "";
+      var models = (statusData && statusData.official_models) || {};
+      var keys = Object.keys(models);
+      if (keys.length === 0) {
+        container.textContent = "無官方模型";
+        return;
+      }
+      for (var i = 0; i < keys.length; i++) {
+        var key = keys[i];
+        var m = models[key];
+        var card = document.createElement("div");
+        card.className = "ma-card";
+        var nameEl = document.createElement("h3");
+        nameEl.textContent = m.name || key;
+        card.appendChild(nameEl);
+        var roleEl = document.createElement("span");
+        roleEl.className = "ma-label";
+        roleEl.textContent = "角色: " + (m.role || "—");
+        card.appendChild(roleEl);
+        if (m.recommended === true) {
+          var recEl = document.createElement("span");
+          recEl.className = "ma-label";
+          recEl.textContent = " 建議";
+          card.appendChild(recEl);
+        }
+        if (m.metrics) {
+          var metricsEl = document.createElement("div");
+          renderMetricTable(metricsEl, m.metrics);
+          card.appendChild(metricsEl);
+        }
+        container.appendChild(card);
+      }
+    }
+
+    function renderDataSnapshot(statusData) {
+      var container = document.getElementById("ma-data-grid");
+      container.innerHTML = "";
+      var snapshot = (statusData && statusData.data_snapshot) || {};
+      var items = [
+        { label: "資料筆數", val: snapshot.raw_count },
+        { label: "SHA256", val: snapshot.sha256 ? snapshot.sha256.slice(0, 16) + "…" : "—" },
+        { label: "資料範圍", val: snapshot.date_range || "—" },
+        { label: "候選模型數", val: statusData && statusData.candidate_count },
+      ];
+      for (var i = 0; i < items.length; i++) {
+        var stat = document.createElement("div");
+        stat.className = "ma-stat";
+        var valEl = document.createElement("div");
+        valEl.className = "ma-val";
+        valEl.textContent = items[i].val != null ? String(items[i].val) : "—";
+        stat.appendChild(valEl);
+        var labelEl = document.createElement("div");
+        labelEl.className = "ma-label";
+        labelEl.textContent = items[i].label;
+        stat.appendChild(labelEl);
+        container.appendChild(stat);
+      }
+    }
+
+    function renderHistory(runs) {
+      var tbody = document.getElementById("ma-history-body");
+      tbody.innerHTML = "";
+      if (!runs || runs.length === 0) {
+        var tr = document.createElement("tr");
+        var td = document.createElement("td");
+        td.colSpan = 5;
+        td.className = "ma-empty";
+        td.textContent = "尚無訓練記錄";
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+        return;
+      }
+      for (var i = 0; i < runs.length; i++) {
+        var run = runs[i];
+        var tr = document.createElement("tr");
+        tr.style.cursor = "pointer";
+        tr.dataset.runId = run.run_id;
+        tr.addEventListener("click", function (e) {
+          var rid = e.currentTarget.dataset.runId;
+          loadDetail(rid);
+        });
+        var td1 = document.createElement("td");
+        td1.textContent = run.status || "—";
+        tr.appendChild(td1);
+        var td2 = document.createElement("td");
+        td2.textContent = (run.markets || []).join(", ") || "—";
+        tr.appendChild(td2);
+        var td3 = document.createElement("td");
+        td3.textContent = run.trigger || "—";
+        tr.appendChild(td3);
+        var td4 = document.createElement("td");
+        td4.textContent = run.started_at ? formatDatetime(run.started_at) : "—";
+        tr.appendChild(td4);
+        var td5 = document.createElement("td");
+        td5.textContent = run.finished_at ? formatDatetime(run.finished_at) : "—";
+        tr.appendChild(td5);
+        tbody.appendChild(tr);
+      }
+    }
+
+    function formatDatetime(iso) {
+      if (!iso) return "—";
+      try {
+        var d = new Date(iso);
+        return d.toLocaleString("zh-TW", { timeZone: "Asia/Taipei" });
+      } catch (_) {
+        return iso;
+      }
+    }
+
+    function loadDetail(runId) {
+      fetch("/api/admin/model-training-runs/" + runId)
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          renderDetail(data);
+        })
+        .catch(function () {
+          var container = document.getElementById("ma-detail-content");
+          container.innerHTML = '<div class="ma-error">無法載入工作詳細</div>';
+        });
+    }
+
+    function renderDetail(detail) {
+      var container = document.getElementById("ma-detail-content");
+      container.innerHTML = "";
+      if (!detail) {
+        container.textContent = "無詳細資料";
+        return;
+      }
+      var header = document.createElement("div");
+      header.className = "ma-detail";
+      var runIdEl = document.createElement("p");
+      runIdEl.textContent = "工作 ID: " + (detail.run_id || "—");
+      header.appendChild(runIdEl);
+      var statusEl = document.createElement("p");
+      statusEl.textContent = "狀態: " + (detail.status || "—");
+      header.appendChild(statusEl);
+      container.appendChild(header);
+
+      var manifest = detail.manifest || {};
+      if (manifest.markets) {
+        var mktEl = document.createElement("p");
+        mktEl.textContent = "市場: " + manifest.markets.join(", ");
+        container.appendChild(mktEl);
+      }
+
+      if (manifest.results) {
+        var results = manifest.results;
+        if (results.candidates && results.candidates.length > 0) {
+          var candSection = document.createElement("div");
+          candSection.className = "ma-detail-section";
+          var candTitle = document.createElement("h4");
+          candTitle.textContent = "候選模型校正評估";
+          candSection.appendChild(candTitle);
+          var candTable = document.createElement("table");
+          candTable.className = "ma-table";
+          var candThead = document.createElement("thead");
+          var candTr = document.createElement("tr");
+          ["模型", "R²", "RMSE", "MAPE", "推薦"].forEach(function (h) {
+            var th = document.createElement("th");
+            th.textContent = h;
+            candTr.appendChild(th);
+          });
+          candThead.appendChild(candTr);
+          candTable.appendChild(candThead);
+          var candTbody = document.createElement("tbody");
+          for (var ci = 0; ci < results.candidates.length; ci++) {
+            var c = results.candidates[ci];
+            var cr = document.createElement("tr");
+            var tdName = document.createElement("td");
+            tdName.textContent = c.name || "—";
+            cr.appendChild(tdName);
+            var tdR2 = document.createElement("td");
+            tdR2.textContent = c.r2 != null ? String(Number(c.r2).toFixed(4)) : "—";
+            cr.appendChild(tdR2);
+            var tdRMSE = document.createElement("td");
+            tdRMSE.textContent = c.rmse != null ? String(Number(c.rmse).toFixed(0)) : "—";
+            cr.appendChild(tdRMSE);
+            var tdMAPE = document.createElement("td");
+            tdMAPE.textContent = c.mape != null ? String(Number(c.mape).toFixed(2)) + "%" : "—";
+            cr.appendChild(tdMAPE);
+            var tdRec = document.createElement("td");
+            tdRec.textContent = c.recommended === true ? "建議" : (c.recommended === false ? "不建議" : "—");
+            cr.appendChild(tdRec);
+            candTbody.appendChild(cr);
+          }
+          candTable.appendChild(candTbody);
+          candSection.appendChild(candTable);
+          container.appendChild(candSection);
+        }
+
+        if (results.warnings && results.warnings.length > 0) {
+          var warnSection = document.createElement("div");
+          warnSection.className = "ma-detail-section";
+          var warnTitle = document.createElement("h4");
+          warnTitle.textContent = "警告";
+          warnSection.appendChild(warnTitle);
+          renderWarnings(warnSection, results.warnings);
+          container.appendChild(warnSection);
+        }
+
+        if (results.final_test) {
+          var ftSection = document.createElement("div");
+          ftSection.className = "ma-detail-section";
+          var ftTitle = document.createElement("h4");
+          ftTitle.textContent = "最終測試結果";
+          ftSection.appendChild(ftTitle);
+          var ft = results.final_test;
+          var ftTable = document.createElement("table");
+          ftTable.className = "ma-table";
+          var ftBody = document.createElement("tbody");
+          var ftKeys = Object.keys(ft).sort();
+          for (var fi = 0; fi < ftKeys.length; fi++) {
+            var ftr = document.createElement("tr");
+            var ftd1 = document.createElement("td");
+            ftd1.textContent = ftKeys[fi];
+            var ftd2 = document.createElement("td");
+            ftd2.textContent = ft[ftKeys[fi]] != null ? String(ft[ftKeys[fi]]) : "—";
+            ftr.appendChild(ftd1);
+            ftr.appendChild(ftd2);
+            ftBody.appendChild(ftr);
+          }
+          ftTable.appendChild(ftBody);
+          ftSection.appendChild(ftTable);
+          container.appendChild(ftSection);
+        }
+      }
+
+      var reportTypes = (detail.report_types) || [];
+      if (reportTypes.length > 0) {
+        var rpSection = document.createElement("div");
+        rpSection.className = "ma-detail-section";
+        var rpTitle = document.createElement("h4");
+        rpTitle.textContent = "報告下載";
+        rpSection.appendChild(rpTitle);
+        for (var ri = 0; ri < reportTypes.length; ri++) {
+          var rt = reportTypes[ri];
+          var a = document.createElement("a");
+          a.className = "ma-dl-link";
+          a.href = "/api/admin/model-training-runs/" + detail.run_id + "/reports/" + rt;
+          a.textContent = rt;
+          rpSection.appendChild(a);
+        }
+        container.appendChild(rpSection);
+      }
+    }
+
+    function loadStatus() {
+      fetch("/api/admin/models/status")
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          renderOfficialCards(data);
+          renderDataSnapshot(data);
+          updateFormState(data, activeRun);
+        })
+        .catch(function () {});
+    }
+
+    var activeRun = null;
+
+    function updateFormState(statusData, run) {
+      var state = ma.derivePageState(statusData, run);
+      var btn = document.getElementById("ma-submit-btn");
+      btn.disabled = !state.canSubmit;
+      var notice = document.getElementById("ma-submit-notice");
+      setText(notice, state.candidateNotice);
+
+      var stageEl = document.getElementById("ma-active-status");
+      if (state.stageLabel) {
+        stageEl.textContent = state.stageLabel;
+      } else {
+        stageEl.textContent = "無進行中工作";
+      }
+    }
+
+    function loadHistory() {
+      fetch("/api/admin/model-training-runs?limit=20")
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          renderHistory(data.items);
+        })
+        .catch(function () {});
+    }
+
+    function startPolling(runId) {
+      var statusEl = document.getElementById("ma-active-status");
+      var controller = polling.createPollController({
+        fetchJob: function (id) {
+          return fetch("/api/admin/model-training-runs/" + id);
+        },
+        schedule: function (cb, delay) { setTimeout(cb, delay); },
+        onUpdate: function (data) {
+          activeRun = data;
+          if (data.summary && data.summary.stage) {
+            var label = ma.STAGE_LABELS[data.summary.stage] || "正在處理模型工作";
+            statusEl.textContent = label;
+          } else {
+            statusEl.textContent = "正在處理模型工作";
+          }
+        },
+        onStop: function () {
+          activeRun = null;
+          loadStatus();
+          loadHistory();
+          loadDetail("");
+        },
+        minDelay: STATUS_POLL_DELAY_MS,
+        maxDelay: STATUS_POLL_DELAY_MS * 8,
+        maxAttempts: STATUS_POLL_MAX_ATTEMPTS,
+        maxFailures: STATUS_POLL_MAX_FAILURES,
+      });
+      controller.start(runId);
+      return controller;
+    }
+
+    document.getElementById("ma-train-form").addEventListener("submit", function (e) {
+      e.preventDefault();
+      var btn = document.getElementById("ma-submit-btn");
+      if (btn.disabled) return;
+      btn.disabled = true;
+      var select = document.getElementById("ma-market-select");
+      var payload = ma.buildTrainingPayload(select.value);
+      var token = ma.csrfToken();
+      fetch("/api/admin/model-training-runs", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": token,
+        },
+        body: JSON.stringify(payload),
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          btn.disabled = false;
+          startPolling(data.run_id);
+          loadHistory();
+        })
+        .catch(function () {
+          btn.disabled = false;
+        });
+    });
+
+    loadStatus();
+    loadHistory();
+  </script>
+</body>
+</html>

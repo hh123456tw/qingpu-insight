@@ -2230,3 +2230,53 @@ class TestModelAdminApi:
         assert response.data.decode() == "dummy report content"
 
 
+class TestModelAdminPage:
+    def test_model_admin_page_untrusted_host(self, model_admin_client) -> None:
+        response = model_admin_client.get(
+            "/admin/models", base_url="http://attacker.example",
+        )
+        assert response.status_code == 403
+
+    def test_model_admin_page_untrusted_remote(self, model_admin_client) -> None:
+        response = model_admin_client.get(
+            "/admin/models", environ_base={"REMOTE_ADDR": "10.0.0.2"},
+        )
+        assert response.status_code == 403
+
+    def test_model_admin_page_contract(self, model_admin_client) -> None:
+        response = model_admin_client.get("/admin/models")
+        html = response.get_data(as_text=True)
+        assert response.status_code == 200
+        assert 'name="csrf-token"' in html
+        assert 'id="ma-official-cards"' in html
+        assert 'id="ma-data-grid"' in html
+        assert 'id="ma-market-select"' in html
+        assert 'value="resale"' in html
+        assert 'value="presale"' in html
+        assert 'value="all"' in html
+        assert "不會自動發佈" in html
+        assert 'id="ma-history-table"' in html
+        assert 'id="ma-detail-content"' in html
+        assert 'job_polling.js' in html
+        assert 'models_admin.js' in html
+        js_pos = html.index('job_polling.js')
+        ma_pos = html.index('models_admin.js')
+        assert js_pos < ma_pos, "job_polling.js must load before models_admin.js"
+        assert 'id="ma-active-status"' in html
+        assert 'id="ma-submit-btn"' in html
+
+    def test_model_admin_page_no_freeform_inputs(self, model_admin_client) -> None:
+        response = model_admin_client.get("/admin/models")
+        html = response.get_data(as_text=True)
+        forbidden = ('name="path"', 'name="command"', 'name="estimator"',
+                     'name="hyperparameter"', 'name="publish"', 'name="rollback"',
+                     'type="text"', 'type="number"')
+        for token in forbidden:
+            assert token not in html, f"unexpected freeform input: {token}"
+
+    def test_model_admin_page_permanent_notice(self, model_admin_client) -> None:
+        response = model_admin_client.get("/admin/models")
+        html = response.get_data(as_text=True)
+        assert "不會自動發佈" in html
+
+

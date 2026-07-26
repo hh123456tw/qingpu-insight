@@ -756,6 +756,19 @@ def create_app(
         return jsonify(_public_job(run))
 
     # ------------------------------------------------------------------
+    # Model Admin page (M5 / Task 7)
+    # ------------------------------------------------------------------
+
+    @app.get("/admin/models")
+    def admin_models_page():
+        if not _is_trusted_local_request():
+            return jsonify({"error": {"code": "forbidden", "message": "僅允許本機存取。"}}), 403
+        return render_template(
+            "models_admin.html",
+            csrf_token=session.get("_csrf_token", ""),
+        )
+
+    # ------------------------------------------------------------------
     # Model Admin API (M5)
     # ------------------------------------------------------------------
 
