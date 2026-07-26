@@ -660,6 +660,9 @@
       var smokeBtn = document.getElementById("smoke-run-btn");
       if (smokeBtn) smokeBtn.addEventListener("click", runSmokeTest);
 
+      var benchmarkBtn = document.getElementById("benchmark-run-btn");
+      if (benchmarkBtn) benchmarkBtn.addEventListener("click", runBenchmark);
+
       var restoreInput = document.getElementById("restore-confirm-input");
       if (restoreInput) {
         restoreInput.addEventListener("input", function () {
@@ -768,13 +771,87 @@
         var runId = result.body.run_id;
         statusEl.textContent = "Smoke test 已提交 (" + runId.slice(0, 8) + ")，等待結果…";
         var retries = 0;
+        var polls = 0;
+        (function poll() {
+          fetch("/api/jobs/" + runId)
+            .then(function (r) {
+              if (!r.ok) throw new Error("job_status_" + r.status);
+              return r.json();
+            })
+            .then(function (job) {
+              if (job.status === "succeeded" || job.status === "failed" || job.status === "interrupted") {
+                var latency = job.summary && job.summary.latency_ms != null
+                  ? "，耗時 " + job.summary.latency_ms + " ms"
+                  : "";
+                statusEl.textContent = "Smoke test " + (job.status === "succeeded" ? "成功" + latency : "失敗 (" + (job.error_message || job.status) + ")");
+                statusEl.className = job.status === "succeeded" ? "admin-od-status admin-od-ok" : "admin-od-status admin-od-error";
+              } else if (polls >= 30) {
+                statusEl.textContent = "Smoke test 等待逾時，請到「工作」查看狀態";
+                statusEl.className = "admin-od-status admin-od-error";
+              } else {
+                polls++;
+                setTimeout(poll, 2000);
+              }
+            })
+            .catch(function () {
+              if (retries < 2) { retries++; setTimeout(poll, 3000); }
+              else { statusEl.textContent = "輪詢逾時"; statusEl.className = "admin-od-status admin-od-error"; }
+            });
+        })();
+      })
+      .catch(function () {
+        statusEl.textContent = "網路錯誤";
+        statusEl.className = "admin-od-status admin-od-error";
+      });
+  }
+
+  function runBenchmark() {
+    var select = document.getElementById("benchmark-provider-select");
+    var modelInput = document.getElementById("benchmark-model-input");
+    var statusEl = document.getElementById("benchmark-result");
+    var provider = select ? select.value : "ollama";
+    var model = modelInput ? modelInput.value.trim() : "";
+    if (!model) {
+      statusEl.textContent = "請輸入模型名稱";
+      statusEl.className = "admin-od-status admin-od-error";
+      if (modelInput) modelInput.focus();
+      return;
+    }
+    statusEl.textContent = "執行中…";
+    statusEl.className = "admin-od-status";
+    fetch("/api/admin/llm-benchmark-runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Qingpu-CSRF": getCSRFToken() },
+      body: JSON.stringify({ provider: provider, model: model }),
+    })
+      .then(function (r) { return r.json().then(function (d) { return { status: r.status, body: d }; }); })
+      .then(function (result) {
+        if (result.body.error) {
+          statusEl.textContent = result.body.error.message || "啟動失敗";
+          statusEl.className = "admin-od-status admin-od-error";
+          return;
+        }
+        var runId = result.body.run_id;
+        statusEl.textContent = "Benchmark 已提交 (" + runId.slice(0, 8) + ")，等待結果…";
+        var retries = 0;
         (function poll() {
           fetch("/api/jobs/" + runId)
             .then(function (r) { return r.json(); })
             .then(function (job) {
               if (job.status === "succeeded" || job.status === "failed" || job.status === "interrupted") {
-                statusEl.textContent = "Smoke test " + (job.status === "succeeded" ? "成功" : "失敗 (" + (job.error_message || job.status) + ")");
-                statusEl.className = job.status === "succeeded" ? "admin-od-status admin-od-ok" : "admin-od-status admin-od-error";
+                if (job.status === "succeeded") {
+                  var s = job.summary || {};
+                  statusEl.innerHTML = "Benchmark 成功 — " +
+                    "Schema: " + (s.schema_success != null ? (s.schema_success * 100).toFixed(0) + "%" : "?") +
+                    ", 事實: " + (s.fact_accuracy != null ? (s.fact_accuracy * 100).toFixed(0) + "%" : "?") +
+                    ", 章節: " + (s.required_section_success != null ? (s.required_section_success * 100).toFixed(0) + "%" : "?") +
+                    ", P50: " + (s.p50_latency_ms != null ? s.p50_latency_ms.toFixed(0) + "ms" : "?") +
+                    ", P95: " + (s.p95_latency_ms != null ? s.p95_latency_ms.toFixed(0) + "ms" : "?");
+                  statusEl.className = "admin-od-status admin-od-ok";
+                } else {
+                  statusEl.textContent = "Benchmark " + (job.status === "failed" ? "失敗" : "已中斷") + (job.error_message ? " (" + job.error_message + ")" : "");
+                  statusEl.className = "admin-od-status admin-od-error";
+                }
               } else {
                 setTimeout(poll, 2000);
               }

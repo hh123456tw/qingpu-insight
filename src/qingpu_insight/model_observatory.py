@@ -36,6 +36,25 @@ class ModelObservatory:
         self._cached_snapshot_key: tuple[str, int, float] | None = None
         self._official_store = official_store
 
+    def _legacy_model_status(self, market: str) -> dict[str, Any] | None:
+        path = self._artifact_dir / f"{market}.joblib"
+        if not path.exists():
+            return None
+        try:
+            bundle: ValuationBundle = joblib.load(path)
+            if bundle.transaction_type != market:
+                return None
+        except Exception:
+            return None
+        return {
+            "available": True,
+            "name": bundle.model_name,
+            "version": bundle.model_version,
+            "role": "legacy_fallback",
+            "data_max_date": bundle.data_max_date,
+            "warning": "official_manifest_missing",
+        }
+
     def status(self) -> dict[str, Any]:
         official_models: dict[str, Any] = {}
         for market in ("resale", "presale"):
@@ -59,11 +78,14 @@ class ModelObservatory:
                             "warning": f"{market}_model_corrupt",
                         }
                 else:
-                    official_models[market] = {
-                        "available": False,
-                        "role": "official",
-                        "warning": f"{market}_model_unavailable",
-                    }
+                    official_models[market] = (
+                        self._legacy_model_status(market)
+                        or {
+                            "available": False,
+                            "role": "official",
+                            "warning": f"{market}_model_unavailable",
+                        }
+                    )
             else:
                 path = self._artifact_dir / f"{market}.joblib"
                 if not path.exists():

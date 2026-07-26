@@ -77,7 +77,13 @@ document.addEventListener("DOMContentLoaded", function () {
           money.format(item.total_price_twd) + " | " +
           (item.building_area_ping ? item.building_area_ping.toFixed(1) + " 坪" : "");
         popup.setContent(text);
-        L.marker([item.latitude, item.longitude])
+        L.circleMarker([item.latitude, item.longitude], {
+          radius: 6,
+          color: "#0b5f55",
+          weight: 2,
+          fillColor: "#22a896",
+          fillOpacity: 0.82,
+        })
           .bindPopup(popup)
           .addTo(markerLayer);
       }

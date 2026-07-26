@@ -64,6 +64,27 @@ def _admin_public_job(run: Any) -> dict[str, Any]:
     }
 
 
+def _complete_provider_smoke_job(
+    runtime: AdminRuntime,
+    run_id: str,
+    provider: str,
+) -> None:
+    result = runtime.provider_ops_service.execute_smoke(run_id, provider)
+    if result.get("status") == "succeeded":
+        summary = {
+            "provider": provider,
+            "latency_ms": result.get("latency_ms"),
+        }
+        runtime.job_service.succeed(run_id, provider, summary)
+        return
+
+    runtime.job_service.fail(
+        run_id,
+        "provider_smoke_failed",
+        str(result.get("error") or "provider smoke test failed"),
+    )
+
+
 def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
     bp = Blueprint("admin", __name__, url_prefix="")
 
@@ -754,12 +775,110 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
             return jsonify({"error": err}), 400
 
         rt = current_app.extensions.get("qingpu_admin_runtime")
-        if rt is None or rt.provider_ops_service is None:
+        if (
+            rt is None
+            or rt.provider_ops_service is None
+            or rt.job_service is None
+            or rt.executor is None
+        ):
             err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
             return jsonify({"error": err}), 503
 
         try:
-            submission = rt.provider_ops_service.submit_smoke(provider)
+            submission = rt.job_service.create(
+                "provider_smoke",
+                f"provider_smoke:{provider}:active",
+                "web",
+                input_version=provider,
+            )
+        except Exception:
+            err = {"code": "admin_unavailable", "message": "管理功能暫時無法使用。"}
+            return jsonify({"error": err}), 503
+
+        if submission.created:
+            try:
+                rt.executor.submit(
+                    submission.run.run_id,
+                    lambda sid=submission.run.run_id, p=provider: (
+                        _complete_provider_smoke_job(rt, sid, p)
+                    ),
+                )
+            except Exception:
+                try:
+                    rt.job_service.fail(
+                        submission.run.run_id,
+                        "enqueue_failed",
+                        "provider smoke test could not be queued",
+                    )
+                except Exception:
+                    pass
+                err = {"code": "enqueue_failed", "message": "工作無法啟動。"}
+                return jsonify({"error": err}), 503
+
+        body = _admin_public_job(submission.run)
+        body["created"] = submission.created
+        body["provider"] = provider
+        return jsonify(body), 202 if submission.created else 200
+
+    # ------------------------------------------------------------------
+    # LLM Benchmark (Task 15)
+    # ------------------------------------------------------------------
+
+    _BENCHMARK_ALLOWED = frozenset({"provider", "model"})
+
+    @bp.post("/api/admin/llm-benchmark-runs")
+    def admin_llm_benchmark():
+        if request.headers.get("X-Qingpu-CSRF", "") != session.get("_csrf_token", ""):
+            return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
+
+        if request.mimetype != "application/json":
+            err = {"code": "invalid_request", "message": "Request body must be JSON.",
+                   "fields": {"body": "application_json"}}
+            return jsonify({"error": err}), 400
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            err = {"code": "invalid_request", "message": "Request body must be a JSON object.",
+                   "fields": {"body": "object"}}
+            return jsonify({"error": err}), 400
+
+        extra = set(payload.keys()) - _BENCHMARK_ALLOWED
+        if extra:
+            fields = {k: "not_allowed" for k in extra}
+            err = {"code": "invalid_request", "message": "Request validation failed.",
+                   "fields": fields}
+            return jsonify({"error": err}), 400
+
+        fields: dict[str, str] = {}
+        provider = payload.get("provider", "")
+        if provider not in {"ollama", "gemini"}:
+            fields["provider"] = "ollama_or_gemini"
+
+        model = payload.get("model", "")
+        if not isinstance(model, str) or not model:
+            fields["model"] = "required"
+
+        if fields:
+            err = {"code": "invalid_request", "message": "Request validation failed.",
+                   "fields": fields}
+            return jsonify({"error": err}), 400
+
+        rt = current_app.extensions.get("qingpu_admin_runtime")
+        if rt is None or rt.provider_ops_service is None:
+            err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
+            return jsonify({"error": err}), 503
+
+        providers = rt.provider_ops_service.status()
+        found = any(p["name"] == provider and p["ready"] for p in providers)
+        if not found:
+            err = {"code": "provider_not_ready", "message": "提供者未就緒。"}
+            return jsonify({"error": err}), 400
+
+        from qingpu_insight.provider_ops import BenchmarkRequest
+
+        request_obj = BenchmarkRequest(provider=provider, model=model)  # type: ignore[arg-type]
+
+        try:
+            submission = rt.provider_ops_service.submit_benchmark(request_obj)
         except Exception:
             err = {"code": "admin_unavailable", "message": "管理功能暫時無法使用。"}
             return jsonify({"error": err}), 503
@@ -768,13 +887,75 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
             try:
                 rt.executor.submit(
                     submission["run_id"],
-                    lambda sid=submission["run_id"], p=provider: (
-                        rt.provider_ops_service.execute_smoke(sid, p)
+                    lambda sid=submission["run_id"], req=request_obj: (
+                        rt.provider_ops_service.execute_benchmark(sid, req)
                     ),
                 )
             except Exception:
                 pass
 
         return jsonify(submission), 202
+
+    @bp.get("/api/admin/llm-benchmark-runs/<run_id>/reports/<report_type>")
+    def admin_llm_benchmark_report(run_id: str, report_type: str):
+        rt = current_app.extensions.get("qingpu_admin_runtime")
+        if rt is None or rt.job_service is None:
+            err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
+            return jsonify({"error": err}), 503
+
+        try:
+            uuid.UUID(run_id)
+        except (ValueError, AttributeError):
+            err = {"code": "invalid_request", "message": "Request validation failed.",
+                   "fields": {"run_id": "invalid_uuid"}}
+            return jsonify({"error": err}), 400
+
+        if report_type not in {"json", "markdown"}:
+            err = {"code": "invalid_request", "message": "Request validation failed.",
+                   "fields": {"report_type": "json_or_markdown"}}
+            return jsonify({"error": err}), 400
+
+        try:
+            run = rt.job_service.get(run_id)
+        except Exception:
+            err = {"code": "job_unavailable", "message": "工作狀態暫時無法取得。"}
+            return jsonify({"error": err}), 503
+
+        if run is None or run.status != "succeeded" or run.job_type != "llm_benchmark":
+            err = {"code": "not_found", "message": "工作不存在。"}
+            return jsonify({"error": err}), 404
+
+        root = getattr(rt, "root", None)
+        if root is None:
+            err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
+            return jsonify({"error": err}), 503
+
+        filename = "benchmark_results.json" if report_type == "json" else "benchmark_results.md"
+        report_path = Path(root) / "outputs" / "m44-benchmark" / run_id / filename
+        try:
+            resolved = report_path.resolve()
+            base = (Path(root) / "outputs").resolve()
+            if not str(resolved).startswith(str(base) + os.sep):
+                err = {"code": "forbidden", "message": "路徑無效。"}
+                return jsonify({"error": err}), 403
+        except (OSError, ValueError):
+            err = {"code": "admin_unavailable", "message": "管理功能暫時無法使用。"}
+            return jsonify({"error": err}), 503
+
+        if not report_path.exists():
+            err = {"code": "not_found", "message": "報告不存在。"}
+            return jsonify({"error": err}), 404
+
+        try:
+            data = report_path.read_text(encoding="utf-8")
+        except OSError:
+            err = {"code": "admin_unavailable", "message": "報告無法讀取。"}
+            return jsonify({"error": err}), 503
+
+        content_type = (
+            "application/json" if report_type == "json"
+            else "text/markdown; charset=utf-8"
+        )
+        return current_app.response_class(data, mimetype=content_type)
 
     return bp

@@ -82,8 +82,18 @@
     convergence_failure: "收斂失敗",
     validation_failed: "驗證未通過",
     candidate_rejected: "候選模型被拒絕",
+    not_recommended: "未通過發布門檻",
+    baseline_selected: "基準模型表現最佳，未產生可發布的新模型",
+    artifact_missing: "模型檔案遺失",
+    sha256_mismatch: "模型檔案驗證失敗",
+    corrupt_artifact: "模型檔案無法讀取",
+    market_mismatch: "模型市場類型不符",
     other: "其他原因",
   };
+
+  function reasonLabel(code) {
+    return REASON_LABELS[code] || code;
+  }
 
   function formatDatetime(iso) {
     if (!iso) return "—";
@@ -93,6 +103,26 @@
     } catch (_) {
       return iso;
     }
+  }
+
+  function marketLabel(market) {
+    var labels = {
+      resale: "中古屋",
+      presale: "預售屋",
+    };
+    return labels[market] || market || "—";
+  }
+
+  function statusLabel(status) {
+    var labels = {
+      pending: "排隊中",
+      running: "執行中",
+      succeeded: "成功",
+      failed: "失敗",
+      interrupted: "已中斷",
+      retry_wait: "等待重試",
+    };
+    return labels[status] || status || "—";
   }
 
   function buildReleasePreviewPayload(action, market, id) {
@@ -123,9 +153,12 @@
     MARKET_PAYLOADS: MARKET_PAYLOADS,
     STAGE_LABELS: STAGE_LABELS,
     REASON_LABELS: REASON_LABELS,
+    reasonLabel: reasonLabel,
     buildTrainingPayload: buildTrainingPayload,
     derivePageState: derivePageState,
     formatDatetime: formatDatetime,
+    marketLabel: marketLabel,
+    statusLabel: statusLabel,
     buildReleasePreviewPayload: buildReleasePreviewPayload,
     canConfirmDangerousAction: canConfirmDangerousAction,
     submitTraining: submitTraining,

@@ -79,6 +79,8 @@ assert.deepEqual(admin.MARKET_PAYLOADS, {
 });
 
 assert.equal(admin.REASON_LABELS.data_quality, "資料品質不足");
+assert.equal(admin.reasonLabel("not_recommended"), "未通過發布門檻");
+assert.match(admin.reasonLabel("baseline_selected"), /基準模型/);
 
 assert.equal(admin.formatDatetime("2026-07-26T12:00:00Z").length > 0, true);
 assert.equal(admin.formatDatetime(null), "—");
@@ -86,5 +88,9 @@ assert.equal(admin.formatDatetime(""), "—");
 
 assert.equal(typeof admin.buildReleasePreviewPayload, "function");
 assert.equal(typeof admin.canConfirmDangerousAction, "function");
+assert.equal(admin.marketLabel("resale"), "中古屋");
+assert.equal(admin.marketLabel("presale"), "預售屋");
+assert.equal(admin.statusLabel("succeeded"), "成功");
+assert.equal(admin.statusLabel("interrupted"), "已中斷");
 
 process.stdout.write("model admin contract passed\n");

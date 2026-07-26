@@ -1,0 +1,13 @@
+{
+  "requested_provider": "rule",
+  "requested_model": "rule",
+  "actual_provider": "rule",
+  "actual_model": "rule",
+  "fallback_reason": null,
+  "success": true,
+  "schema_success": true,
+  "fact_accuracy": 1.0,
+  "coverage": 1.0,
+  "latency_ms": 0,
+  "failure_codes": []
+}

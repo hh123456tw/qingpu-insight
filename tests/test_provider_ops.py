@@ -97,6 +97,77 @@ def test_smoke_ollama_succeeds() -> None:
     assert result["status"] == "succeeded"
 
 
+class _BenchmarkRunner:
+    def __init__(self, result: dict | None = None) -> None:
+        self._result = result or {
+            "schema_success": 1.0,
+            "fact_accuracy": 0.95,
+            "required_section_success": 1.0,
+            "p50_latency_ms": 150.0,
+            "p95_latency_ms": 300.0,
+            "reports": {"json": "benchmark_results.json", "markdown": "benchmark_results.md"},
+        }
+
+    def run(self, model: str, cases: list, output_dir) -> dict:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "benchmark_results.json").write_text('{"result": "ok"}')
+        (output_dir / "benchmark_results.md").write_text("# Benchmark")
+        return dict(self._result)
+
+
+def test_benchmark_request_cannot_choose_case_or_output_path() -> None:
+    from qingpu_insight.provider_ops import BenchmarkRequest
+
+    req = BenchmarkRequest(provider="ollama", model="llama3")
+    assert req.provider == "ollama"
+    assert req.model == "llama3"
+    assert not hasattr(req, "cases")
+    assert not hasattr(req, "output_path")
+
+
+def test_benchmark_uses_fixed_cases_and_run_directory(tmp_path, monkeypatch) -> None:
+    from qingpu_insight.provider_ops import BenchmarkRequest, ProviderOpsService
+
+    monkeypatch.chdir(tmp_path)
+    cases_dir = tmp_path / "benchmarks"
+    cases_dir.mkdir(parents=True, exist_ok=True)
+    cases_path = cases_dir / "m44_cases.json"
+    import json as _json
+    cases_path.write_text(_json.dumps([{
+        "pack_id": "test-pack", "dataset_version": "v1",
+        "generated_at": "2026-07-24T00:00:00+00:00",
+        "candidates": [{"candidate_id": "c1", "listing_type": "sale"}],
+        "facts": [{
+            "fact_id": "f1", "kind": "asking_price", "label": "Price",
+            "value": "10000000", "unit": "twd", "source_type": "listing",
+            "source_version": "v1", "observed_at": "2026-07-01T00:00:00+00:00",
+        }],
+        "limitations": [],
+    }]))
+
+    class _Rule:
+        def generate(self, pack, repair_codes=()):
+            return type("R", (), {"provider": "rule", "model": "rule"})()
+
+    _mock_provider = type("P", (), {"generate": lambda s, p, repair_codes=(): None})
+    svc = ProviderOpsService(
+        rule_provider=_Rule(),
+        provider_factory=lambda n: _mock_provider(),
+        env={"QINGPU_OLLAMA_MODEL": "llama3"},
+    )
+    runner = _BenchmarkRunner()
+    svc.set_benchmark_runner(runner)
+    req = BenchmarkRequest(provider="ollama", model="llama3")
+    sub = svc.submit_benchmark(req)
+    result = svc.execute_benchmark(sub["run_id"], req)
+    assert result["status"] == "succeeded"
+    assert result["schema_success"] == 1.0
+    assert result["fact_accuracy"] == 0.95
+    assert result["provider"] == "ollama"
+    assert result["model"] == "llama3"
+    assert "reports" in result
+
+
 def test_provider_smoke_failure_redacts_key() -> None:
     def failing_factory(name: str) -> _MockProvider | None:
         return _MockProvider(fail=True)

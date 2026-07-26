@@ -252,6 +252,23 @@ class TestModelObservatoryStatus:
             "warning": "resale_model_unavailable",
         }
 
+    def test_legacy_runtime_model_is_visible_when_manifest_is_missing(
+        self, tmp_path: Path
+    ) -> None:
+        observatory = observatory_fixture(tmp_path)
+        joblib.dump(
+            bundle_fixture(model_name="hist_gradient_boosting"),
+            tmp_path / "artifacts" / "resale.joblib",
+        )
+
+        status = observatory.status()
+
+        assert status["official_models"]["resale"]["available"] is True
+        assert status["official_models"]["resale"]["role"] == "legacy_fallback"
+        assert status["official_models"]["resale"]["warning"] == (
+            "official_manifest_missing"
+        )
+
     def test_official_store_version_id_in_status(self, tmp_path: Path) -> None:
         artifact_dir = tmp_path / "artifacts2"
         artifact_dir.mkdir()

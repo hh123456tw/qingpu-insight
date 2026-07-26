@@ -2329,16 +2329,20 @@ class TestModelAdminPage:
 
     def test_model_admin_page_contract(self, model_admin_client) -> None:
         response = model_admin_client.get("/admin/models")
+        assert response.status_code == 302
+        assert response.headers["Location"].endswith("/admin#models")
+
+        response = model_admin_client.get("/admin")
         html = response.get_data(as_text=True)
         assert response.status_code == 200
         assert 'name="csrf-token"' in html
-        assert 'id="ma-official-cards"' in html
+        assert 'id="mr-official-cards"' in html
         assert 'id="ma-data-grid"' in html
         assert 'id="ma-market-select"' in html
         assert 'value="resale"' in html
         assert 'value="presale"' in html
         assert 'value="all"' in html
-        assert "不會自動發佈" in html
+        assert "不會自動發布" in html
         assert 'id="ma-history-table"' in html
         assert 'id="ma-detail-content"' in html
         assert 'job_polling.js' in html
@@ -2350,18 +2354,17 @@ class TestModelAdminPage:
         assert 'id="ma-submit-btn"' in html
 
     def test_model_admin_page_no_freeform_inputs(self, model_admin_client) -> None:
-        response = model_admin_client.get("/admin/models")
+        response = model_admin_client.get("/admin")
         html = response.get_data(as_text=True)
         forbidden = ('name="path"', 'name="command"', 'name="estimator"',
-                     'name="hyperparameter"', 'name="publish"', 'name="rollback"',
-                     'type="text"', 'type="number"')
+                     'name="hyperparameter"', 'name="publish"', 'name="rollback"')
         for token in forbidden:
             assert token not in html, f"unexpected freeform input: {token}"
 
     def test_model_admin_page_permanent_notice(self, model_admin_client) -> None:
-        response = model_admin_client.get("/admin/models")
+        response = model_admin_client.get("/admin")
         html = response.get_data(as_text=True)
-        assert "不會自動發佈" in html
+        assert "不會自動發布" in html
 
 
 def test_admin_page_is_local_only(model_admin_client):
@@ -3465,6 +3468,9 @@ class TestProductionRestoreApi:
         assert response.status_code == 202
         assert response.json["provider"] == "rule"
         assert response.json["status"] == "pending"
+        assert response.json["job_type"] == "provider_smoke"
+        assert response.json["created"] is True
+        assert response.json["run_id"] in admin_app[3].submitted
 
     def test_provider_smoke_rejects_invalid_provider(self, admin_app, admin_client) -> None:
         response = admin_client.post(

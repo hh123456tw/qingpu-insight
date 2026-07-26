@@ -17,7 +17,7 @@
 截至 2026-07-25：
 
 - M0～M5 主要流程已完成。
-- 模型觀測台：`http://127.0.0.1:5000/admin/models`（限本機存取）
+- 模型觀測台：`http://127.0.0.1:5000/admin#models`（限本機存取）
   - 僅接受中古屋／預售屋／全部三種選擇
   - 訓練結果寫入 `artifacts/candidates/<run_id>/`
   - 絕不取代 `artifacts/resale.joblib` 或 `artifacts/presale.joblib`

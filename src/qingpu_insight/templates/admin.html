@@ -6,6 +6,7 @@
 <meta name="csrf-token" content="{{ csrf_token }}">
 <title>管理中心 - 青埔智價</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='admin.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='models_admin.css') }}">
 </head>
 <body class="admin-page">
   <aside class="admin-sidebar">
@@ -73,12 +74,45 @@
   </div>
   <button class="mutation-btn admin-btn" id="ls-run-all-btn">更新三類</button>
 </div></div></section>
-    <section id="admin-models"><h2>模型</h2><div class="admin-content">
+    <section id="admin-models"><h2>模型觀測與發布</h2><div class="admin-content">
       <div id="mr-status" class="mr-status-bar"></div>
-      <h3>官方模型</h3>
-      <div id="mr-official-cards" class="mr-cards"></div>
-      <h3>發布候選</h3>
+      <h3>資料快照</h3>
+      <div id="ma-data-grid" class="ma-grid"></div>
+      <h3>目前正式模型</h3>
+      <div id="mr-official-cards" class="ma-cards"></div>
+      <h3>訓練候選模型</h3>
+      <div class="ma-notice">訓練只會建立候選版本，不會自動發布或影響網站估價。</div>
+      <form class="ma-form" id="ma-train-form">
+        <label>市場
+          <select id="ma-market-select">
+            <option value="resale">中古屋</option>
+            <option value="presale">預售屋</option>
+            <option value="all">全部</option>
+          </select>
+        </label>
+        <button type="submit" id="ma-submit-btn" class="mutation-btn admin-btn">開始訓練</button>
+        <span id="ma-submit-notice" class="ma-reason"></span>
+      </form>
+      <div id="ma-active-status" class="ma-status" role="status" aria-live="polite">無進行中工作</div>
+      <h3>候選模型與發布資格</h3>
       <div id="mr-candidates" class="mr-candidates"></div>
+      <h3>近期訓練紀錄</h3>
+      <div class="ma-table-wrap">
+        <table class="ma-table" id="ma-history-table">
+          <thead>
+            <tr>
+              <th>狀態</th>
+              <th>市場</th>
+              <th>觸發方式</th>
+              <th>開始時間</th>
+              <th>結束時間</th>
+            </tr>
+          </thead>
+          <tbody id="ma-history-body"></tbody>
+        </table>
+      </div>
+      <h3>訓練詳細與指標</h3>
+      <div id="ma-detail-content" class="ma-detail">點選訓練紀錄查看模型結果。</div>
       <div id="mr-preview-dialog" class="mr-preview" style="display:none">
         <h4 id="mr-preview-title">預覽發布</h4>
         <p id="mr-preview-detail"></p>
@@ -113,6 +147,16 @@
           <button id="smoke-run-btn" class="mutation-btn admin-btn">執行 Smoke Test</button>
         </div>
         <div id="smoke-result" class="admin-od-status"></div>
+        <h3>LLM Benchmark</h3>
+        <div class="admin-field-row">
+          <select id="benchmark-provider-select" class="admin-input">
+            <option value="ollama">Ollama</option>
+            <option value="gemini">Gemini</option>
+          </select>
+          <input type="text" id="benchmark-model-input" class="admin-input" placeholder="輸入模型名稱" style="width:200px">
+          <button id="benchmark-run-btn" class="mutation-btn admin-btn">執行 Benchmark</button>
+        </div>
+        <div id="benchmark-result" class="admin-od-status"></div>
       </div></section>
     <section id="admin-backups"><h2>備份</h2><div class="admin-content">
         <div class="admin-field-row">
@@ -145,10 +189,14 @@
     <section id="admin-diagnostics"><h2>診斷</h2><div class="admin-content"></div></section>
   </main>
   <script src="{{ url_for('static', filename='job_polling.js') }}"></script>
+  <script src="{{ url_for('static', filename='models_admin.js') }}"></script>
   <script src="{{ url_for('static', filename='admin.js') }}"></script>
   <script>
     (function () {
       var mr = window.QingpuAdmin;
+      var ma = window.QingpuModelAdmin;
+      var polling = window.QingpuJobPolling;
+      var activeRun = null;
 
       function getCSRF() {
         var meta = document.querySelector('meta[name="csrf-token"]');
@@ -165,34 +213,84 @@
           return;
         }
         for (var i = 0; i < keys.length; i++) {
-          var m = models[keys[i]];
+          var market = keys[i];
+          var m = models[market];
           var card = document.createElement("div");
-          card.className = "mr-card";
-          card.innerHTML = "<strong>" + (m.name || keys[i]) + "</strong> (" + keys[i] + ")" +
-            (m.version_id ? " v" + m.version_id.slice(0, 8) : "");
+          card.className = "ma-card";
+          var title = document.createElement("h3");
+          title.textContent = market === "resale" ? "中古屋" : "預售屋";
+          card.appendChild(title);
+          var lines = [
+            "狀態：" + (m.available ? "可使用" : "不可使用"),
+            "模型：" + (m.name || "—"),
+            "版本：" + (m.version_id || m.version || "—"),
+            "資料截至：" + (m.data_max_date || "—"),
+          ];
+          if (m.role === "legacy_fallback") {
+            lines.push("提醒：目前沿用舊版模型，尚未發布正式 manifest");
+          }
+          for (var j = 0; j < lines.length; j++) {
+            var line = document.createElement("div");
+            line.className = "ma-label";
+            line.textContent = lines[j];
+            card.appendChild(line);
+          }
           container.appendChild(card);
         }
       }
 
-      function renderCandidates(data) {
+      function renderDataSnapshot(data) {
+        var container = document.getElementById("ma-data-grid");
+        container.innerHTML = "";
+        var snapshot = (data && (data.data_status || data.data_snapshot)) || {};
+        var dateRange = snapshot.date_range;
+        if (!dateRange && (snapshot.min_date || snapshot.max_date)) {
+          dateRange = (snapshot.min_date || "—") + " ～ " + (snapshot.max_date || "—");
+        }
+        var items = [
+          ["資料筆數", snapshot.raw_count],
+          ["SHA256", snapshot.sha256 ? snapshot.sha256.slice(0, 16) + "…" : "—"],
+          ["資料範圍", dateRange || "—"],
+          ["候選模型數", data && data.candidate_count],
+        ];
+        for (var i = 0; i < items.length; i++) {
+          var stat = document.createElement("div");
+          stat.className = "ma-stat";
+          var value = document.createElement("div");
+          value.className = "ma-val";
+          value.textContent = items[i][1] == null ? "—" : String(items[i][1]);
+          var label = document.createElement("div");
+          label.className = "ma-label";
+          label.textContent = items[i][0];
+          stat.appendChild(value);
+          stat.appendChild(label);
+          container.appendChild(stat);
+        }
+      }
+
+      function renderCandidates(details) {
         var container = document.getElementById("mr-candidates");
         container.innerHTML = "";
-        if (!data || data.candidate_count === 0) {
+        if (!details || details.length === 0) {
           container.textContent = "尚無發布候選";
           return;
         }
-        var runs = (data && data.items) || [];
-        for (var i = 0; i < runs.length; i++) {
-          var run = runs[i];
-          var markets = run.markets || run.manifest ? (run.manifest.markets || []) : [];
+        var rendered = 0;
+        for (var i = 0; i < details.length; i++) {
+          var run = details[i];
+          var markets = (run.manifest && run.manifest.markets) || [];
           for (var j = 0; j < markets.length; j++) {
             var market = markets[j];
-            var marketInfo = run.markets_info && run.markets_info[market];
+            var marketInfo = run.markets && run.markets[market];
             var publishable = marketInfo && marketInfo.publishable;
             var blockers = (marketInfo && marketInfo.release_blockers) || [];
             var el = document.createElement("div");
             el.className = "mr-candidate";
-            el.innerHTML = "<span>" + market + " — " + (run.run_id ? run.run_id.slice(0, 8) : "") + "</span>";
+            var label = document.createElement("span");
+            label.textContent =
+              (market === "resale" ? "中古屋" : "預售屋") +
+              " — " + (run.run_id ? run.run_id.slice(0, 8) : "");
+            el.appendChild(label);
             if (publishable) {
               var btn = document.createElement("button");
               btn.className = "mutation-btn admin-btn mr-publish-btn";
@@ -206,12 +304,15 @@
             } else if (blockers.length > 0) {
               var reason = document.createElement("span");
               reason.className = "mr-blocker";
-              reason.textContent = " (" + blockers.join(", ") + ")";
+              reason.textContent =
+                "（" + blockers.map(ma.reasonLabel).join("、") + "）";
               el.appendChild(reason);
             }
             container.appendChild(el);
+            rendered += 1;
           }
         }
+        if (rendered === 0) container.textContent = "尚無可讀取的候選模型";
       }
 
       function renderHistory(items) {
@@ -228,6 +329,183 @@
           el.textContent = item.run_id.slice(0, 8) + " — " + (item.status || "—") + " — " + (item.finished_at || "—");
           container.appendChild(el);
         }
+      }
+
+      function formatDatetime(value) {
+        return ma.formatDatetime(value);
+      }
+
+      function renderTrainingHistory(runs) {
+        var tbody = document.getElementById("ma-history-body");
+        tbody.innerHTML = "";
+        if (!runs || runs.length === 0) {
+          var emptyRow = document.createElement("tr");
+          var emptyCell = document.createElement("td");
+          emptyCell.colSpan = 5;
+          emptyCell.className = "ma-empty";
+          emptyCell.textContent = "尚無訓練紀錄";
+          emptyRow.appendChild(emptyCell);
+          tbody.appendChild(emptyRow);
+          return;
+        }
+        for (var i = 0; i < runs.length; i++) {
+          var run = runs[i];
+          var row = document.createElement("tr");
+          row.tabIndex = 0;
+          row.dataset.runId = run.run_id;
+          row.addEventListener("click", function (event) {
+            loadTrainingDetail(event.currentTarget.dataset.runId);
+          });
+          row.addEventListener("keydown", function (event) {
+            if (event.key === "Enter") {
+              loadTrainingDetail(event.currentTarget.dataset.runId);
+            }
+          });
+          var values = [
+            ma.statusLabel(run.status),
+            (run.markets || []).map(ma.marketLabel).join("、") || "—",
+            run.trigger || "—",
+            formatDatetime(run.started_at),
+            formatDatetime(run.finished_at),
+          ];
+          for (var j = 0; j < values.length; j++) {
+            var cell = document.createElement("td");
+            cell.textContent = values[j];
+            row.appendChild(cell);
+          }
+          tbody.appendChild(row);
+        }
+      }
+
+      function appendMetrics(container, title, metrics) {
+        if (!metrics || typeof metrics !== "object") return;
+        var heading = document.createElement("h5");
+        heading.textContent = title;
+        container.appendChild(heading);
+        var table = document.createElement("table");
+        table.className = "ma-table";
+        var body = document.createElement("tbody");
+        var keys = ["mae", "mape", "rmse", "r2", "coverage"];
+        var appended = 0;
+        for (var i = 0; i < keys.length; i++) {
+          if (metrics[keys[i]] == null) continue;
+          var row = document.createElement("tr");
+          var name = document.createElement("th");
+          name.textContent = keys[i].toUpperCase();
+          var value = document.createElement("td");
+          value.textContent = String(metrics[keys[i]]);
+          row.appendChild(name);
+          row.appendChild(value);
+          body.appendChild(row);
+          appended += 1;
+        }
+        if (appended > 0) {
+          table.appendChild(body);
+          container.appendChild(table);
+        }
+      }
+
+      function renderTrainingDetail(detail) {
+        var container = document.getElementById("ma-detail-content");
+        container.innerHTML = "";
+        if (!detail || detail.error) {
+          container.textContent =
+            detail && detail.error ? detail.error.message : "無法讀取訓練詳細。";
+          return;
+        }
+        var summary = document.createElement("p");
+        summary.textContent =
+          "工作 " + (detail.run_id || "—") + "｜狀態 " + ma.statusLabel(detail.status);
+        container.appendChild(summary);
+        var results = (detail.manifest && detail.manifest.results) || [];
+        if (results.length === 0) {
+          var noResult = document.createElement("p");
+          noResult.textContent = "此工作尚無模型結果。";
+          container.appendChild(noResult);
+          return;
+        }
+        for (var i = 0; i < results.length; i++) {
+          var result = results[i];
+          var section = document.createElement("section");
+          section.className = "ma-detail-section";
+          var title = document.createElement("h4");
+          title.textContent =
+            ma.marketLabel(result.market) + "｜選定 " + (result.selected_model || "—");
+          section.appendChild(title);
+          var gate = document.createElement("p");
+          gate.textContent =
+            "發布建議：" + (result.recommended ? "通過" : "未通過") +
+            ((result.reason_codes || []).length
+              ? "（" + result.reason_codes.map(ma.reasonLabel).join("、") + "）"
+              : "");
+          section.appendChild(gate);
+          var finalModels = result.final_test_metrics || {};
+          var selectedMetrics = finalModels[result.selected_model];
+          if (!selectedMetrics) {
+            var modelNames = Object.keys(finalModels);
+            selectedMetrics = modelNames.length > 0 ? finalModels[modelNames[0]] : null;
+          }
+          appendMetrics(
+            section,
+            "最終測試指標",
+            selectedMetrics && (selectedMetrics.overall || selectedMetrics)
+          );
+          var reports = result.report_files || {};
+          var reportTypes = Object.keys(reports);
+          if (reportTypes.length > 0) {
+            var reportTitle = document.createElement("h5");
+            reportTitle.textContent = "報告";
+            section.appendChild(reportTitle);
+            for (var j = 0; j < reportTypes.length; j++) {
+              var link = document.createElement("a");
+              link.className = "ma-dl-link";
+              link.href =
+                "/api/admin/model-training-runs/" + detail.run_id +
+                "/reports/" + reportTypes[j];
+              link.textContent = reportTypes[j];
+              section.appendChild(link);
+            }
+          }
+          container.appendChild(section);
+        }
+      }
+
+      function loadTrainingDetail(runId) {
+        fetch("/api/admin/model-training-runs/" + runId)
+          .then(function (response) { return response.json(); })
+          .then(renderTrainingDetail)
+          .catch(function () {
+            renderTrainingDetail({ error: { message: "無法載入工作詳細。" } });
+          });
+      }
+
+      function loadCandidateDetails(runs) {
+        var completed = (runs || []).filter(function (run) {
+          return run.status === "succeeded";
+        });
+        return Promise.all(completed.map(function (run) {
+          return fetch("/api/admin/model-training-runs/" + run.run_id)
+            .then(function (response) {
+              return response.ok ? response.json() : null;
+            })
+            .catch(function () { return null; });
+        })).then(function (details) {
+          renderCandidates(details.filter(function (detail) { return detail; }));
+        });
+      }
+
+      function loadTrainingRuns() {
+        return fetch("/api/admin/model-training-runs?limit=20")
+          .then(function (response) { return response.json(); })
+          .then(function (data) {
+            var runs = data.items || [];
+            renderTrainingHistory(runs);
+            return loadCandidateDetails(runs);
+          })
+          .catch(function () {
+            renderTrainingHistory([]);
+            renderCandidates([]);
+          });
       }
 
       var pendingPreview = null;
@@ -304,6 +582,7 @@
             pendingPreview = null;
             document.getElementById("mr-preview-dialog").style.display = "none";
             loadModelStatus();
+            loadTrainingRuns();
             loadReleaseHistory();
           })
           .catch(function () {
@@ -320,16 +599,93 @@
           .then(function (data) {
             if (data) {
               renderOfficialCards(data);
+              renderDataSnapshot(data);
               var statusBar = document.getElementById("mr-status");
               var officialKeys = Object.keys(data.official_models || {});
-              if (officialKeys.length > 0) {
-                statusBar.innerHTML = "官方模型就緒：" + officialKeys.join(", ");
+              var availableKeys = officialKeys.filter(function (key) {
+                return data.official_models[key].available;
+              });
+              if (availableKeys.length > 0) {
+                statusBar.textContent =
+                  "可用模型：" + availableKeys.map(ma.marketLabel).join("、") +
+                  "｜候選版本：" + (data.candidate_count || 0);
                 statusBar.className = "mr-status-bar mr-ok";
               } else {
-                statusBar.textContent = "尚無官方模型";
+                statusBar.textContent =
+                  "尚無可用模型｜候選版本：" + (data.candidate_count || 0);
                 statusBar.className = "mr-status-bar mr-warn";
               }
             }
+          });
+      }
+
+      function startTrainingPolling(runId) {
+        var status = document.getElementById("ma-active-status");
+        var button = document.getElementById("ma-submit-btn");
+        activeRun = { run_id: runId, status: "running" };
+        button.disabled = true;
+        var controller = polling.createPollController({
+          fetchJob: function (id) {
+            return fetch("/api/admin/model-training-runs/" + id);
+          },
+          schedule: function (callback, delay) { setTimeout(callback, delay); },
+          onUpdate: function (job) {
+            activeRun = job;
+            var stage = job.summary && job.summary.stage;
+            status.textContent =
+              (stage && ma.STAGE_LABELS[stage]) || "正在處理模型訓練…";
+          },
+          onStop: function (_reason, job) {
+            activeRun = null;
+            button.disabled = false;
+            status.textContent =
+              job && job.status ? "訓練" + ma.statusLabel(job.status) : "訓練已結束";
+            loadModelStatus();
+            loadTrainingRuns();
+            if (job && job.run_id) loadTrainingDetail(job.run_id);
+          },
+          minDelay: 2000,
+          maxDelay: 16000,
+          maxAttempts: 300,
+          maxFailures: 5,
+        });
+        controller.start(runId);
+      }
+
+      function submitTraining(event) {
+        event.preventDefault();
+        var button = document.getElementById("ma-submit-btn");
+        var notice = document.getElementById("ma-submit-notice");
+        if (button.disabled) return;
+        button.disabled = true;
+        notice.textContent = "正在建立訓練工作…";
+        var market = document.getElementById("ma-market-select").value;
+        fetch("/api/admin/model-training-runs", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Qingpu-CSRF": getCSRF(),
+          },
+          body: JSON.stringify(ma.buildTrainingPayload(market)),
+        })
+          .then(function (response) {
+            return response.json().then(function (data) {
+              return { ok: response.ok, data: data };
+            });
+          })
+          .then(function (result) {
+            if (!result.ok || result.data.error) {
+              throw new Error(
+                (result.data.error && result.data.error.message) || "訓練工作無法啟動"
+              );
+            }
+            notice.textContent = "工作已建立：" + result.data.run_id.slice(0, 8);
+            startTrainingPolling(result.data.run_id);
+            loadTrainingRuns();
+          })
+          .catch(function (error) {
+            button.disabled = false;
+            notice.textContent = error.message || "訓練工作無法啟動";
           });
       }
 
@@ -343,8 +699,10 @@
 
       document.addEventListener("DOMContentLoaded", function () {
         loadModelStatus();
+        loadTrainingRuns();
         loadReleaseHistory();
 
+        document.getElementById("ma-train-form").addEventListener("submit", submitTraining);
         document.getElementById("mr-confirm-btn").addEventListener("click", submitRelease);
         document.getElementById("mr-cancel-btn").addEventListener("click", function () {
           pendingPreview = null;

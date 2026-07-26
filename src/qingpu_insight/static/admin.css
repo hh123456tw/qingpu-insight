@@ -190,3 +190,133 @@ details summary {
 .listing-retry-btn {
   margin-left: auto;
 }
+
+.admin-field-row {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+}
+
+.admin-field-row label {
+  display: grid;
+  gap: 0.25rem;
+  color: #444;
+  font-size: 0.9rem;
+}
+
+.admin-input,
+.admin-field-row input,
+.admin-field-row select {
+  box-sizing: border-box;
+  min-height: 2.25rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid #bbb;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.admin-btn {
+  min-height: 2.25rem;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid #245d93;
+  border-radius: 4px;
+  background: #245d93;
+  color: #fff;
+  cursor: pointer;
+}
+
+.admin-btn:hover:not(:disabled) {
+  background: #17466f;
+}
+
+.admin-btn-secondary {
+  border-color: #888;
+  background: #fff;
+  color: #333;
+}
+
+#admin-models {
+  scroll-margin-top: 1rem;
+}
+
+#admin-models .admin-content > h3 {
+  margin-top: 1.5rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid #ddd;
+}
+
+.mr-status-bar {
+  margin-bottom: 1rem;
+  padding: 0.65rem 0.8rem;
+  border-radius: 5px;
+}
+
+.mr-ok {
+  border: 1px solid #98d19b;
+  background: #edf9ee;
+  color: #205d25;
+}
+
+.mr-warn,
+.mr-error,
+.mr-blocker {
+  color: #8a321e;
+}
+
+.mr-warn {
+  border: 1px solid #e5c07b;
+  background: #fff8e6;
+}
+
+.mr-candidates,
+.mr-history {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.mr-candidate,
+.mr-history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid #ddd;
+  border-radius: 5px;
+  background: #fafafa;
+}
+
+.mr-preview {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 2px solid #b15b2c;
+  border-radius: 6px;
+  background: #fff8f2;
+}
+
+@media (max-width: 760px) {
+  .admin-page {
+    display: block;
+  }
+
+  .admin-sidebar {
+    box-sizing: border-box;
+    width: 100%;
+  }
+
+  .admin-sidebar ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 0.8rem;
+  }
+
+  .admin-sidebar li {
+    margin: 0;
+  }
+
+  .admin-page main {
+    padding: 1rem;
+  }
+}

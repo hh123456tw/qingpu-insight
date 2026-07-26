@@ -6,7 +6,9 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   "use strict";
 
-  var terminalStatuses = ["succeeded", "failed", "skipped", "needs_attention"];
+  var terminalStatuses = [
+    "succeeded", "failed", "interrupted", "skipped", "needs_attention",
+  ];
 
   function parseApiResponse(response) {
     return Promise.resolve()

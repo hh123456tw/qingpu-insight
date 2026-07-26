@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, request, send_file, session
+from flask import Flask, jsonify, redirect, render_template, request, send_file, session
 from werkzeug.datastructures import MultiDict
 from werkzeug.exceptions import HTTPException
 
@@ -994,10 +994,7 @@ def create_app(
     def admin_models_page():
         if not _is_trusted_local_request():
             return jsonify({"error": {"code": "forbidden", "message": "僅允許本機存取。"}}), 403
-        return render_template(
-            "models_admin.html",
-            csrf_token=session.get("_csrf_token", ""),
-        )
+        return redirect("/admin#models")
 
     # ------------------------------------------------------------------
     # Model Admin API (M5)

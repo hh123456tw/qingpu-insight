@@ -1,13 +1,29 @@
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from collections.abc import Callable
-from typing import Any
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Literal, Protocol
 
 from qingpu_insight.report_contracts import EvidencePack
 
 _KEY_REDACTED = "***redacted***"
+
+
+@dataclass(frozen=True)
+class BenchmarkRequest:
+    provider: Literal["ollama", "gemini"]
+    model: str
+
+
+class BenchmarkRunner(Protocol):
+    def run(
+        self, model: str, cases: list[EvidencePack], output_dir: Path
+    ) -> dict[str, Any]:
+        ...
 
 
 class ProviderOpsService:
@@ -20,6 +36,10 @@ class ProviderOpsService:
         self._rule_provider = rule_provider
         self._provider_factory = provider_factory
         self._env = env
+        self._benchmark_runner: BenchmarkRunner | None = None
+
+    def set_benchmark_runner(self, runner: BenchmarkRunner | None) -> None:
+        self._benchmark_runner = runner
 
     def status(self) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
@@ -106,6 +126,51 @@ class ProviderOpsService:
             return {
                 "run_id": run_id, "provider": provider_name,
                 "status": "failed", "latency_ms": round(elapsed_ms, 1),
+                "error": _redacted_error(e),
+            }
+
+    def submit_benchmark(self, request: BenchmarkRequest) -> dict[str, Any]:
+        run_id = str(uuid.uuid4())
+        return {
+            "run_id": run_id,
+            "provider": request.provider,
+            "model": request.model,
+            "status": "pending",
+        }
+
+    def execute_benchmark(
+        self, run_id: str, request: BenchmarkRequest,
+    ) -> dict[str, Any]:
+        runner = self._benchmark_runner
+        if runner is None:
+            return {
+                "run_id": run_id, "provider": request.provider,
+                "model": request.model, "status": "failed",
+                "error": "benchmark_runner_not_configured",
+            }
+        provider = self._provider_factory(request.provider)
+        if provider is None:
+            return {
+                "run_id": run_id, "provider": request.provider,
+                "model": request.model, "status": "failed",
+                "error": f"{request.provider}_unavailable",
+            }
+        try:
+            cases_path = Path("benchmarks/m44_cases.json")
+            cases_data = json.loads(cases_path.read_text(encoding="utf-8"))
+            cases = [EvidencePack(**c) for c in cases_data]
+            output_dir = Path("outputs") / "m44-benchmark" / run_id
+            output_dir.mkdir(parents=True, exist_ok=True)
+            result = runner.run(request.model, cases, output_dir)
+            result["run_id"] = run_id
+            result["provider"] = request.provider
+            result["model"] = request.model
+            result["status"] = "succeeded"
+            return result
+        except Exception as e:
+            return {
+                "run_id": run_id, "provider": request.provider,
+                "model": request.model, "status": "failed",
                 "error": _redacted_error(e),
             }
 
