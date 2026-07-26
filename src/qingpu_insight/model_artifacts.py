@@ -3,7 +3,7 @@ import os
 import shutil
 from datetime import date, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 import joblib
@@ -47,11 +47,17 @@ class MarketTrainingResult(BaseModel):
     artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     report_files: dict[str, str]
     report_sha256: dict[str, str]
+    feature_contract_version: int = 0
+    feature_columns: list[str] = Field(default_factory=list)
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
+    feature_experiments: list[dict[str, Any]] = Field(default_factory=list)
+    backtests: list[dict[str, Any]] = Field(default_factory=list)
+    release_checks: dict[str, bool] = Field(default_factory=dict)
 
 
 class TrainingManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 1
     run_id: UUID
     created_at: datetime
     markets: list[Literal["resale", "presale"]]
