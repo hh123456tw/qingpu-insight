@@ -94,16 +94,50 @@ assert.equal(admin.statusLabel("succeeded"), "成功");
 assert.equal(admin.statusLabel("interrupted"), "已中斷");
 
 var result = {
+  selected_model: "hist_gradient_boosting",
+  selection_metrics: {
+    baseline: { overall: { mae: 84000, mape: 18.0 } },
+    ridge: { overall: { mae: 82000, mape: 17.5 } },
+    random_forest: { overall: { mae: 70000, mape: 15.0 } },
+    hist_gradient_boosting: { overall: { mae: 67000, mape: 14.2 } },
+  },
+  final_test_metrics: {
+    baseline: {
+      "station:A17": { mape: 16.0 },
+      "station:A18": { mape: 18.0 },
+      "station:A19": { mape: 15.0 },
+    },
+    hist_gradient_boosting: {
+      "station:A17": { mape: 14.0 },
+      "station:A18": { mape: 16.2 },
+      "station:A19": { mape: 14.5 },
+    },
+  },
   feature_experiments: [
     { name: "enhanced", selected_model: "hist_gradient_boosting",
       metrics: { overall: { mae: 67000 }, "station:A18": { mape: 16.2 } } }
   ],
-  backtests: [{ cutoff_date: "2026-06-12", passed: true }],
+  backtests: [{
+    cutoff_date: "2026-06-12",
+    passed: true,
+    stations_within_limit: true,
+    candidate_metrics: {
+      overall: { mae: 67000 },
+      "station:A17": { mape: 14.0 },
+      "station:A18": { mape: 16.2 },
+      "station:A19": { mape: 14.5 },
+    },
+    baseline_metrics: { overall: { mae: 84000 } },
+  }],
   release_checks: { overall_mae_improved: true, a18_improved: true, recommended: true }
 };
 assert.equal(admin.ablationRows(result)[0].name, "enhanced");
-assert.equal(admin.stationRows(result)[0].station, "A18");
+assert.equal(admin.modelComparisonRows(result).length, 4);
+assert.equal(admin.modelComparisonRows(result).at(-1).selected, true);
+assert.equal(admin.stationRows(result)[1].station, "A18");
+assert.equal(admin.stationRows(result)[1].comparison, "improved");
 assert.equal(admin.backtestRows(result)[0].passed, true);
+assert.equal(admin.backtestRows(result)[0].a18_mape, 16.2);
 assert.equal(admin.releaseCheckRows(result).at(-1).code, "recommended");
 assert.deepEqual(admin.ablationRows({}), []);
 

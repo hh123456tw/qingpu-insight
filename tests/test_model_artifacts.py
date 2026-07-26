@@ -71,7 +71,9 @@ def manifest_fixture(run_id: str, artifact_hash: str, report_hash: str) -> Train
                 report_sha256={"resale-evaluation": report_hash},
             )
         ],
-    )
+)
+
+_TEST_SHA256 = "a" * 64
 
 
 def committed_store_fixture(tmp_path: Path) -> tuple[CandidateArtifactStore, TrainingManifest]:
@@ -220,9 +222,7 @@ class TestCommitIntegrity:
             artifact_hash=new_hash,
             report_hash=sha256_file(stage2 / "reports" / "resale-evaluation.json"),
         )
-        (stage2 / "manifest.json").write_text(
-            manifest2.model_dump_json(indent=2), encoding="utf-8"
-        )
+        (stage2 / "manifest.json").write_text(manifest2.model_dump_json(indent=2), encoding="utf-8")
 
         with pytest.raises((ValueError, TypeError)):
             store2.commit(rid, manifest2)
@@ -245,9 +245,7 @@ class TestCommitIntegrity:
             artifact_hash=sha256_file(artifact),
             report_hash=fake_hash,
         )
-        (stage / "manifest.json").write_text(
-            manifest.model_dump_json(indent=2), encoding="utf-8"
-        )
+        (stage / "manifest.json").write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
 
         with pytest.raises(ValueError, match="Hash mismatch"):
             store.commit("22222222-2222-4222-8222-222222222222", manifest)
@@ -256,36 +254,42 @@ class TestCommitIntegrity:
 @pytest.fixture
 def schema_v1_manifest_json():
     """A minimal schema-v1 manifest JSON string."""
-    return json.dumps({
-        "schema_version": 1,
-        "run_id": "33333333-3333-4333-8333-333333333333",
-        "created_at": "2024-06-15T12:00:00Z",
-        "markets": ["resale"],
-        "source_commit": "abc123",
-        "source_dirty": False,
-        "runtime_versions": {"python": "3.11"},
-        "data_snapshot": {
-            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "raw_count": 100,
-            "usable_counts": {"resale": 80, "presale": 0},
-            "excluded_counts": {"resale": 20, "presale": 0},
-            "station_counts": {"A17": 30, "A18": 25, "A19": 25},
-            "min_date": "2024-01-01",
-            "max_date": "2024-12-31",
-        },
-        "results": [{
-            "market": "resale",
-            "selected_model": "ridge",
-            "recommended": True,
-            "reason_codes": ["best_cv_score"],
-            "selection_metrics": {"cv": {"mae": 1000.0}},
-            "final_test_metrics": {"test": {"mae": 1200.0}},
-            "artifact_file": "resale.joblib",
-            "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "report_files": {"resale-evaluation": "reports/resale-evaluation.json"},
-            "report_sha256": {"resale-evaluation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-        }],
-    })
+    return json.dumps(
+        {
+            "schema_version": 1,
+            "run_id": "33333333-3333-4333-8333-333333333333",
+            "created_at": "2024-06-15T12:00:00Z",
+            "markets": ["resale"],
+            "source_commit": "abc123",
+            "source_dirty": False,
+            "runtime_versions": {"python": "3.11"},
+            "data_snapshot": {
+                "sha256": _TEST_SHA256,
+                "raw_count": 100,
+                "usable_counts": {"resale": 80, "presale": 0},
+                "excluded_counts": {"resale": 20, "presale": 0},
+                "station_counts": {"A17": 30, "A18": 25, "A19": 25},
+                "min_date": "2024-01-01",
+                "max_date": "2024-12-31",
+            },
+            "results": [
+                {
+                    "market": "resale",
+                    "selected_model": "ridge",
+                    "recommended": True,
+                    "reason_codes": ["best_cv_score"],
+                    "selection_metrics": {"cv": {"mae": 1000.0}},
+                    "final_test_metrics": {"test": {"mae": 1200.0}},
+                    "artifact_file": "resale.joblib",
+                    "artifact_sha256": _TEST_SHA256,
+                    "report_files": {"resale-evaluation": "reports/resale-evaluation.json"},
+                    "report_sha256": {
+                        "resale-evaluation": _TEST_SHA256
+                    },
+                }
+            ],
+        }
+    )
 
 
 @pytest.fixture
@@ -299,7 +303,7 @@ def manifest_v2():
         source_dirty=False,
         runtime_versions={"python": "3.11"},
         data_snapshot=DataSnapshot(
-            sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            sha256=_TEST_SHA256,
             raw_count=100,
             usable_counts={"resale": 80, "presale": 0},
             excluded_counts={"resale": 20, "presale": 0},
@@ -316,13 +320,17 @@ def manifest_v2():
                 selection_metrics={"cv": {"mae": 1000.0}},
                 final_test_metrics={"test": {"mae": 1200.0}},
                 artifact_file="resale.joblib",
-                artifact_sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                artifact_sha256=_TEST_SHA256,
                 report_files={"resale-evaluation": "reports/resale-evaluation.json"},
-                report_sha256={"resale-evaluation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                report_sha256={
+                    "resale-evaluation": _TEST_SHA256
+                },
                 feature_contract_version=2,
                 feature_columns=["station_code", "station_distance_m"],
                 diagnostics={"station_counts": {"A18": 25}},
-                feature_experiments=[{"name": "enhanced", "selected_model": "hist_gradient_boosting"}],
+                feature_experiments=[
+                    {"name": "enhanced", "selected_model": "hist_gradient_boosting"}
+                ],
                 backtests=[{"cutoff_date": "2026-06-12", "passed": True}],
                 release_checks={"a18_improved": True, "recommended": True},
             )

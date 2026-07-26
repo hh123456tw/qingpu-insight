@@ -4,7 +4,6 @@ from typing import Any
 
 import numpy as np
 
-from qingpu_insight.model_features import FEATURE_COLUMNS
 from qingpu_insight.model_training import ModelExperiment, TimeSplit, leakage_audit
 from qingpu_insight.valuation import ValuationBundle
 
@@ -18,9 +17,11 @@ def write_evaluation(
     feature_experiments: list[dict[str, object]] | None = None,
     backtests: list[dict[str, object]] | None = None,
     release_checks: dict[str, bool] | None = None,
+    reason_codes: list[str] | None = None,
 ) -> Path:
     leakage = leakage_audit(split)
-    test_pred = bundle.pipeline.predict(split.test[list(FEATURE_COLUMNS)])
+    evaluated = experiment.final_test_results[experiment.selected_name]
+    test_pred = evaluated.estimator.predict(split.test[list(bundle.feature_columns)])
     test_actual = split.test["target_unit_price_twd"].values
     radius = bundle.interval_abs_residual_twd_per_ping
     lows = np.maximum(0, test_pred - radius)
@@ -46,19 +47,24 @@ def write_evaluation(
         "selection_metrics": selection_metrics,
         "final_test_metrics": final_test_metrics,
         "recommendation": {
-            "status": "recommended" if experiment.recommended else "not_recommended",
-            "reason_codes": list(experiment.reason_codes),
+            "status": (
+                "recommended"
+                if release_checks
+                and release_checks.get("recommended", False)
+                or not release_checks
+                and experiment.recommended
+                else "not_recommended"
+            ),
+            "reason_codes": (
+                reason_codes if reason_codes is not None else list(experiment.reason_codes)
+            ),
         },
         "grouped_metrics": bundle.metrics,
         "split": {
             "train_start": str(split.train["transaction_date"].min().date()),
             "train_end": str(split.train["transaction_date"].max().date()),
-            "calibration_start": str(
-                split.calibration["transaction_date"].min().date()
-            ),
-            "calibration_end": str(
-                split.calibration["transaction_date"].max().date()
-            ),
+            "calibration_start": str(split.calibration["transaction_date"].min().date()),
+            "calibration_end": str(split.calibration["transaction_date"].max().date()),
             "test_start": str(split.test["transaction_date"].min().date()),
             "test_end": str(split.test["transaction_date"].max().date()),
             "train_count": len(split.train),
@@ -72,8 +78,12 @@ def write_evaluation(
         "average_interval_width_twd_per_ping": round(avg_interval_width, 2),
         "feature_ranges": bundle.feature_ranges,
         "data_date": bundle.data_max_date,
-        "recency_weighting": {"half_life_months": 24, "minimum": 0.10},
     }
+    if bundle.transaction_type == "resale":
+        report["recency_weighting"] = {
+            "half_life_months": 24,
+            "minimum": 0.10,
+        }
 
     if diagnostics is not None:
         report["diagnostics"] = diagnostics
@@ -95,6 +105,10 @@ def write_model_card(
     experiment: ModelExperiment,
     leakage: dict[str, Any],
     report_dir: Path,
+    feature_experiments: list[dict[str, object]] | None = None,
+    backtests: list[dict[str, object]] | None = None,
+    release_checks: dict[str, bool] | None = None,
+    reason_codes: list[str] | None = None,
 ) -> Path:
     lines = [
         f"# {bundle.transaction_type} 估價模型卡",
@@ -111,6 +125,41 @@ def write_model_card(
     for c in experiment.selection_results:
         marker = " ✓" if c.name == bundle.model_name else ""
         lines.append(f"- {c.name}：MAE = {c.overall_mae:,.0f}{marker}")
+
+    if bundle.transaction_type == "resale":
+        lines.extend(
+            [
+                "",
+                "## 近期資料加權",
+                "- 半衰期 24 個月，最低權重 0.10；評估指標不加權。",
+                "",
+                "## 特徵實驗與消融",
+            ]
+        )
+        for item in feature_experiments or []:
+            metrics = item.get("metrics", {})
+            overall = metrics.get("overall", {}) if isinstance(metrics, dict) else {}
+            lines.append(
+                f"- {item.get('name', 'unknown')}："
+                f"{item.get('selected_model') or '無'}，"
+                f"MAE = {overall.get('mae', 'N/A')}"
+            )
+
+        lines.extend(["", "## 三期時間回測"])
+        for backtest in backtests or []:
+            candidate = backtest.get("candidate_metrics", {})
+            overall = candidate.get("overall", {}) if isinstance(candidate, dict) else {}
+            lines.append(
+                f"- {backtest.get('cutoff_date', 'unknown')}："
+                f"MAE = {overall.get('mae', 'N/A')}，"
+                f"{'通過' if backtest.get('passed') else '未通過'}"
+            )
+
+        lines.extend(["", "## 發布檢查"])
+        for check, passed in (release_checks or {}).items():
+            lines.append(f"- {check}：{'通過' if passed else '未通過'}")
+        if reason_codes:
+            lines.append(f"- 保留原因：{', '.join(reason_codes)}")
 
     lines.extend(
         [

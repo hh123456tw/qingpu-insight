@@ -87,14 +87,11 @@ class ModelObservatory:
                             "warning": f"{market}_model_corrupt",
                         }
                 else:
-                    official_models[market] = (
-                        self._legacy_model_status(market)
-                        or {
-                            "available": False,
-                            "role": "official",
-                            "warning": f"{market}_model_unavailable",
-                        }
-                    )
+                    official_models[market] = self._legacy_model_status(market) or {
+                        "available": False,
+                        "role": "official",
+                        "warning": f"{market}_model_unavailable",
+                    }
             else:
                 path = self._artifact_dir / f"{market}.joblib"
                 if not path.exists():
@@ -157,7 +154,11 @@ class ModelObservatory:
             ref_date = pd.Timestamp(self._cached_snapshot["max_date"])
 
         for market_info in official_models.values():
-            if market_info.get("available") and market_info.get("data_max_date") is not None and ref_date is not None:
+            if (
+                market_info.get("available")
+                and market_info.get("data_max_date") is not None
+                and ref_date is not None
+            ):
                 data_max = pd.Timestamp(market_info["data_max_date"])
                 age = (ref_date - data_max).days
                 market_info["age_days"] = age
@@ -189,12 +190,8 @@ class ModelObservatory:
                 "run_id": run.run_id,
                 "status": run.status,
                 "trigger": run.trigger,
-                "started_at": (
-                    run.started_at.isoformat() if run.started_at else None
-                ),
-                "finished_at": (
-                    run.finished_at.isoformat() if run.finished_at else None
-                ),
+                "started_at": (run.started_at.isoformat() if run.started_at else None),
+                "finished_at": (run.finished_at.isoformat() if run.finished_at else None),
             }
             manifest = manifests.get(run.run_id)
             if manifest is not None:
@@ -218,24 +215,19 @@ class ModelObservatory:
             "run_id": run.run_id,
             "status": run.status,
             "trigger": run.trigger,
-            "started_at": (
-                run.started_at.isoformat() if run.started_at else None
-            ),
-            "finished_at": (
-                run.finished_at.isoformat() if run.finished_at else None
-            ),
+            "started_at": (run.started_at.isoformat() if run.started_at else None),
+            "finished_at": (run.finished_at.isoformat() if run.finished_at else None),
         }
 
         if manifest is not None:
             result["manifest"] = {
+                "schema_version": manifest.schema_version,
                 "markets": manifest.markets,
                 "created_at": manifest.created_at.isoformat(),
                 "source_commit": manifest.source_commit,
                 "source_dirty": manifest.source_dirty,
                 "data_snapshot": manifest.data_snapshot.model_dump(mode="json"),
-                "results": [
-                    _project_result(r) for r in manifest.results
-                ],
+                "results": [_project_result(r) for r in manifest.results],
             }
 
             markets_info: dict[str, dict[str, Any]] = {}

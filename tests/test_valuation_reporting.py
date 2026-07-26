@@ -54,9 +54,7 @@ def trained_bundle():
     )
 
 
-def _build_experiment_frame(
-    n_train: int, n_cal: int, n_test: int, seed: int = 42
-) -> TimeSplit:
+def _build_experiment_frame(n_train: int, n_cal: int, n_test: int, seed: int = 42) -> TimeSplit:
     import numpy as np
 
     np.random.seed(seed)
@@ -89,9 +87,7 @@ def _build_experiment_frame(
                 "building_age_years": float(np.random.uniform(0, 30)),
                 "floor": int(np.random.randint(1, 15)),
                 "total_floors": int(np.random.randint(5, 25)),
-                "floor_ratio": float(
-                    np.random.randint(1, 15) / np.random.randint(5, 25)
-                ),
+                "floor_ratio": float(np.random.randint(1, 15) / np.random.randint(5, 25)),
                 "parking_type": "",
                 "parking_area_ping": 0.0,
                 "transaction_year": dates[i].year,
@@ -127,9 +123,7 @@ def leakage():
     }
 
 
-def test_model_card_discloses_required_evidence(
-    tmp_path, trained_bundle, experiment, leakage
-):
+def test_model_card_discloses_required_evidence(tmp_path, trained_bundle, experiment, leakage):
     path = write_model_card(trained_bundle, experiment, leakage, tmp_path)
     text = path.read_text(encoding="utf-8")
     for heading in (
@@ -151,7 +145,6 @@ def test_model_card_discloses_required_evidence(
 def test_write_evaluation_creates_json(tmp_path, trained_bundle, experiment):
     import json
     from dataclasses import replace
-
 
     split = _build_experiment_frame(300, 100, 200, seed=99)
     exp = run_model_experiment(split)

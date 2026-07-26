@@ -127,27 +127,31 @@ def _strong_admin_secret(secret: str | None) -> bool:
     if not secret or len(secret) < 32:
         return False
     lowered = secret.casefold()
-    if any(
-        marker in lowered
-        for marker in (
-            "dev-secret",
-            "change-me",
-            "changeme",
-            "placeholder",
-            "at-least-32",
-            "random-characters",
-            "password",
-            "letmein",
-            "example",
-            "sample",
-            "0123456789",
-            "1234567890",
-            "abcdefghijklmnopqrstuvwxyz",
-            "zyxwvutsrqponmlkjihgfedcba",
-            "qwertyuiop",
-            "asdfghjkl",
+    if (
+        any(
+            marker in lowered
+            for marker in (
+                "dev-secret",
+                "change-me",
+                "changeme",
+                "placeholder",
+                "at-least-32",
+                "random-characters",
+                "password",
+                "letmein",
+                "example",
+                "sample",
+                "0123456789",
+                "1234567890",
+                "abcdefghijklmnopqrstuvwxyz",
+                "zyxwvutsrqponmlkjihgfedcba",
+                "qwertyuiop",
+                "asdfghjkl",
+            )
         )
-    ) or "<" in secret or ">" in secret:
+        or "<" in secret
+        or ">" in secret
+    ):
         return False
     if lowered in (lowered + lowered)[1:-1]:
         return False
@@ -194,14 +198,19 @@ def _create_production_admin_services(
     input_path = settings.processed_dir / "market_transactions.parquet"
     candidate_store = CandidateArtifactStore(root / "candidates")
     mts = ModelTrainingService(
-        service.job_service, candidate_store, input_path,
+        service.job_service,
+        candidate_store,
+        input_path,
         SourceVersionProvider("unknown", True),
     )
     from qingpu_insight.model_release import OfficialModelStore as _OfficialModelStore
 
     official_store = _OfficialModelStore(root / "artifacts")
     observatory = ModelObservatory(
-        root / "artifacts", candidate_store, mts, service.job_service,
+        root / "artifacts",
+        candidate_store,
+        mts,
+        service.job_service,
         input_path=input_path,
         official_store=official_store,
     )
@@ -221,17 +230,11 @@ def _create_production_admin_services(
         OperationPreviewService,
     )
 
-    release_repo = MySQLModelReleaseRepository(
-        connection_factory
-    ) if connection_factory else None
+    release_repo = MySQLModelReleaseRepository(connection_factory) if connection_factory else None
     preview_repo = (
-        MySQLOperationPreviewRepository(connection_factory)
-        if connection_factory
-        else None
+        MySQLOperationPreviewRepository(connection_factory) if connection_factory else None
     )
-    preview_service = (
-        OperationPreviewService(repository=preview_repo) if preview_repo else None
-    )
+    preview_service = OperationPreviewService(repository=preview_repo) if preview_repo else None
     model_release_service = (
         ModelReleaseService(
             official_store=official_store,
@@ -293,13 +296,9 @@ def _create_admin_dashboard_service(
                 conn = connection_factory()
                 conn.ping()
                 conn.close()
-                return ReadinessItem(
-                    "mysql", "ready", "MySQL 連線正常。", {"reachable": True}
-                )
+                return ReadinessItem("mysql", "ready", "MySQL 連線正常。", {"reachable": True})
             except Exception:
-                return ReadinessItem(
-                    "mysql", "blocked", "MySQL 無法連線。", {"reachable": False}
-                )
+                return ReadinessItem("mysql", "blocked", "MySQL 無法連線。", {"reachable": False})
 
         probes["mysql"] = _mysql_probe
 
@@ -316,9 +315,7 @@ def _create_admin_dashboard_service(
             def _probe() -> ReadinessItem:
                 found = shutil.which(name)
                 if found:
-                    return ReadinessItem(
-                        probe_code, "ready", f"{name} 可用。", {"path": found}
-                    )
+                    return ReadinessItem(probe_code, "ready", f"{name} 可用。", {"path": found})
                 return ReadinessItem(
                     probe_code,
                     "warning",
@@ -340,9 +337,7 @@ def _create_admin_dashboard_service(
         ) -> Callable[[], ReadinessItem]:
             def _probe() -> ReadinessItem:
                 if path.exists():
-                    return ReadinessItem(
-                        key, "ready", "目錄存在。", {"path": str(path)}
-                    )
+                    return ReadinessItem(key, "ready", "目錄存在。", {"path": str(path)})
                 return ReadinessItem(
                     key,
                     "warning",
@@ -355,15 +350,9 @@ def _create_admin_dashboard_service(
         probes[dir_key] = _make_dir_probe()
 
     jobs = admin_services.job_service if admin_services is not None else None
-    health_repo = (
-        ops_services.health_repository if ops_services is not None else None
-    )
-    backup_repo = (
-        ops_services.backup_repository if ops_services is not None else None
-    )
-    model_obs = (
-        admin_services.model_observatory if admin_services is not None else None
-    )
+    health_repo = ops_services.health_repository if ops_services is not None else None
+    backup_repo = ops_services.backup_repository if ops_services is not None else None
+    model_obs = admin_services.model_observatory if admin_services is not None else None
 
     return AdminDashboardService(
         probes=probes,
@@ -381,27 +370,19 @@ def parse_filters(args: MultiDict[str, str]) -> MarketFilters:
     stations = tuple(args.getlist("station")) or ("A17", "A18", "A19")
     try:
         date_from = (
-            pd.to_datetime(args.get("date_from"), errors="raise")
-            if args.get("date_from")
-            else None
+            pd.to_datetime(args.get("date_from"), errors="raise") if args.get("date_from") else None
         )
     except (TypeError, ValueError):
         raise ApiInputError("日期格式不正確。", {"date_from": "invalid"}) from None
     try:
         date_to = (
-            pd.to_datetime(args.get("date_to"), errors="raise")
-            if args.get("date_to")
-            else None
+            pd.to_datetime(args.get("date_to"), errors="raise") if args.get("date_to") else None
         )
     except (TypeError, ValueError):
         raise ApiInputError("日期格式不正確。", {"date_to": "invalid"}) from None
     try:
-        area_ping_min = (
-            float(args["area_ping_min"]) if args.get("area_ping_min") else None
-        )
-        area_ping_max = (
-            float(args["area_ping_max"]) if args.get("area_ping_max") else None
-        )
+        area_ping_min = float(args["area_ping_min"]) if args.get("area_ping_min") else None
+        area_ping_max = float(args["area_ping_max"]) if args.get("area_ping_max") else None
         bedrooms = tuple(int(value) for value in args.getlist("bedrooms"))
     except (TypeError, ValueError):
         raise ApiInputError("篩選條件格式不正確。", {"filters": "invalid"}) from None
@@ -435,9 +416,7 @@ def parse_filters(args: MultiDict[str, str]) -> MarketFilters:
         ):
             fields["area_ping_min"] = "must_not_exceed_area_ping_max"
             fields["area_ping_max"] = "must_not_be_less_than_area_ping_min"
-        raise ApiInputError(
-            "篩選條件無效。", fields or {"filters": "invalid"}
-        ) from None
+        raise ApiInputError("篩選條件無效。", fields or {"filters": "invalid"}) from None
 
 
 def _json_default(obj: Any) -> Any:
@@ -493,9 +472,7 @@ def parse_valuation_payload(payload: dict[str, Any]) -> ValuationInput:
             else None,
         )
     except (KeyError, TypeError, ValueError):
-        raise ApiInputError(
-            "估價條件格式不正確。", {"valuation": "invalid"}
-        ) from None
+        raise ApiInputError("估價條件格式不正確。", {"valuation": "invalid"}) from None
 
 
 def _is_trusted_local_request() -> bool:
@@ -505,7 +482,9 @@ def _is_trusted_local_request() -> bool:
     except ValueError:
         return False
     return remote_is_loopback and (hostname or "").lower() in {
-        "localhost", "127.0.0.1", "::1",
+        "localhost",
+        "127.0.0.1",
+        "::1",
     }
 
 
@@ -555,9 +534,7 @@ def _parse_listing_update_request() -> ListingUpdateRequest:
         fields["trigger"] = "supported_value"
     if fields:
         raise ApiInputError("Request validation failed.", fields)
-    return ListingUpdateRequest(
-        types=tuple(types), max_pages=max_pages, trigger=trigger.strip()
-    )
+    return ListingUpdateRequest(types=tuple(types), max_pages=max_pages, trigger=trigger.strip())
 
 
 def _parse_model_training_request() -> tuple[str, ...]:
@@ -601,8 +578,7 @@ def _public_job(run: JobRun) -> dict[str, object]:
         "status": run.status,
         "trigger": (
             run.trigger
-            if run.trigger in {"manual", "scheduled", "web"}
-            and len(run.trigger) <= 32
+            if run.trigger in {"manual", "scheduled", "web"} and len(run.trigger) <= 32
             else "redacted"
         ),
         "attempt": run.attempt,
@@ -612,9 +588,7 @@ def _public_job(run: JobRun) -> dict[str, object]:
         "output_version": run.output_version,
         "summary": _safe_public_value(run.summary),
         "error_code": run.error_code,
-        "error_message": (
-            _safe_public_text(run.error_message) if run.error_message else None
-        ),
+        "error_message": (_safe_public_text(run.error_message) if run.error_message else None),
     }
 
 
@@ -651,9 +625,7 @@ def _safe_public_value(value):
     if isinstance(value, dict):
         return {
             str(key): (
-                "redacted"
-                if _UNSAFE_SUMMARY_KEY.search(str(key))
-                else _safe_public_value(item)
+                "redacted" if _UNSAFE_SUMMARY_KEY.search(str(key)) else _safe_public_value(item)
             )
             for key, item in value.items()
         }
@@ -763,7 +735,8 @@ def create_app(
         )
     else:
         admin_runtime = AdminRuntime(
-            job_service=None, executor=None,
+            job_service=None,
+            executor=None,
             provider_ops_service=provider_ops_service,
             secrets_store=secrets_store,
             root=root,
@@ -822,9 +795,7 @@ def create_app(
         try:
             limit = min(max(int(request.args.get("limit", "20")), 1), 100)
         except (TypeError, ValueError):
-            raise ApiInputError(
-                "筆數格式不正確。", {"limit": "integer_1_to_100"}
-            ) from None
+            raise ApiInputError("筆數格式不正確。", {"limit": "integer_1_to_100"}) from None
         return jsonify(
             {
                 "items": recent_transactions(ds.load(filters), filters, limit),
@@ -844,9 +815,7 @@ def create_app(
         try:
             limit = min(max(int(request.args.get("limit", "100")), 1), 100)
         except (TypeError, ValueError):
-            raise ApiInputError(
-                "筆數格式不正確。", {"limit": "integer_1_to_100"}
-            ) from None
+            raise ApiInputError("筆數格式不正確。", {"limit": "integer_1_to_100"}) from None
         return ListingFilters(
             listing_type=listing_type,
             station_codes=stations,
@@ -907,7 +876,9 @@ def create_app(
             ), 400
 
         market = ds.load(MarketFilters(transaction_type=input_.transaction_type))
-        latest_data_date = pd.Timestamp(market["transaction_date"].max()) if not market.empty else None
+        latest_data_date = (
+            pd.Timestamp(market["transaction_date"].max()) if not market.empty else None
+        )
         market_model = build_model_frame(market, input_.transaction_type)
 
         result = valuate(input_, registry, market_model, latest_data_date=latest_data_date)
@@ -963,7 +934,9 @@ def create_app(
         body = _public_job(submission.run)
         body["created"] = submission.created
         return jsonify(body), 202 if submission.run.status in {
-            "pending", "running", "retry_wait",
+            "pending",
+            "running",
+            "retry_wait",
         } else 200
 
     @app.get("/api/jobs/<run_id>")
@@ -1078,7 +1051,9 @@ def create_app(
         if submission.created:
             try:
                 admin_services.model_training_service.handoff(
-                    submission, request_obj, admin_services.executor,
+                    submission,
+                    request_obj,
+                    admin_services.executor,
                 )
             except Exception:
                 error = {"code": "enqueue_failed", "message": "工作無法啟動。"}
@@ -1185,7 +1160,10 @@ def create_app(
 
                 _connection_factory = create_mysql_connection_factory()
             dashboard_service = _create_admin_dashboard_service(
-                root, _connection_factory, admin_services, ops_services,
+                root,
+                _connection_factory,
+                admin_services,
+                ops_services,
             )
         except Exception:
             app.logger.warning("dashboard service composition failed")
@@ -1287,9 +1265,7 @@ def create_app(
             ), 400
 
         if not _REPORT_SEMAPHORE.acquire(blocking=False):
-            return jsonify(
-                {"error": {"code": "report_busy", "message": "已有報告正在產生。"}}
-            ), 429
+            return jsonify({"error": {"code": "report_busy", "message": "已有報告正在產生。"}}), 429
         try:
             saved = report_services.service.generate(request)
         except UnknownCandidateError:
@@ -1297,9 +1273,7 @@ def create_app(
                 {"error": {"code": "candidate_not_found", "message": "找不到指定物件。"}}
             ), 404
         except Exception:
-            return jsonify(
-                {"error": {"code": "report_failed", "message": "報告產生失敗。"}}
-            ), 503
+            return jsonify({"error": {"code": "report_failed", "message": "報告產生失敗。"}}), 503
         finally:
             _REPORT_SEMAPHORE.release()
 
@@ -1328,13 +1302,9 @@ def create_app(
         try:
             record = report_services.repository.get(report_id)
         except CorruptReportError:
-            return jsonify(
-                {"error": {"code": "report_corrupt", "message": "報告已毀損。"}}
-            ), 503
+            return jsonify({"error": {"code": "report_corrupt", "message": "報告已毀損。"}}), 503
         if record is None:
-            return jsonify(
-                {"error": {"code": "not_found", "message": "報告不存在。"}}
-            ), 404
+            return jsonify({"error": {"code": "not_found", "message": "報告不存在。"}}), 404
 
         return jsonify(
             {
@@ -1470,7 +1440,8 @@ def create_app(
                 rt.executor.submit(
                     submission.run.run_id,
                     lambda: rt.backup_service.execute_restore_drill(
-                        submission.run.run_id, backup_id,
+                        submission.run.run_id,
+                        backup_id,
                     ),
                 )
             except Exception:

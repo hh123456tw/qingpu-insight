@@ -23,8 +23,11 @@ BASE_FEATURE_COLUMNS = (
     "transaction_month",
 )
 DERIVED_FEATURE_COLUMNS = (
-    "transaction_month_index", "station_building_type", "building_age_band",
-    "area_band", "floor_band",
+    "transaction_month_index",
+    "station_building_type",
+    "building_age_band",
+    "area_band",
+    "floor_band",
 )
 FEATURE_COLUMNS = BASE_FEATURE_COLUMNS + DERIVED_FEATURE_COLUMNS
 
@@ -97,35 +100,52 @@ def add_derived_features(frame: pd.DataFrame) -> pd.DataFrame:
     if "transaction_date" in result:
         dates = pd.to_datetime(result["transaction_date"])
     else:
-        dates = pd.to_datetime({
-            "year": result["transaction_year"],
-            "month": result["transaction_month"],
-            "day": 1,
-        })
+        dates = pd.to_datetime(
+            {
+                "year": result["transaction_year"],
+                "month": result["transaction_month"],
+                "day": 1,
+            }
+        )
     result["transaction_month_index"] = dates.dt.year * 12 + dates.dt.month
     result["station_building_type"] = (
         result["station_code"].fillna("unknown").astype(str)
         + "|"
         + result["building_type"].fillna("unknown").astype(str)
     )
-    result["building_age_band"] = pd.cut(
-        result["building_age_years"],
-        bins=[-np.inf, 5, 10, 20, np.inf],
-        labels=["0_5", "5_10", "10_20", "20_plus"],
-        right=False,
-    ).astype("object").fillna("missing")
-    result["area_band"] = pd.cut(
-        result["building_area_ping"],
-        bins=[-np.inf, 20, 50, np.inf],
-        labels=["small", "standard", "large"],
-        right=True,
-    ).astype("object").fillna("unknown")
-    result["floor_band"] = pd.cut(
-        result["floor_ratio"],
-        bins=[-np.inf, 0.33, 0.67, np.inf],
-        labels=["low", "middle", "high"],
-        right=True,
-    ).astype("object").fillna("unknown")
+    building_age = pd.to_numeric(result["building_age_years"], errors="coerce")
+    building_area = pd.to_numeric(result["building_area_ping"], errors="coerce")
+    floor_ratio = pd.to_numeric(result["floor_ratio"], errors="coerce")
+    result["building_age_band"] = (
+        pd.cut(
+            building_age,
+            bins=[-np.inf, 5, 10, 20, np.inf],
+            labels=["0_5", "5_10", "10_20", "20_plus"],
+            right=False,
+        )
+        .astype("object")
+        .fillna("missing")
+    )
+    result["area_band"] = (
+        pd.cut(
+            building_area,
+            bins=[-np.inf, 20, 50, np.inf],
+            labels=["small", "standard", "large"],
+            right=True,
+        )
+        .astype("object")
+        .fillna("unknown")
+    )
+    result["floor_band"] = (
+        pd.cut(
+            floor_ratio,
+            bins=[-np.inf, 0.33, 0.67, np.inf],
+            labels=["low", "middle", "high"],
+            right=True,
+        )
+        .astype("object")
+        .fillna("unknown")
+    )
     return result
 
 

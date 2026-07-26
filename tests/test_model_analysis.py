@@ -60,9 +60,7 @@ def large_model_frame():
                     "transaction_year": d.year,
                     "transaction_month": d.month,
                     "transaction_date": d,
-                    "target_unit_price_twd": float(
-                        np.random.uniform(200000, 800000)
-                    ),
+                    "target_unit_price_twd": float(np.random.uniform(200000, 800000)),
                 }
             )
     df = pd.DataFrame(rows)
@@ -76,10 +74,7 @@ def test_resale_diagnostics_exposes_a18_drift(large_model_frame):
     assert set(diagnostics["station_counts"]) == {"A17", "A18", "A19"}
     assert "building_age_years" in diagnostics["missing_rates"]
     assert diagnostics["monthly_summary"]
-    assert any(
-        row["station_code"] == "A18"
-        for row in diagnostics["building_type_summary"]
-    )
+    assert any(row["station_code"] == "A18" for row in diagnostics["building_type_summary"])
     assert set(diagnostics["split_summary"]) == {
         "train",
         "calibration",
@@ -88,9 +83,7 @@ def test_resale_diagnostics_exposes_a18_drift(large_model_frame):
 
 
 def test_diagnostics_are_json_serializable(large_model_frame):
-    payload = build_resale_diagnostics(
-        large_model_frame, split_by_time(large_model_frame)
-    )
+    payload = build_resale_diagnostics(large_model_frame, split_by_time(large_model_frame))
     json.dumps(payload)
 
 
@@ -106,27 +99,27 @@ def model_frame():
         beds = int(np.random.choice([2, 3, 4]))
         station = np.random.choice(stations)
         signal = age * 8000 + beds * 20000 + (800000 if station == "A17" else 0)
-        rows.append({
-            "station_code": station,
-            "station_distance_m": float(np.random.uniform(100, 1500)),
-            "building_area_ping": float(np.random.uniform(20, 80)),
-            "building_type": np.random.choice(bt_types),
-            "bedrooms": beds,
-            "living_rooms": int(np.random.choice([1, 2])),
-            "bathrooms": int(np.random.choice([1, 2])),
-            "building_age_years": age,
-            "floor": int(np.random.randint(1, 15)),
-            "total_floors": int(np.random.randint(5, 20)),
-            "floor_ratio": float(np.random.uniform(0.1, 0.9)),
-            "parking_type": np.random.choice(["坡道平面", "坡道機械", ""]),
-            "parking_area_ping": float(np.random.uniform(0, 15)),
-            "transaction_year": d.year,
-            "transaction_month": d.month,
-            "transaction_date": d,
-            "target_unit_price_twd": float(
-                np.random.uniform(300000, 500000) + signal
-            ),
-        })
+        rows.append(
+            {
+                "station_code": station,
+                "station_distance_m": float(np.random.uniform(100, 1500)),
+                "building_area_ping": float(np.random.uniform(20, 80)),
+                "building_type": np.random.choice(bt_types),
+                "bedrooms": beds,
+                "living_rooms": int(np.random.choice([1, 2])),
+                "bathrooms": int(np.random.choice([1, 2])),
+                "building_age_years": age,
+                "floor": int(np.random.randint(1, 15)),
+                "total_floors": int(np.random.randint(5, 20)),
+                "floor_ratio": float(np.random.uniform(0.1, 0.9)),
+                "parking_type": np.random.choice(["坡道平面", "坡道機械", ""]),
+                "parking_area_ping": float(np.random.uniform(0, 15)),
+                "transaction_year": d.year,
+                "transaction_month": d.month,
+                "transaction_date": d,
+                "target_unit_price_twd": float(np.random.uniform(300000, 500000) + signal),
+            }
+        )
     df = pd.DataFrame(rows)
     return add_derived_features(df)
 
@@ -136,9 +129,13 @@ def test_feature_experiments_use_identical_time_rows(model_frame):
     experiments = run_feature_experiments(split)
 
     expected_names = [
-        "base", "enhanced",
-        "without_transaction_trend", "without_station_building_type",
-        "without_age_band", "without_area_band", "without_floor_band",
+        "base",
+        "enhanced",
+        "without_transaction_trend",
+        "without_station_building_type",
+        "without_age_band",
+        "without_area_band",
+        "without_floor_band",
     ]
     assert [e.name for e in experiments] == expected_names
 
@@ -147,6 +144,7 @@ def test_feature_experiments_use_identical_time_rows(model_frame):
 
     for i, (ab_name, removed) in enumerate(ABLATIONS.items(), start=2):
         assert experiments[i].name == ab_name
+        assert experiments[i].candidate_errors == {}
         for r in removed:
             assert r not in experiments[i].feature_columns
 
@@ -190,9 +188,11 @@ def test_backtests_never_train_on_future_rows(model_frame):
 
 def test_release_checks_require_strict_a18_improvement():
     checks = evaluate_release_checks(
-        _metrics(98.0), _metrics(100.0),
+        _metrics(98.0),
+        _metrics(100.0),
         [_backtest(True), _backtest(True), _backtest(False)],
-        date(2026, 6, 12), date(2026, 6, 12),
+        date(2026, 6, 12),
+        date(2026, 6, 12),
     )
     assert checks["overall_mae_improved"] is True
     assert checks["a18_improved"] is False
@@ -201,9 +201,24 @@ def test_release_checks_require_strict_a18_improvement():
 
 def test_release_checks_require_two_passing_backtests():
     checks = evaluate_release_checks(
-        _metrics(97.0, a18=18.0), _metrics(100.0),
+        _metrics(97.0, a18=18.0),
+        _metrics(100.0),
         [_backtest(True), _backtest(False), _backtest(False)],
-        date(2026, 6, 12), date(2026, 6, 12),
+        date(2026, 6, 12),
+        date(2026, 6, 12),
     )
     assert checks["backtests_passed"] is False
+    assert checks["recommended"] is False
+
+
+def test_release_checks_require_all_three_backtests():
+    checks = evaluate_release_checks(
+        _metrics(97.0, a18=18.0),
+        _metrics(100.0),
+        [_backtest(True), _backtest(True)],
+        date(2026, 6, 12),
+        date(2026, 6, 12),
+    )
+    assert checks["backtests_passed"] is False
+    assert checks["backtest_stations_within_limit"] is False
     assert checks["recommended"] is False

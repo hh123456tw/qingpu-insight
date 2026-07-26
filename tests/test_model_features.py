@@ -130,26 +130,30 @@ def test_derived_features_are_identical_for_training_and_inference():
         parking_type="",
         parking_area_ping=0.0,
     )
-    raw = pd.DataFrame([{
-        "analysis_eligible": True,
-        "transaction_type": "resale",
-        "transaction_date": pd.Timestamp("2026-06-12"),
-        "station_code": "A18",
-        "station_distance_m": 500.0,
-        "building_area_ping": 20.0,
-        "building_type": "住宅大樓",
-        "bedrooms": 3,
-        "living_rooms": 2,
-        "bathrooms": 2,
-        "building_age_years": 5.0,
-        "floor": "15層",
-        "total_floors": "30層",
-        "parking_type": "",
-        "parking_area_sqm": 0.0,
-        "parking_price_twd": 0.0,
-        "total_price_twd": 12_000_000,
-        "unit_price_per_ping_twd": 600_000.0,
-    }])
+    raw = pd.DataFrame(
+        [
+            {
+                "analysis_eligible": True,
+                "transaction_type": "resale",
+                "transaction_date": pd.Timestamp("2026-06-12"),
+                "station_code": "A18",
+                "station_distance_m": 500.0,
+                "building_area_ping": 20.0,
+                "building_type": "住宅大樓",
+                "bedrooms": 3,
+                "living_rooms": 2,
+                "bathrooms": 2,
+                "building_age_years": 5.0,
+                "floor": "15層",
+                "total_floors": "30層",
+                "parking_type": "",
+                "parking_area_sqm": 0.0,
+                "parking_price_twd": 0.0,
+                "total_price_twd": 12_000_000,
+                "unit_price_per_ping_twd": 600_000.0,
+            }
+        ]
+    )
     trained = build_model_frame(raw, "resale").iloc[0]
     inferred = input_frame(value, pd.Timestamp("2026-06-12")).iloc[0]
 
@@ -161,14 +165,16 @@ def test_derived_features_are_identical_for_training_and_inference():
 
 
 def test_derived_feature_boundaries_and_missing_values():
-    frame = pd.DataFrame({
-        "transaction_date": pd.to_datetime(["2026-01-01"] * 4),
-        "station_code": ["A18"] * 4,
-        "building_type": ["住宅大樓"] * 4,
-        "building_age_years": [0.0, 5.0, 20.0, np.nan],
-        "building_area_ping": [20.0, 20.01, 50.0, 50.01],
-        "floor_ratio": [0.33, 0.34, 0.67, np.nan],
-    })
+    frame = pd.DataFrame(
+        {
+            "transaction_date": pd.to_datetime(["2026-01-01"] * 4),
+            "station_code": ["A18"] * 4,
+            "building_type": ["住宅大樓"] * 4,
+            "building_age_years": [0.0, 5.0, 20.0, np.nan],
+            "building_area_ping": [20.0, 20.01, 50.0, 50.01],
+            "floor_ratio": [0.33, 0.34, 0.67, np.nan],
+        }
+    )
     result = add_derived_features(frame)
     assert result["building_age_band"].tolist() == ["0_5", "5_10", "20_plus", "missing"]
     assert result["area_band"].tolist() == ["small", "standard", "standard", "large"]

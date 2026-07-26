@@ -5,12 +5,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
+import joblib
 import numpy as np
 import pandas as pd
 import pytest
 
 from qingpu_insight.jobs import ACTIVE_STATUSES, JobRun, JobService, JobStatus
 from qingpu_insight.model_artifacts import CandidateArtifactStore, sha256_file
+from qingpu_insight.model_features import BASE_FEATURE_COLUMNS
 from qingpu_insight.model_training_service import (
     ModelTrainingRequest,
     ModelTrainingService,
@@ -37,8 +39,7 @@ class FakeJobRepository:
             (
                 run
                 for run in self._runs.values()
-                if run.idempotency_key == idempotency_key
-                and run.status in ACTIVE_STATUSES
+                if run.idempotency_key == idempotency_key and run.status in ACTIVE_STATUSES
             ),
             None,
         )
@@ -73,30 +74,20 @@ class FakeJobRepository:
         self._runs[run_id] = replace(
             run,
             status=target_status,
-            started_at=(
-                run.started_at or now if target_status == "running" else run.started_at
-            ),
+            started_at=(run.started_at or now if target_status == "running" else run.started_at),
             finished_at=(
-                now
-                if target_status in ("succeeded", "failed", "skipped")
-                else run.finished_at
+                now if target_status in ("succeeded", "failed", "skipped") else run.finished_at
             ),
             attempt=run.attempt
             + (1 if (run.status == "retry_wait" and target_status == "running") else 0),
-            output_version=(
-                output_version if output_version is not None else run.output_version
-            ),
+            output_version=(output_version if output_version is not None else run.output_version),
             summary=summary if summary is not None else run.summary,
             error_code=error_code if error_code is not None else run.error_code,
-            error_message=(
-                error_message if error_message is not None else run.error_message
-            ),
+            error_message=(error_message if error_message is not None else run.error_message),
         )
         return True
 
-    def list_recent(
-        self, limit: int = 20, job_type: str | None = None
-    ) -> list[JobRun]:
+    def list_recent(self, limit: int = 20, job_type: str | None = None) -> list[JobRun]:
         return list(self._runs.values())[-limit:][::-1]
 
     def list_active(self, job_type: str) -> list[JobRun]:
@@ -122,9 +113,7 @@ def service_fixture(
         jobs=jobs,
         store=store,
         input_path=input_path,
-        source_version_provider=SourceVersionProvider(
-            commit="test-hash", dirty=False
-        ),
+        source_version_provider=SourceVersionProvider(commit="test-hash", dirty=False),
     )
     return service, jobs
 
@@ -262,12 +251,22 @@ def test_execute_fails_atomically_when_a_market_raises(
     call_count = 0
     original_run = mts.run_model_experiment
 
-    def failing_run(split, estimators=None, feature_columns=mts.FEATURE_COLUMNS):
+    def failing_run(
+        split,
+        estimators=None,
+        feature_columns=BASE_FEATURE_COLUMNS,
+        **kwargs,
+    ):
         nonlocal call_count
         call_count += 1
         if call_count > 1:
             raise RuntimeError("presale experiment failed")
-        return original_run(split, estimators, feature_columns=feature_columns)
+        return original_run(
+            split,
+            estimators,
+            feature_columns=feature_columns,
+            **kwargs,
+        )
 
     monkeypatch.setattr(mts, "run_model_experiment", failing_run)
 
@@ -298,6 +297,21 @@ def test_resale_training_writes_schema_v2_analysis(tmp_path, market_parquet):
     assert len(result.backtests) == 3
     assert "a18_improved" in result.release_checks
     assert result.recommended is result.release_checks["recommended"]
+    expected_reasons = {
+        "overall_mae_improved": "overall_mae_not_improved",
+        "stations_within_limit": "station_regression",
+        "a18_improved": "a18_not_improved",
+        "backtests_passed": "backtest_insufficient",
+        "backtest_stations_within_limit": "backtest_station_regression",
+        "candidate_fresh": "candidate_stale",
+    }
+    assert set(result.reason_codes) == {
+        reason for check, reason in expected_reasons.items() if not result.release_checks[check]
+    }
+    artifact = joblib.load(tmp_path / "candidates" / run.run_id / result.artifact_file)
+    source = pd.read_parquet(market_parquet)
+    resale_max = source.loc[source["transaction_type"].eq("resale"), "transaction_date"].max()
+    assert artifact.data_max_date == str(resale_max.date())
 
 
 def test_presale_training_does_not_run_resale_analysis(tmp_path, market_parquet):
@@ -309,3 +323,5 @@ def test_presale_training_does_not_run_resale_analysis(tmp_path, market_parquet)
     assert result.market == "presale"
     assert result.feature_experiments == []
     assert result.backtests == []
+    artifact = joblib.load(tmp_path / "candidates" / run.run_id / result.artifact_file)
+    assert artifact.feature_columns == BASE_FEATURE_COLUMNS

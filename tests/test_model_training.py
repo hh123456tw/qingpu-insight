@@ -5,7 +5,11 @@ import pandas as pd
 import pytest
 from sklearn.base import BaseEstimator
 
-from qingpu_insight.model_features import BASE_FEATURE_COLUMNS, FEATURE_COLUMNS, add_derived_features
+from qingpu_insight.model_features import (
+    BASE_FEATURE_COLUMNS,
+    FEATURE_COLUMNS,
+    add_derived_features,
+)
 from qingpu_insight.model_training import (
     BaselineEvaluationError,
     CandidateEvaluation,
@@ -339,13 +343,15 @@ def test_release_gate_ignores_unpublished_small_station_metrics():
 
 def test_recency_weights_use_24_month_half_life_and_floor(model_frame):
     latest = model_frame["transaction_date"].max().normalize()
-    sample = pd.DataFrame({
-        "transaction_date": [
-            latest,
-            latest - pd.DateOffset(months=24),
-            latest - pd.DateOffset(months=240),
-        ]
-    })
+    sample = pd.DataFrame(
+        {
+            "transaction_date": [
+                latest,
+                latest - pd.DateOffset(months=24),
+                latest - pd.DateOffset(months=240),
+            ]
+        }
+    )
     weights = recency_weights(sample, reference_date=latest)
     assert weights[0] == pytest.approx(1.0)
     assert weights[1] == pytest.approx(0.5)

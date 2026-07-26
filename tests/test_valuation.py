@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 from sklearn.dummy import DummyRegressor
 
-from qingpu_insight.model_features import FEATURE_COLUMNS
+from qingpu_insight.model_features import FEATURE_COLUMNS, ValuationInput
 from qingpu_insight.valuation import (
     ModelRegistry,
     ModelUnavailableError,
@@ -311,12 +311,14 @@ def test_confidence_low_when_degraded():
 
 def test_model_age_days_returns_non_negative(bundle):
     from qingpu_insight.valuation import model_age_days
+
     age = model_age_days(bundle, pd.Timestamp("2026-06-12"))
     assert age > 0
 
 
 def test_stale_model_uses_recent_baseline(bundle, market, valid_resale_input):
     from dataclasses import replace
+
     stale_bundle = replace(bundle, data_max_date="2024-12-12")
     result = valuate(
         valid_resale_input,
@@ -333,6 +335,7 @@ def test_stale_model_uses_recent_baseline(bundle, market, valid_resale_input):
 
 def test_fresh_model_remains_official(bundle, market, valid_resale_input):
     from dataclasses import replace
+
     fresh_bundle = replace(bundle, data_max_date="2024-12-12")
     result = valuate(
         valid_resale_input,
@@ -343,6 +346,37 @@ def test_fresh_model_remains_official(bundle, market, valid_resale_input):
     )
     assert result["degraded"] is False
     assert result["degraded_reason"] is None
+
+
+def test_presale_does_not_use_resale_staleness_rule(bundle, market):
+    presale_bundle = replace(
+        bundle,
+        transaction_type="presale",
+        data_max_date="2024-01-01",
+    )
+    presale_market = market.assign(transaction_type="presale")
+    input_ = ValuationInput(
+        transaction_type="presale",
+        station_code="A18",
+        station_distance_m=500,
+        building_area_ping=30,
+        building_type="住宅大樓",
+        bedrooms=3,
+        living_rooms=2,
+        bathrooms=2,
+        building_age_years=None,
+        floor=5,
+        total_floors=15,
+    )
+    result = valuate(
+        input_,
+        FakeRegistry(presale_bundle),
+        presale_market,
+        latest_data_date=pd.Timestamp("2026-06-12"),
+        stale_after_days=180,
+    )
+    assert result["degraded"] is False
+    assert result["model"]["name"] == "ridge"
 
 
 def test_degraded_valuation_uses_recent_same_station_and_building_type(valid_resale_input):

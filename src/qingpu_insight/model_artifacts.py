@@ -92,9 +92,7 @@ class CandidateArtifactStore:
     def commit(self, run_id: str, manifest: TrainingManifest) -> Path:
         normalized = self._normalize(run_id)
         if str(manifest.run_id) != normalized:
-            raise ValueError(
-                f"manifest.run_id {manifest.run_id} does not match run_id {run_id}"
-            )
+            raise ValueError(f"manifest.run_id {manifest.run_id} does not match run_id {run_id}")
 
         stage = self._root / f".tmp-{normalized}"
         final = self._root / normalized
@@ -123,9 +121,7 @@ class CandidateArtifactStore:
                 except Exception:
                     raise ValueError(f"{result.artifact_file} is not a valid joblib file") from None
                 if not isinstance(bundle, ValuationBundle):
-                    raise TypeError(
-                        f"{result.artifact_file} is not a ValuationBundle"
-                    )
+                    raise TypeError(f"{result.artifact_file} is not a ValuationBundle")
                 if bundle.transaction_type != result.market:
                     raise ValueError(
                         f"Market mismatch for {result.artifact_file}: "
@@ -139,9 +135,7 @@ class CandidateArtifactStore:
                 expected_hash = result.report_sha256[report_key]
                 actual_hash = sha256_file(report_path)
                 if actual_hash != expected_hash:
-                    raise ValueError(
-                        f"Hash mismatch for report {report_rel}"
-                    )
+                    raise ValueError(f"Hash mismatch for report {report_rel}")
 
         os.replace(str(stage), str(final))
         return final

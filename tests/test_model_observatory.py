@@ -20,9 +20,7 @@ from qingpu_insight.model_release import OfficialModelStore
 from qingpu_insight.valuation import ValuationBundle
 
 
-def bundle_fixture(
-    model_name: str = "ridge", transaction_type: str = "resale"
-) -> ValuationBundle:
+def bundle_fixture(model_name: str = "ridge", transaction_type: str = "resale") -> ValuationBundle:
     return ValuationBundle(
         transaction_type=transaction_type,
         model_name=model_name,
@@ -86,7 +84,9 @@ def manifest_fixture(
 
 
 def _setup_official_store(
-    store: OfficialModelStore, market: str, bundle: ValuationBundle,
+    store: OfficialModelStore,
+    market: str,
+    bundle: ValuationBundle,
 ) -> str:
     import shutil
     import tempfile
@@ -128,9 +128,7 @@ def _setup_official_store(
                 )
             ],
         )
-        (tmp / "manifest.json").write_text(
-            manifest.model_dump_json(indent=2), encoding="utf-8"
-        )
+        (tmp / "manifest.json").write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
         record = store.import_candidate(tmp, manifest, market)
         store.activate(market, record.version_id)
         return record.version_id
@@ -184,9 +182,7 @@ def observatory_fixture(
         def __init__(self) -> None:
             self._runs = job_runs
 
-        def list_recent(
-            self, limit: int = 20, job_type: str | None = None
-        ) -> list[JobRun]:
+        def list_recent(self, limit: int = 20, job_type: str | None = None) -> list[JobRun]:
             return list(self._runs.values())[:limit]
 
         def get(self, run_id: str) -> JobRun | None:
@@ -231,15 +227,11 @@ def observatory_fixture(
 
 
 class TestModelObservatoryStatus:
-    def test_official_model_separated_from_candidate_runs(
-        self, tmp_path: Path
-    ) -> None:
+    def test_official_model_separated_from_candidate_runs(self, tmp_path: Path) -> None:
         observatory = observatory_fixture(
             tmp_path,
             official_models={"resale": bundle_fixture(model_name="ridge")},
-            candidate_runs=[
-                manifest_fixture(selected_model="hist_gradient_boosting")
-            ],
+            candidate_runs=[manifest_fixture(selected_model="hist_gradient_boosting")],
         )
         status = observatory.status()
 
@@ -247,9 +239,7 @@ class TestModelObservatoryStatus:
         assert status["official_models"]["resale"]["role"] == "official"
         assert status["candidate_count"] == 1
 
-    def test_missing_official_artifact_is_safe_warning(
-        self, tmp_path: Path
-    ) -> None:
+    def test_missing_official_artifact_is_safe_warning(self, tmp_path: Path) -> None:
         status = observatory_fixture(tmp_path).status()
         assert status["official_models"]["resale"] == {
             "available": False,
@@ -260,9 +250,7 @@ class TestModelObservatoryStatus:
             "stale_after_days": 180,
         }
 
-    def test_legacy_runtime_model_is_visible_when_manifest_is_missing(
-        self, tmp_path: Path
-    ) -> None:
+    def test_legacy_runtime_model_is_visible_when_manifest_is_missing(self, tmp_path: Path) -> None:
         observatory = observatory_fixture(tmp_path)
         joblib.dump(
             bundle_fixture(model_name="hist_gradient_boosting"),
@@ -273,9 +261,7 @@ class TestModelObservatoryStatus:
 
         assert status["official_models"]["resale"]["available"] is True
         assert status["official_models"]["resale"]["role"] == "legacy_fallback"
-        assert status["official_models"]["resale"]["warning"] == (
-            "official_manifest_missing"
-        )
+        assert status["official_models"]["resale"]["warning"] == ("official_manifest_missing")
 
     def test_official_store_version_id_in_status(self, tmp_path: Path) -> None:
         artifact_dir = tmp_path / "artifacts2"
@@ -285,13 +271,13 @@ class TestModelObservatoryStatus:
         candidate_dir.mkdir()
 
         from test_model_release import _setup_candidate
-        candidate_root, manifest, _ = _setup_candidate(
-            tmp_path / "src", "resale", recommended=True
-        )
+
+        candidate_root, manifest, _ = _setup_candidate(tmp_path / "src", "resale", recommended=True)
         run_id = str(manifest.run_id)
         dest = candidate_dir / run_id
         if dest.exists():
             import shutil
+
             shutil.rmtree(dest)
         candidate_root.rename(dest)
 
@@ -299,6 +285,7 @@ class TestModelObservatoryStatus:
         store.activate("resale", record.version_id)
 
         from qingpu_insight.model_artifacts import CandidateArtifactStore
+
         cs = CandidateArtifactStore(candidate_dir)
 
         input_path = tmp_path / "data2" / "processed" / "market_transactions.parquet"
@@ -306,26 +293,43 @@ class TestModelObservatoryStatus:
         rows = []
         for ttype in ("resale", "presale"):
             for i in range(100):
-                rows.append({
-                    "transaction_type": ttype, "analysis_eligible": True,
-                    "transaction_date": pd.Timestamp("2023-01-01") + pd.DateOffset(days=i),
-                    "station_code": ["A17", "A18", "A19"][i % 3],
-                })
+                rows.append(
+                    {
+                        "transaction_type": ttype,
+                        "analysis_eligible": True,
+                        "transaction_date": pd.Timestamp("2023-01-01") + pd.DateOffset(days=i),
+                        "station_code": ["A17", "A18", "A19"][i % 3],
+                    }
+                )
         pd.DataFrame(rows).to_parquet(input_path, index=False)
 
         dummy_service = type("FakeModelTrainingService", (), {})()
 
         class _FakeJobRepo:
-            def list_recent(self, limit=20, job_type=None): return []
-            def get(self, run_id): return None
-            def find_active_by_key(self, k): return None
-            def create_or_get(self, r): return r, True
-            def list_active(self, jt): return []
-            def update_summary(self, *a, **kw): return True
-            def transition(self, *a, **kw): return True
+            def list_recent(self, limit=20, job_type=None):
+                return []
+
+            def get(self, run_id):
+                return None
+
+            def find_active_by_key(self, k):
+                return None
+
+            def create_or_get(self, r):
+                return r, True
+
+            def list_active(self, jt):
+                return []
+
+            def update_summary(self, *a, **kw):
+                return True
+
+            def transition(self, *a, **kw):
+                return True
 
         observatory = ModelObservatory(
-            artifact_dir=artifact_dir, candidate_store=cs,
+            artifact_dir=artifact_dir,
+            candidate_store=cs,
             model_training_service=dummy_service,
             job_service=JobService(_FakeJobRepo()),
             input_path=input_path,
@@ -342,13 +346,9 @@ class TestModelObservatoryStatus:
         assert status["data_status"]["raw_count"] == 200
         assert status["data_status"]["usable_counts"]["resale"] == 100
 
-    def test_list_runs_merges_job_history_with_manifests(
-        self, tmp_path: Path
-    ) -> None:
+    def test_list_runs_merges_job_history_with_manifests(self, tmp_path: Path) -> None:
         manifest = manifest_fixture()
-        observatory = observatory_fixture(
-            tmp_path, candidate_runs=[manifest]
-        )
+        observatory = observatory_fixture(tmp_path, candidate_runs=[manifest])
         runs = observatory.list_runs()
         assert len(runs) == 1
         assert runs[0]["run_id"] == str(manifest.run_id)
@@ -356,9 +356,7 @@ class TestModelObservatoryStatus:
 
     def test_get_run_returns_detailed_info(self, tmp_path: Path) -> None:
         manifest = manifest_fixture()
-        observatory = observatory_fixture(
-            tmp_path, candidate_runs=[manifest]
-        )
+        observatory = observatory_fixture(tmp_path, candidate_runs=[manifest])
         result = observatory.get_run(str(manifest.run_id))
         assert result is not None
         assert result["run_id"] == str(manifest.run_id)
@@ -369,13 +367,9 @@ class TestModelObservatoryStatus:
         observatory = observatory_fixture(tmp_path)
         assert observatory.get_run("nonexistent-run-id") is None
 
-    def test_get_run_includes_per_market_publishable_info(
-        self, tmp_path: Path
-    ) -> None:
+    def test_get_run_includes_per_market_publishable_info(self, tmp_path: Path) -> None:
         manifest = manifest_fixture(markets=["resale", "presale"])
-        observatory = observatory_fixture(
-            tmp_path, candidate_runs=[manifest]
-        )
+        observatory = observatory_fixture(tmp_path, candidate_runs=[manifest])
         result = observatory.get_run(str(manifest.run_id))
         assert result is not None
         assert "markets" in result
@@ -403,6 +397,7 @@ def test_schema_v1_run_detail_has_safe_empty_analysis(tmp_path: Path) -> None:
     manifest = manifest_fixture(markets=["resale"])
     observatory = observatory_fixture(tmp_path, candidate_runs=[manifest])
     detail = observatory.get_run(str(manifest.run_id))
+    assert detail["manifest"]["schema_version"] == 1
     result = detail["manifest"]["results"][0]
     assert result["analysis_available"] is False
     assert result["feature_experiments"] == []

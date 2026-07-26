@@ -84,6 +84,12 @@
     candidate_rejected: "候選模型被拒絕",
     not_recommended: "未通過發布門檻",
     baseline_selected: "基準模型表現最佳，未產生可發布的新模型",
+    overall_mae_not_improved: "整體 MAE 未改善至少 2%",
+    station_regression: "A17–A19 有生活圈退步超過 10%",
+    a18_not_improved: "A18 MAPE 未優於基準模型",
+    backtest_insufficient: "三期回測中優於基準模型的期數不足",
+    backtest_station_regression: "回測生活圈退步超過 10%",
+    candidate_stale: "候選模型資料落後最新官方資料超過 180 天",
     artifact_missing: "模型檔案遺失",
     sha256_mismatch: "模型檔案驗證失敗",
     corrupt_artifact: "模型檔案無法讀取",
@@ -151,10 +157,16 @@
 
   function modelComparisonRows(result) {
     var out = [];
-    var exps = (result && result.feature_experiments) || [];
-    for (var i = 0; i < exps.length; i++) {
-      var mae = exps[i].metrics && exps[i].metrics.overall && exps[i].metrics.overall.mae;
-      out.push({ name: exps[i].name, mae: mae != null ? mae : null });
+    var metrics = (result && result.selection_metrics) || {};
+    var names = Object.keys(metrics);
+    for (var i = 0; i < names.length; i++) {
+      var overall = metrics[names[i]] && metrics[names[i]].overall;
+      out.push({
+        name: names[i],
+        mae: overall && overall.mae != null ? overall.mae : null,
+        mape: overall && overall.mape != null ? overall.mape : null,
+        selected: names[i] === result.selected_model,
+      });
     }
     return out;
   }
@@ -162,39 +174,26 @@
   function stationRows(result) {
     var out = [];
     if (!result) return out;
-    var fMetrics = result.final_test_metrics;
-    if (fMetrics && typeof fMetrics === "object") {
-      var keys = Object.keys(fMetrics);
-      var target = null;
-      if (result.selected_model && fMetrics[result.selected_model]) {
-        target = fMetrics[result.selected_model];
-      } else if (keys.length > 0) {
-        target = fMetrics[keys[0]];
+    var finalMetrics = result.final_test_metrics || {};
+    var baseline = finalMetrics.baseline || {};
+    var candidate = finalMetrics[result.selected_model] || {};
+    var stations = ["A17", "A18", "A19"];
+    for (var i = 0; i < stations.length; i++) {
+      var key = "station:" + stations[i];
+      var candidateMape = candidate[key] && candidate[key].mape;
+      var baselineMape = baseline[key] && baseline[key].mape;
+      var comparison = null;
+      if (candidateMape != null && baselineMape != null) {
+        comparison = candidateMape < baselineMape
+          ? "improved"
+          : candidateMape > baselineMape ? "regressed" : "same";
       }
-      if (target && typeof target === "object") {
-        var mk = Object.keys(target);
-        for (var i = 0; i < mk.length; i++) {
-          if (mk[i].indexOf("station:") === 0) {
-            var s = mk[i].substring(8);
-            if (target[mk[i]] && target[mk[i]].mape != null) {
-              out.push({ station: s, mape: target[mk[i]].mape });
-            }
-          }
-        }
-      }
-      if (out.length > 0) return out;
-    }
-    var exps = result.feature_experiments || [];
-    var seen = {};
-    for (var i = 0; i < exps.length; i++) {
-      var m = exps[i].metrics || {};
-      var names = Object.keys(m);
-      for (var j = 0; j < names.length; j++) {
-        if (names[j].indexOf("station:") === 0) {
-          var st = names[j].substring(8);
-          if (!seen[st]) { seen[st] = true; out.push({ station: st, mape: m[names[j]].mape }); }
-        }
-      }
+      out.push({
+        station: stations[i],
+        mape: candidateMape != null ? candidateMape : null,
+        baselineMape: baselineMape != null ? baselineMape : null,
+        comparison: comparison,
+      });
     }
     return out;
   }
@@ -204,7 +203,21 @@
   }
 
   function backtestRows(result) {
-    return (result && result.backtests) || [];
+    var rows = (result && result.backtests) || [];
+    return rows.map(function (row) {
+      var candidate = row.candidate_metrics || {};
+      var baseline = row.baseline_metrics || {};
+      return {
+        cutoff_date: row.cutoff_date,
+        passed: row.passed === true,
+        stations_within_limit: row.stations_within_limit === true,
+        candidate_mae: candidate.overall && candidate.overall.mae,
+        baseline_mae: baseline.overall && baseline.overall.mae,
+        a17_mape: candidate["station:A17"] && candidate["station:A17"].mape,
+        a18_mape: candidate["station:A18"] && candidate["station:A18"].mape,
+        a19_mape: candidate["station:A19"] && candidate["station:A19"].mape,
+      };
+    });
   }
 
   function releaseCheckRows(result) {

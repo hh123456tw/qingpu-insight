@@ -189,7 +189,7 @@
     <section id="admin-diagnostics"><h2>診斷</h2><div class="admin-content"></div></section>
   </main>
   <script src="{{ url_for('static', filename='job_polling.js') }}"></script>
-  <script src="{{ url_for('static', filename='models_admin.js') }}"></script>
+  <script src="{{ url_for('static', filename='models_admin.js') }}?v=20260727"></script>
   <script src="{{ url_for('static', filename='admin.js') }}"></script>
   <script>
     (function () {
@@ -422,7 +422,7 @@
         table.className = "ma-table";
         var thead = document.createElement("thead");
         var hr = document.createElement("tr");
-        ["實驗名稱", "MAE"].forEach(function(t) {
+        ["模型", "MAE", "MAPE", "選定"].forEach(function(t) {
           var th = document.createElement("th"); th.textContent = t; hr.appendChild(th);
         });
         thead.appendChild(hr);
@@ -433,6 +433,8 @@
           var tr = document.createElement("tr");
           var nameTd = document.createElement("td"); nameTd.textContent = r.name; tr.appendChild(nameTd);
           var maeTd = document.createElement("td"); maeTd.textContent = r.mae != null ? String(r.mae) : "—"; tr.appendChild(maeTd);
+          var mapeTd = document.createElement("td"); mapeTd.textContent = r.mape != null ? r.mape + "%" : "—"; tr.appendChild(mapeTd);
+          var selectedTd = document.createElement("td"); selectedTd.textContent = r.selected ? "是" : "否"; tr.appendChild(selectedTd);
           tbody.appendChild(tr);
         }
         table.appendChild(tbody);
@@ -451,7 +453,7 @@
         table.className = "ma-table";
         var thead = document.createElement("thead");
         var hr = document.createElement("tr");
-        ["站點", "MAPE"].forEach(function(t) {
+        ["站點", "候選 MAPE", "Baseline MAPE", "改善狀態"].forEach(function(t) {
           var th = document.createElement("th"); th.textContent = t; hr.appendChild(th);
         });
         thead.appendChild(hr);
@@ -465,6 +467,18 @@
           mpTd.textContent = s.mape != null ? s.mape + "%" : "—";
           mpTd.className = "ma-station-mape";
           tr.appendChild(mpTd);
+          var baseTd = document.createElement("td");
+          baseTd.textContent = s.baselineMape != null ? s.baselineMape + "%" : "—";
+          tr.appendChild(baseTd);
+          var stateTd = document.createElement("td");
+          stateTd.textContent = s.comparison == null
+            ? "資料不足"
+            : s.comparison === "improved" ? "改善"
+            : s.comparison === "regressed" ? "退步" : "相同";
+          stateTd.className = s.comparison === "improved"
+            ? "ma-gate-pass"
+            : s.comparison === "regressed" ? "ma-gate-fail" : "";
+          tr.appendChild(stateTd);
           tbody.appendChild(tr);
         }
         table.appendChild(tbody);
@@ -516,7 +530,7 @@
         table.className = "ma-table";
         var thead = document.createElement("thead");
         var hr = document.createElement("tr");
-        ["截止日", "通過"].forEach(function(t) {
+        ["截止日", "候選 MAE", "Baseline MAE", "A17 MAPE", "A18 MAPE", "A19 MAPE", "通過"].forEach(function(t) {
           var th = document.createElement("th"); th.textContent = t; hr.appendChild(th);
         });
         thead.appendChild(hr);
@@ -526,6 +540,11 @@
           var b = backtests[i];
           var tr = document.createElement("tr");
           var cTd = document.createElement("td"); cTd.textContent = b.cutoff_date || "—"; tr.appendChild(cTd);
+          ["candidate_mae", "baseline_mae", "a17_mape", "a18_mape", "a19_mape"].forEach(function(key) {
+            var metricTd = document.createElement("td");
+            metricTd.textContent = b[key] != null ? String(b[key]) : "—";
+            tr.appendChild(metricTd);
+          });
           var pTd = document.createElement("td");
           pTd.textContent = b.passed ? "是" : "否";
           pTd.className = b.passed ? "ma-gate-pass" : "ma-gate-fail";
@@ -589,6 +608,20 @@
             }
           }
         }
+        [
+          ["缺值率", diagnostics.missing_rates],
+          ["極端值率", diagnostics.feature_extreme_rates]
+        ].forEach(function(group) {
+          if (!group[1]) return;
+          var keys = Object.keys(group[1]);
+          if (keys.length === 0) return;
+          var item = document.createElement("div");
+          item.className = "ma-diag-item";
+          item.textContent = group[0] + "：" + keys.map(function(key) {
+            return key + " " + (Number(group[1][key]) * 100).toFixed(1) + "%";
+          }).join("、");
+          wrap.appendChild(item);
+        });
         container.appendChild(wrap);
       }
 

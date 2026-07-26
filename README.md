@@ -332,14 +332,14 @@ Remove-Item Env:MYSQL_PWD
 現有候選模型為 `Ridge`、`RandomForest`、`HistGradientBoosting` 及 `RecentMedianBaseline`（僅作為基準線，不作為正式模型發布）。**XGBoost 被刻意排除**：本專案的資料規模（數千筆）不需要 XGBoost 的分散式加速優勢，且 `HistGradientBoostingRegressor` 在相同資料上已達到可比或更好的表現，同時減少相依套件數量。
 
 **衍生特徵**
-在基本特徵（車站距離、坪數、類型、樓層、車位等 14 個欄位）之上，新增五個衍生特徵：
+在中古屋基本特徵（車站距離、坪數、類型、樓層、車位等 15 個欄位）之上，新增五個衍生特徵：
 - `transaction_month_index`：交易年月數值，捕獲長期時間趨勢
 - `station_building_type`：車站與建物類型交互項
 - `building_age_band`：屋齡分群（0–5、5–10、10–20、20+ 年）
-- `area_band`：坪數分群（small < 20、standard 20–50、large > 50 坪）
+- `area_band`：坪數分群（small ≤ 20、standard > 20 且 ≤ 50、large > 50 坪）
 - `floor_band`：樓層比三分群（low、middle、high）
 
-訓練使用 **24 個月半衰期遞迴權重**（`recency_weights`），愈近期的交易權重愈高，權重下限為 0.10。
+中古屋訓練使用 **24 個月半衰期遞迴權重**（`recency_weights`），愈近期的交易權重愈高，權重下限為 0.10；預售屋維持原本不加權流程。
 
 **嚴格時間切割**
 所有評估使用嚴格的時間順序切割：
