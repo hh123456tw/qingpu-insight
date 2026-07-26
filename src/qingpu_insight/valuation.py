@@ -33,6 +33,11 @@ class ValuationBundle:
     metrics: dict[str, Any]
     feature_columns: tuple[str, ...] = BASE_FEATURE_COLUMNS
 
+    def __getattr__(self, name):
+        if name == "feature_columns":
+            return BASE_FEATURE_COLUMNS
+        raise AttributeError(f"ValuationBundle has no attribute {name!r}")
+
 
 class ModelUnavailableError(Exception):
     pass
