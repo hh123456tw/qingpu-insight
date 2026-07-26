@@ -224,8 +224,12 @@ NUMERIC_FEATURES = [
     "parking_area_ping",
     "transaction_year",
     "transaction_month",
+    "transaction_month_index",
 ]
-CATEGORICAL_FEATURES = ["station_code", "building_type", "parking_type"]
+CATEGORICAL_FEATURES = [
+    "station_code", "building_type", "parking_type",
+    "station_building_type", "building_age_band", "area_band", "floor_band",
+]
 
 
 def make_preprocessor(feature_columns=FEATURE_COLUMNS) -> ColumnTransformer:
