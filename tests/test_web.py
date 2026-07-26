@@ -2014,6 +2014,20 @@ class StubModelObservatory:
         return path
 
 
+class StubDashboardService:
+    def read(self) -> dict[str, object]:
+        return {
+            "mutation_ready": True,
+            "readiness": [],
+            "active_jobs": [],
+            "recent_jobs": [],
+            "health": None,
+            "backup": None,
+            "models": None,
+            "action_items": [],
+        }
+
+
 @pytest.fixture
 def model_admin_client(market_frame: pd.DataFrame) -> FlaskClient:
     from qingpu_insight.jobs import JobService
@@ -2032,6 +2046,11 @@ def model_admin_client(market_frame: pd.DataFrame) -> FlaskClient:
             model_training_service=mts,
             model_observatory=obs,
         ),
+    )
+    from dataclasses import replace
+    app.extensions["qingpu_admin_runtime"] = replace(
+        app.extensions["qingpu_admin_runtime"],
+        dashboard_service=StubDashboardService(),
     )
     with app.test_client() as client:
         with client.session_transaction() as sess:
@@ -2299,5 +2318,109 @@ def test_admin_page_has_eight_classified_sections(model_admin_client):
         "admin-llm", "admin-backups", "admin-jobs", "admin-diagnostics",
     ]
     assert soup.select_one('meta[name="csrf-token"]')["content"]
+
+
+def test_admin_overview_returns_readiness(model_admin_client):
+    response = model_admin_client.get("/api/admin/overview")
+    assert response.status_code == 200
+    assert response.get_json()["mutation_ready"] is True
+
+
+def test_admin_overview_never_leaks_probe_exception(model_admin_client, monkeypatch):
+    monkeypatch.setattr(
+        model_admin_client.application.extensions["qingpu_admin_runtime"].dashboard_service,
+        "read",
+        lambda: (_ for _ in ()).throw(RuntimeError("mysql://user:secret@localhost/db")),
+    )
+    response = model_admin_client.get("/api/admin/overview")
+    assert response.status_code == 503
+    assert "secret" not in response.get_data(as_text=True)
+
+
+def test_admin_jobs_returns_job_history(admin_app, admin_client):
+    app, repo, _, _ = admin_app
+    from datetime import UTC, datetime
+
+    from qingpu_insight.jobs import JobRun
+
+    now = datetime.now(UTC)
+    run1 = JobRun(
+        run_id="11111111-1111-4111-8111-111111111111",
+        job_type="listing_update", trigger="manual", idempotency_key="k1",
+        status="pending", started_at=None, finished_at=None,
+        attempt=1, input_version=None, output_version=None,
+        summary={}, error_code=None, error_message=None,
+    )
+    run2 = JobRun(
+        run_id="22222222-2222-4222-8222-222222222222",
+        job_type="listing_update", trigger="manual", idempotency_key="k2",
+        status="succeeded", started_at=now, finished_at=now,
+        attempt=1, input_version=None, output_version="v1",
+        summary={}, error_code=None, error_message=None,
+    )
+    run3 = JobRun(
+        run_id="33333333-3333-4333-8333-333333333333",
+        job_type="model_training", trigger="manual", idempotency_key="k3",
+        status="failed", started_at=now, finished_at=now,
+        attempt=1, input_version=None, output_version=None,
+        summary={}, error_code="worker_interrupted", error_message="worker interrupted",
+    )
+    repo._runs[run1.run_id] = run1
+    repo._runs[run2.run_id] = run2
+    repo._runs[run3.run_id] = run3
+
+    response = admin_client.get("/api/admin/jobs?limit=10")
+    assert response.status_code == 200
+    data = response.get_json()
+    assert len(data["items"]) == 3
+    assert data["limit"] == 10
+
+    assert data["items"][0]["run_id"] == run3.run_id
+    assert data["items"][0]["display_status"] == "interrupted"
+    assert data["items"][0]["info_url"] == f"/api/jobs/{run3.run_id}"
+
+    assert data["items"][1]["run_id"] == run2.run_id
+    assert data["items"][1]["display_status"] == "succeeded"
+    assert data["items"][1]["info_url"] == f"/api/jobs/{run2.run_id}"
+
+    assert data["items"][2]["run_id"] == run1.run_id
+    assert data["items"][2]["display_status"] == "queued"
+    assert data["items"][2]["info_url"] == f"/api/jobs/{run1.run_id}"
+
+
+def test_admin_jobs_filter_by_job_type(admin_app, admin_client):
+    app, repo, _, _ = admin_app
+    from datetime import UTC, datetime
+
+    from qingpu_insight.jobs import JobRun
+
+    now = datetime.now(UTC)
+    run = JobRun(
+        run_id="44444444-4444-4444-8444-444444444444",
+        job_type="listing_update", trigger="manual", idempotency_key="k4",
+        status="succeeded", started_at=now, finished_at=now,
+        attempt=1, input_version=None, output_version="v1",
+        summary={}, error_code=None, error_message=None,
+    )
+    repo._runs[run.run_id] = run
+
+    response = admin_client.get("/api/admin/jobs?limit=10&job_type=listing_update")
+    assert response.status_code == 200
+    data = response.get_json()
+    assert len(data["items"]) == 1
+
+    response = admin_client.get("/api/admin/jobs?limit=10&job_type=unknown_type")
+    assert response.status_code == 400
+    assert response.get_json()["error"]["fields"]["job_type"] == "unsupported"
+
+
+def test_admin_jobs_rejects_invalid_limit(admin_app, admin_client):
+    response = admin_client.get("/api/admin/jobs?limit=0")
+    assert response.status_code == 400
+    assert response.get_json()["error"]["fields"]["limit"] == "integer_1_to_100"
+
+    response = admin_client.get("/api/admin/jobs?limit=abc")
+    assert response.status_code == 400
+    assert response.get_json()["error"]["fields"]["limit"] == "integer_1_to_100"
 
 

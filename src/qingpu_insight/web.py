@@ -21,7 +21,7 @@ from werkzeug.datastructures import MultiDict
 from werkzeug.exceptions import HTTPException
 
 from qingpu_insight.admin_dashboard import AdminDashboardService, ReadinessItem
-from qingpu_insight.admin_web import AdminRuntime, create_admin_blueprint
+from qingpu_insight.admin_web import ADMIN_JOB_TYPES, AdminRuntime, create_admin_blueprint
 from qingpu_insight.backup_repository import MySQLBackupRepository
 from qingpu_insight.config import get_settings
 from qingpu_insight.evidence import UnknownCandidateError
@@ -175,8 +175,10 @@ def _create_production_admin_services(
         input_path=input_path,
     )
 
-    for interrupted in service.job_service.recover_interrupted("model_training"):
-        candidate_store.discard_staging(interrupted.run_id)
+    for jt in ADMIN_JOB_TYPES:
+        for interrupted in service.job_service.recover_interrupted(jt):
+            if jt == "model_training":
+                candidate_store.discard_staging(interrupted.run_id)
 
     return AdminServices(
         job_service=service.job_service,
@@ -1072,6 +1074,8 @@ def create_app(
         from dataclasses import replace
 
         admin_runtime = replace(admin_runtime, dashboard_service=dashboard_service)
+        if "qingpu_admin_runtime" in app.extensions:
+            app.extensions["qingpu_admin_runtime"] = admin_runtime
 
     _REPORT_SEMAPHORE = BoundedSemaphore(1)
 

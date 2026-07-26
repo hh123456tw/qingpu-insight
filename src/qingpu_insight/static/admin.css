@@ -40,3 +40,117 @@
 .admin-content {
   min-height: 2rem;
 }
+
+.admin-headline {
+  font-size: 1.2rem;
+  font-weight: 600;
+  margin: 0 0 0.75rem;
+}
+
+.admin-readiness-list {
+  margin: 0.75rem 0;
+}
+
+.readiness-item {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.4rem 0.6rem;
+  margin: 0.25rem 0;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+
+.readiness-healthy {
+  background: #e6ffe6;
+  color: #1a6b1a;
+}
+
+.readiness-warning {
+  background: #fff8e6;
+  color: #8a6d1a;
+}
+
+.readiness-blocked,
+.readiness-error {
+  background: #ffe6e6;
+  color: #a11;
+}
+
+.readiness-code {
+  font-weight: 600;
+  min-width: 8em;
+}
+
+.readiness-message {
+  flex: 1;
+}
+
+.admin-blocked {
+  background: #fff0f0;
+  border: 1px solid #d44;
+  color: #a22;
+  padding: 0.75rem 1rem;
+  margin: 0.75rem 0;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.admin-action-items {
+  margin: 0.75rem 0;
+}
+
+.admin-action-item {
+  padding: 0.3rem 0.6rem;
+  color: #333;
+  border-left: 3px solid #e68a2e;
+  margin: 0.25rem 0;
+  font-size: 0.9rem;
+}
+
+.admin-raw-readiness {
+  background: #f5f5f5;
+  border: 1px solid #ddd;
+  padding: 0.5rem;
+  font-size: 0.8rem;
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+
+.admin-job-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.admin-job-table th,
+.admin-job-table td {
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid #ddd;
+}
+
+.admin-job-table th {
+  background: #f0f0f0;
+  font-weight: 600;
+}
+
+.admin-job-table tbody tr:hover {
+  background: #fafafa;
+}
+
+.mutation-btn.disabled,
+.mutation-btn[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+details {
+  margin-top: 0.75rem;
+}
+
+details summary {
+  cursor: pointer;
+  color: #666;
+  font-size: 0.85rem;
+}
