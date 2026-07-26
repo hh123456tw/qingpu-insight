@@ -28,6 +28,7 @@ ABLATIONS = {
 
 def run_feature_experiments(split: TimeSplit) -> tuple[FeatureExperiment, ...]:
     from qingpu_insight.model_features import BASE_FEATURE_COLUMNS
+    from qingpu_insight.model_training import candidate_estimators
     experiments: list[FeatureExperiment] = []
 
     base_result = run_model_experiment(split, feature_columns=BASE_FEATURE_COLUMNS)
@@ -42,7 +43,9 @@ def run_feature_experiments(split: TimeSplit) -> tuple[FeatureExperiment, ...]:
         candidate_errors=base_result.candidate_errors,
     ))
 
-    enhanced_result = run_model_experiment(split, feature_columns=FEATURE_COLUMNS)
+    all_candidates = candidate_estimators(feature_columns=FEATURE_COLUMNS)
+    enhanced_result = run_model_experiment(split, feature_columns=FEATURE_COLUMNS, estimators=all_candidates)
+    enhanced_winner_name = enhanced_result.selected_name
     enhanced_selected = next(
         c for c in enhanced_result.selection_results if c.name == enhanced_result.selected_name
     )
@@ -56,7 +59,11 @@ def run_feature_experiments(split: TimeSplit) -> tuple[FeatureExperiment, ...]:
 
     for ab_name, removed in ABLATIONS.items():
         ablation_features = tuple(f for f in FEATURE_COLUMNS if f not in removed)
-        ablation_result = run_model_experiment(split, feature_columns=ablation_features)
+        ablation_result = run_model_experiment(
+            split,
+            feature_columns=ablation_features,
+            estimators={enhanced_winner_name: all_candidates[enhanced_winner_name]},
+        )
         ablation_selected = next(
             c for c in ablation_result.selection_results if c.name == ablation_result.selected_name
         )
