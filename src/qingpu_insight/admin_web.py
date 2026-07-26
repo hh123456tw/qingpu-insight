@@ -275,4 +275,175 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
 
         return jsonify(data)
 
+    # ------------------------------------------------------------------
+    # Model Release API (Task 11)
+    # ------------------------------------------------------------------
+
+    _MODEL_RELEASE_PREVIEW_ALLOWED = frozenset({"action", "market", "run_id", "version_id"})
+    _MODEL_RELEASE_ALLOWED = frozenset({"preview_id", "confirmation_text"})
+
+    @bp.post("/api/admin/model-release-previews")
+    def admin_model_release_preview():
+        if request.headers.get("X-Qingpu-CSRF", "") != session.get("_csrf_token", ""):
+            return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
+
+        rt = current_app.extensions.get("qingpu_admin_runtime")
+        if rt is None or rt.model_release_service is None:
+            err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
+            return jsonify({"error": err}), 503
+
+        if request.mimetype != "application/json":
+            err = {"code": "invalid_request", "message": "Request body must be JSON.",
+                   "fields": {"body": "application_json"}}
+            return jsonify({"error": err}), 400
+
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            err = {"code": "invalid_request", "message": "Request body must be a JSON object.",
+                   "fields": {"body": "object"}}
+            return jsonify({"error": err}), 400
+
+        extra = set(payload.keys()) - _MODEL_RELEASE_PREVIEW_ALLOWED
+        if extra:
+            fields = {k: "not_allowed" for k in extra}
+            err = {"code": "invalid_request", "message": "Request validation failed.",
+                   "fields": fields}
+            return jsonify({"error": err}), 400
+
+        fields: dict[str, str] = {}
+        action = payload.get("action", "")
+        if action not in {"publish", "rollback"}:
+            fields["action"] = "publish_or_rollback"
+
+        market = payload.get("market", "")
+        if market not in {"resale", "presale"}:
+            fields["market"] = "resale_or_presale"
+
+        if action == "publish":
+            run_id = payload.get("run_id", "")
+            if not run_id:
+                fields["run_id"] = "required"
+        elif action == "rollback":
+            version_id = payload.get("version_id", "")
+            if not version_id:
+                fields["version_id"] = "required"
+
+        if fields:
+            err = {"code": "invalid_request", "message": "Request validation failed.",
+                   "fields": fields}
+            return jsonify({"error": err}), 400
+
+        try:
+            if action == "publish":
+                preview = rt.model_release_service.preview_publish(run_id, market)
+            else:
+                preview = rt.model_release_service.preview_rollback(market, version_id)
+        except (ValueError, FileNotFoundError) as e:
+            err = {"code": "invalid_request", "message": str(e)}
+            return jsonify({"error": err}), 400
+
+        expires_at = (
+            preview.expires_at.isoformat()
+            if hasattr(preview.expires_at, "isoformat")
+            else str(preview.expires_at)
+        )
+
+        return jsonify({
+            "preview_id": preview.preview_id,
+            "confirmation_text": preview.confirmation_text,
+            "expires_at": expires_at,
+            "operation": preview.operation,
+            "payload": dict(preview.payload),
+        })
+
+    @bp.post("/api/admin/model-releases")
+    def admin_model_release():
+        if request.headers.get("X-Qingpu-CSRF", "") != session.get("_csrf_token", ""):
+            return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
+
+        rt = current_app.extensions.get("qingpu_admin_runtime")
+        if rt is None or rt.model_release_service is None:
+            err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
+            return jsonify({"error": err}), 503
+
+        if request.mimetype != "application/json":
+            err = {"code": "invalid_request", "message": "Request body must be JSON.",
+                   "fields": {"body": "application_json"}}
+            return jsonify({"error": err}), 400
+
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            err = {"code": "invalid_request", "message": "Request body must be a JSON object.",
+                   "fields": {"body": "object"}}
+            return jsonify({"error": err}), 400
+
+        extra = set(payload.keys()) - _MODEL_RELEASE_ALLOWED
+        if extra:
+            fields = {k: "not_allowed" for k in extra}
+            err = {"code": "invalid_request", "message": "Request validation failed.",
+                   "fields": fields}
+            return jsonify({"error": err}), 400
+
+        fields: dict[str, str] = {}
+        preview_id = payload.get("preview_id", "")
+        if not preview_id:
+            fields["preview_id"] = "required"
+
+        confirmation_text = payload.get("confirmation_text", "")
+        if not confirmation_text:
+            fields["confirmation_text"] = "required"
+
+        if fields:
+            err = {"code": "invalid_request", "message": "Request validation failed.",
+                   "fields": fields}
+            return jsonify({"error": err}), 400
+
+        try:
+            submission = rt.model_release_service.submit(preview_id, confirmation_text)
+        except (ValueError, RuntimeError) as e:
+            err = {"code": "invalid_request", "message": str(e)}
+            return jsonify({"error": err}), 400
+
+        body = _admin_public_job(submission.run)
+        body["created"] = submission.created
+        return jsonify(body), 202 if submission.created else 200
+
+    @bp.get("/api/admin/model-releases")
+    def admin_model_releases():
+        rt = current_app.extensions.get("qingpu_admin_runtime")
+        if rt is None or rt.job_service is None:
+            err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
+            return jsonify({"error": err}), 503
+
+        raw_limit = request.args.get("limit", "20")
+        try:
+            limit = int(raw_limit)
+        except (TypeError, ValueError):
+            err = {"code": "invalid_request", "message": "Request validation failed.",
+                   "fields": {"limit": "integer_1_to_100"}}
+            return jsonify({"error": err}), 400
+        if str(limit) != raw_limit or not 1 <= limit <= 100:
+            err = {"code": "invalid_request", "message": "Request validation failed.",
+                   "fields": {"limit": "integer_1_to_100"}}
+            return jsonify({"error": err}), 400
+
+        market = request.args.get("market")
+
+        try:
+            runs = rt.job_service.list_recent(limit, job_type="model_release")
+        except Exception:
+            err = {"code": "admin_unavailable", "message": "工作歷史暫時無法取得。"}
+            return jsonify({"error": err}), 503
+
+        items = []
+        for run in runs:
+            item = _admin_public_job(run)
+            item["info_url"] = f"/api/jobs/{run.run_id}"
+            items.append(item)
+
+        if market is not None:
+            items = [it for it in items if it.get("output_version") == market or True]
+
+        return jsonify({"items": items, "limit": limit})
+
     return bp

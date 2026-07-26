@@ -73,7 +73,26 @@
   </div>
   <button class="mutation-btn admin-btn" id="ls-run-all-btn">更新三類</button>
 </div></div></section>
-    <section id="admin-models"><h2>模型</h2><div class="admin-content"></div></section>
+    <section id="admin-models"><h2>模型</h2><div class="admin-content">
+      <div id="mr-status" class="mr-status-bar"></div>
+      <h3>官方模型</h3>
+      <div id="mr-official-cards" class="mr-cards"></div>
+      <h3>發布候選</h3>
+      <div id="mr-candidates" class="mr-candidates"></div>
+      <div id="mr-preview-dialog" class="mr-preview" style="display:none">
+        <h4 id="mr-preview-title">預覽發布</h4>
+        <p id="mr-preview-detail"></p>
+        <p>請輸入確認文字：</p>
+        <input type="text" id="mr-confirm-input" class="admin-input" placeholder="請輸入確認文字">
+        <p id="mr-preview-error" class="mr-error" style="display:none"></p>
+        <div class="admin-field-row">
+          <button id="mr-confirm-btn" class="mutation-btn admin-btn" disabled>確認發布</button>
+          <button id="mr-cancel-btn" class="admin-btn admin-btn-secondary">取消</button>
+        </div>
+      </div>
+      <h3>發布記錄</h3>
+      <div id="mr-history" class="mr-history"></div>
+    </div></section>
     <section id="admin-llm"><h2>LLM</h2><div class="admin-content"></div></section>
     <section id="admin-backups"><h2>備份</h2><div class="admin-content"></div></section>
     <section id="admin-jobs"><h2>工作</h2><div class="admin-content"></div></section>
@@ -81,5 +100,212 @@
   </main>
   <script src="{{ url_for('static', filename='job_polling.js') }}"></script>
   <script src="{{ url_for('static', filename='admin.js') }}"></script>
+  <script>
+    (function () {
+      var mr = window.QingpuAdmin;
+
+      function getCSRF() {
+        var meta = document.querySelector('meta[name="csrf-token"]');
+        return meta ? meta.getAttribute("content") : "";
+      }
+
+      function renderOfficialCards(data) {
+        var container = document.getElementById("mr-official-cards");
+        container.innerHTML = "";
+        var models = (data && data.official_models) || {};
+        var keys = Object.keys(models);
+        if (keys.length === 0) {
+          container.textContent = "無官方模型";
+          return;
+        }
+        for (var i = 0; i < keys.length; i++) {
+          var m = models[keys[i]];
+          var card = document.createElement("div");
+          card.className = "mr-card";
+          card.innerHTML = "<strong>" + (m.name || keys[i]) + "</strong> (" + keys[i] + ")" +
+            (m.version_id ? " v" + m.version_id.slice(0, 8) : "");
+          container.appendChild(card);
+        }
+      }
+
+      function renderCandidates(data) {
+        var container = document.getElementById("mr-candidates");
+        container.innerHTML = "";
+        if (!data || data.candidate_count === 0) {
+          container.textContent = "尚無發布候選";
+          return;
+        }
+        var runs = (data && data.items) || [];
+        for (var i = 0; i < runs.length; i++) {
+          var run = runs[i];
+          var markets = run.markets || run.manifest ? (run.manifest.markets || []) : [];
+          for (var j = 0; j < markets.length; j++) {
+            var market = markets[j];
+            var marketInfo = run.markets_info && run.markets_info[market];
+            var publishable = marketInfo && marketInfo.publishable;
+            var blockers = (marketInfo && marketInfo.release_blockers) || [];
+            var el = document.createElement("div");
+            el.className = "mr-candidate";
+            el.innerHTML = "<span>" + market + " — " + (run.run_id ? run.run_id.slice(0, 8) : "") + "</span>";
+            if (publishable) {
+              var btn = document.createElement("button");
+              btn.className = "mutation-btn admin-btn mr-publish-btn";
+              btn.textContent = "發布";
+              btn.dataset.market = market;
+              btn.dataset.runId = run.run_id;
+              btn.addEventListener("click", function (e) {
+                startPublishPreview(e.currentTarget.dataset.runId, e.currentTarget.dataset.market);
+              });
+              el.appendChild(btn);
+            } else if (blockers.length > 0) {
+              var reason = document.createElement("span");
+              reason.className = "mr-blocker";
+              reason.textContent = " (" + blockers.join(", ") + ")";
+              el.appendChild(reason);
+            }
+            container.appendChild(el);
+          }
+        }
+      }
+
+      function renderHistory(items) {
+        var container = document.getElementById("mr-history");
+        container.innerHTML = "";
+        if (!items || items.length === 0) {
+          container.textContent = "尚無發布記錄";
+          return;
+        }
+        for (var i = 0; i < items.length; i++) {
+          var item = items[i];
+          var el = document.createElement("div");
+          el.className = "mr-history-item";
+          el.textContent = item.run_id.slice(0, 8) + " — " + (item.status || "—") + " — " + (item.finished_at || "—");
+          container.appendChild(el);
+        }
+      }
+
+      var pendingPreview = null;
+
+      function startPublishPreview(runId, market) {
+        var payload = mr.buildReleasePreviewPayload("publish", market, runId);
+        var dialog = document.getElementById("mr-preview-dialog");
+        var title = document.getElementById("mr-preview-title");
+        var detail = document.getElementById("mr-preview-detail");
+        var input = document.getElementById("mr-confirm-input");
+        var confirmBtn = document.getElementById("mr-confirm-btn");
+        var errorEl = document.getElementById("mr-preview-error");
+
+        title.textContent = "正在取得預覽…";
+        detail.textContent = "";
+        dialog.style.display = "block";
+        confirmBtn.disabled = true;
+        input.value = "";
+        errorEl.style.display = "none";
+
+        fetch("/api/admin/model-release-previews", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Qingpu-CSRF": getCSRF() },
+          body: JSON.stringify(payload),
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (data.error) {
+              title.textContent = "預覽失敗";
+              detail.textContent = data.error.message || "無法建立發布預覽";
+              return;
+            }
+            pendingPreview = data;
+            title.textContent = "確認發布";
+            detail.textContent = data.confirmation_text;
+            confirmBtn.disabled = true;
+
+            input.addEventListener("input", function onChange() {
+              var match = mr.canConfirmDangerousAction(input.value, data.confirmation_text);
+              confirmBtn.disabled = !match;
+              if (match) errorEl.style.display = "none";
+            });
+          })
+          .catch(function () {
+            title.textContent = "預覽失敗";
+            detail.textContent = "網路錯誤";
+          });
+      }
+
+      function submitRelease() {
+        if (!pendingPreview) return;
+        var confirmBtn = document.getElementById("mr-confirm-btn");
+        var errorEl = document.getElementById("mr-preview-error");
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = "提交中…";
+
+        fetch("/api/admin/model-releases", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Qingpu-CSRF": getCSRF() },
+          body: JSON.stringify({
+            preview_id: pendingPreview.preview_id,
+            confirmation_text: pendingPreview.confirmation_text,
+          }),
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (data.error) {
+              errorEl.textContent = data.error.message || "提交失敗";
+              errorEl.style.display = "block";
+              confirmBtn.disabled = false;
+              confirmBtn.textContent = "確認發布";
+              return;
+            }
+            pendingPreview = null;
+            document.getElementById("mr-preview-dialog").style.display = "none";
+            loadModelStatus();
+            loadReleaseHistory();
+          })
+          .catch(function () {
+            errorEl.textContent = "網路錯誤";
+            errorEl.style.display = "block";
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = "確認發布";
+          });
+      }
+
+      function loadModelStatus() {
+        fetch("/api/admin/models/status")
+          .then(function (r) { if (r.ok) return r.json(); })
+          .then(function (data) {
+            if (data) {
+              renderOfficialCards(data);
+              var statusBar = document.getElementById("mr-status");
+              var officialKeys = Object.keys(data.official_models || {});
+              if (officialKeys.length > 0) {
+                statusBar.innerHTML = "官方模型就緒：" + officialKeys.join(", ");
+                statusBar.className = "mr-status-bar mr-ok";
+              } else {
+                statusBar.textContent = "尚無官方模型";
+                statusBar.className = "mr-status-bar mr-warn";
+              }
+            }
+          });
+      }
+
+      function loadReleaseHistory() {
+        fetch("/api/admin/model-releases")
+          .then(function (r) { if (r.ok) return r.json(); })
+          .then(function (data) {
+            if (data) renderHistory(data.items);
+          });
+      }
+
+      document.addEventListener("DOMContentLoaded", function () {
+        loadModelStatus();
+        loadReleaseHistory();
+
+        document.getElementById("mr-confirm-btn").addEventListener("click", submitRelease);
+        document.getElementById("mr-cancel-btn").addEventListener("click", function () {
+          pendingPreview = null;
+          document.getElementById("mr-preview-dialog").style.display = "none";
+        });
+      });
+    })();
+  </script>
 </body>
 </html>

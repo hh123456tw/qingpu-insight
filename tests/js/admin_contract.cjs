@@ -37,6 +37,19 @@ assert.throws(() => admin.buildOfficialUpdatePayload("115S2", "110S3"), /起始�
 assert.equal(admin.stageLabel("publishing_mysql"), "正在發布正式市場資料");
 assert.equal(typeof admin.runListingSequence, "function");
 
+assert.deepEqual(admin.buildReleasePreviewPayload("publish", "resale", "run-123"), {
+  action: "publish",
+  market: "resale",
+  run_id: "run-123",
+});
+assert.deepEqual(admin.buildReleasePreviewPayload("rollback", "presale", "v1"), {
+  action: "rollback",
+  market: "presale",
+  version_id: "v1",
+});
+assert.equal(admin.canConfirmDangerousAction("abc", "abc"), true);
+assert.equal(admin.canConfirmDangerousAction("abc", "def"), false);
+
 async function testListingSequenceKeepsTypesIndependent() {
   var submitted = [];
   var result = await admin.runListingSequence({

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import secrets
 import subprocess
+import uuid
 from concurrent.futures import Future
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -13,10 +14,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import pytest
+from bs4 import BeautifulSoup
 from flask.testing import FlaskClient
 from sklearn.dummy import DummyRegressor
-
-from bs4 import BeautifulSoup
 
 from qingpu_insight.jobs import JobRun, JobSubmission
 from qingpu_insight.market_metrics import MarketFilters
@@ -2596,5 +2596,298 @@ def test_official_data_quality_happy_path(market_frame, tmp_path) -> None:
 
     assert response.status_code == 200
     assert response.get_json() == expected_data
+
+
+# ------------------------------------------------------------------
+# Model Release API tests (Task 11)
+# ------------------------------------------------------------------
+
+
+class StubModelReleaseService:
+    def __init__(self, job_service) -> None:
+        self.job_service = job_service
+        self._previews: dict[str, Any] = {}
+        self._submissions: list[Any] = []
+
+    def preview_publish(self, run_id: str, market: str) -> Any:
+        from datetime import UTC, datetime, timedelta
+
+        from qingpu_insight.operation_previews import OperationPreview
+
+        preview_id = f"preview-{uuid.uuid4().hex[:8]}"
+        preview = OperationPreview(
+            preview_id=preview_id,
+            operation="model_publish",
+            payload={"operation": "publish", "market": market, "run_id": run_id},
+            confirmation_text=f"發布 {market} {run_id[:8]}",
+            expires_at=datetime.now(UTC) + timedelta(seconds=300),
+            consumed_at=None,
+        )
+        self._previews[preview_id] = preview
+        return preview
+
+    def preview_rollback(self, market: str, version_id: str) -> Any:
+        from datetime import UTC, datetime, timedelta
+
+        from qingpu_insight.operation_previews import OperationPreview
+
+        preview_id = f"preview-{uuid.uuid4().hex[:8]}"
+        preview = OperationPreview(
+            preview_id=preview_id,
+            operation="model_rollback",
+            payload={"operation": "rollback", "market": market, "version_id": version_id},
+            confirmation_text=f"回滾 {market} {version_id}",
+            expires_at=datetime.now(UTC) + timedelta(seconds=300),
+            consumed_at=None,
+        )
+        self._previews[preview_id] = preview
+        return preview
+
+    def submit(self, preview_id: str, confirmation_text: str) -> Any:
+
+        preview = self._previews.get(preview_id)
+        if preview is None:
+            raise ValueError(f"preview {preview_id!r} not found")
+        if preview.confirmation_text != confirmation_text:
+            raise ValueError("confirmation text mismatch")
+        if preview.consumed_at is not None:
+            raise ValueError("preview already consumed")
+
+        market = preview.payload["market"]
+        submission = self.job_service.create(
+            "model_release", f"model_release:{market}:active", "manual",
+        )
+        self._submissions.append(submission)
+        return submission
+
+
+@pytest.fixture
+def model_release_client(market_frame: pd.DataFrame) -> FlaskClient:
+    from qingpu_insight.jobs import JobService
+    from qingpu_insight.web import AdminServices, create_app
+
+    repo = MemoryAdminJobRepository()
+    job_service = JobService(repo)
+    mts = StubModelTrainingService(job_service)
+    obs = StubModelObservatory(job_service)
+    mrs = StubModelReleaseService(job_service)
+    app = create_app(
+        data_source=InMemoryMarketDataSource(market_frame),
+        admin_services=AdminServices(
+            job_service=job_service,
+            listing_update_service=StubListingUpdateService(job_service),
+            executor=FakeAdminExecutor(),
+            model_training_service=mts,
+            model_observatory=obs,
+            model_release_service=mrs,
+        ),
+    )
+    from dataclasses import replace
+    app.extensions["qingpu_admin_runtime"] = replace(
+        app.extensions["qingpu_admin_runtime"],
+        dashboard_service=StubDashboardService(),
+        model_release_service=mrs,
+    )
+    with app.test_client() as client:
+        with client.session_transaction() as sess:
+            sess["_csrf_token"] = "test-token"
+        yield client
+
+
+class TestModelReleaseApi:
+    def test_preview_publish_success(self, model_release_client) -> None:
+        response = model_release_client.post(
+            "/api/admin/model-release-previews",
+            json={
+                "action": "publish", "market": "resale",
+                "run_id": "00000000-0000-4000-8000-000000000000",
+            },
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 200
+        body = response.get_json()
+        assert "preview_id" in body
+        assert body["operation"] == "model_publish"
+        assert "confirmation_text" in body
+        assert "expires_at" in body
+
+    def test_preview_rollback_success(self, model_release_client) -> None:
+        response = model_release_client.post(
+            "/api/admin/model-release-previews",
+            json={"action": "rollback", "market": "presale", "version_id": "abc12345"},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 200
+        body = response.get_json()
+        assert body["operation"] == "model_rollback"
+        assert "preview_id" in body
+
+    def test_preview_rejects_non_json(self, model_release_client) -> None:
+        response = model_release_client.post(
+            "/api/admin/model-release-previews",
+            data="not json",
+            content_type="text/plain",
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+
+    def test_preview_rejects_missing_action(self, model_release_client) -> None:
+        response = model_release_client.post(
+            "/api/admin/model-release-previews",
+            json={"market": "resale", "run_id": "run-123"},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+        fields = response.get_json()["error"]["fields"]
+        assert "action" in fields
+
+    def test_preview_rejects_bad_action(self, model_release_client) -> None:
+        response = model_release_client.post(
+            "/api/admin/model-release-previews",
+            json={"action": "sync", "market": "resale", "run_id": "run-123"},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+
+    def test_preview_rejects_extra_fields(self, model_release_client) -> None:
+        response = model_release_client.post(
+            "/api/admin/model-release-previews",
+            json={
+                "action": "publish", "market": "resale",
+                "run_id": "run-123", "estimator": "xgboost",
+            },
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+        fields = response.get_json()["error"]["fields"]
+        assert "estimator" in fields
+
+    def test_preview_rejects_missing_version_id_for_rollback(self, model_release_client) -> None:
+        response = model_release_client.post(
+            "/api/admin/model-release-previews",
+            json={"action": "rollback", "market": "resale"},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+        fields = response.get_json()["error"]["fields"]
+        assert "version_id" in fields
+
+    def test_preview_rejects_missing_csrf(self, model_release_client) -> None:
+        response = model_release_client.post(
+            "/api/admin/model-release-previews",
+            json={"action": "publish", "market": "resale", "run_id": "run-123"},
+        )
+        assert response.status_code == 403
+
+    def test_preview_rejects_wrong_csrf(self, model_release_client) -> None:
+        response = model_release_client.post(
+            "/api/admin/model-release-previews",
+            json={"action": "publish", "market": "resale", "run_id": "run-123"},
+            headers={"X-Qingpu-CSRF": "wrong-token"},
+        )
+        assert response.status_code == 403
+
+    def test_release_submit_success(self, model_release_client) -> None:
+        preview = model_release_client.post(
+            "/api/admin/model-release-previews",
+            json={
+                "action": "publish", "market": "resale",
+                "run_id": "00000000-0000-4000-8000-000000000000",
+            },
+            headers={"X-Qingpu-CSRF": "test-token"},
+        ).get_json()
+
+        response = model_release_client.post(
+            "/api/admin/model-releases",
+            json={
+                "preview_id": preview["preview_id"],
+                "confirmation_text": preview["confirmation_text"],
+            },
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 202
+        body = response.get_json()
+        assert body["job_type"] == "model_release"
+        assert body["status"] == "pending"
+
+    def test_release_submit_rejects_missing_preview_id(self, model_release_client) -> None:
+        response = model_release_client.post(
+            "/api/admin/model-releases",
+            json={"confirmation_text": "發布 resale run-123"},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+        fields = response.get_json()["error"]["fields"]
+        assert "preview_id" in fields
+
+    def test_release_submit_rejects_missing_confirmation(self, model_release_client) -> None:
+        response = model_release_client.post(
+            "/api/admin/model-releases",
+            json={"preview_id": "pv-123"},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+
+    def test_release_submit_rejects_csrf(self, model_release_client) -> None:
+        response = model_release_client.post(
+            "/api/admin/model-releases",
+            json={"preview_id": "pv-123", "confirmation_text": "確認"},
+        )
+        assert response.status_code == 403
+
+    def test_release_list_returns_items(self, model_release_client) -> None:
+        response = model_release_client.get(
+            "/api/admin/model-releases",
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 200
+        body = response.get_json()
+        assert "items" in body
+        assert "limit" in body
+
+    def test_release_list_with_limit(self, model_release_client) -> None:
+        response = model_release_client.get(
+            "/api/admin/model-releases?limit=5",
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 200
+        assert response.get_json()["limit"] == 5
+
+    def test_release_list_rejects_invalid_limit(self, model_release_client) -> None:
+        response = model_release_client.get(
+            "/api/admin/model-releases?limit=0",
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+
+    def test_release_submit_rejects_extra_fields(self, model_release_client) -> None:
+        response = model_release_client.post(
+            "/api/admin/model-releases",
+            json={"preview_id": "pv-123", "confirmation_text": "確認", "force": True},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+        fields = response.get_json()["error"]["fields"]
+        assert "force" in fields
+
+    def test_model_admin_contract_in_node(self) -> None:
+        result = subprocess.run(
+            ["node", "tests/js/model_admin_contract.cjs"],
+            cwd=Path.cwd(),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    def test_admin_contract_in_node(self) -> None:
+        result = subprocess.run(
+            ["node", "tests/js/admin_contract.cjs"],
+            cwd=Path.cwd(),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
 
 

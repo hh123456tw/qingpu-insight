@@ -76,6 +76,36 @@
     };
   }
 
+  var REASON_LABELS = {
+    data_quality: "資料品質不足",
+    feature_missing: "特徵遺失",
+    convergence_failure: "收斂失敗",
+    validation_failed: "驗證未通過",
+    candidate_rejected: "候選模型被拒絕",
+    other: "其他原因",
+  };
+
+  function formatDatetime(iso) {
+    if (!iso) return "—";
+    try {
+      var d = new Date(iso);
+      return d.toLocaleString("zh-TW", { timeZone: "Asia/Taipei" });
+    } catch (_) {
+      return iso;
+    }
+  }
+
+  function buildReleasePreviewPayload(action, market, id) {
+    if (action === "publish") {
+      return { action: action, market: market, run_id: id };
+    }
+    return { action: action, market: market, version_id: id };
+  }
+
+  function canConfirmDangerousAction(typed, expected) {
+    return typed === expected;
+  }
+
   function submitTraining(marketValue) {
     var payload = buildTrainingPayload(marketValue);
     var token = csrfToken();
@@ -92,8 +122,12 @@
   return {
     MARKET_PAYLOADS: MARKET_PAYLOADS,
     STAGE_LABELS: STAGE_LABELS,
+    REASON_LABELS: REASON_LABELS,
     buildTrainingPayload: buildTrainingPayload,
     derivePageState: derivePageState,
+    formatDatetime: formatDatetime,
+    buildReleasePreviewPayload: buildReleasePreviewPayload,
+    canConfirmDangerousAction: canConfirmDangerousAction,
     submitTraining: submitTraining,
     csrfToken: csrfToken,
   };

@@ -459,6 +459,17 @@
     });
   }
 
+  function buildReleasePreviewPayload(action, market, id) {
+    if (action === "publish") {
+      return { action: action, market: market, run_id: id };
+    }
+    return { action: action, market: market, version_id: id };
+  }
+
+  function canConfirmDangerousAction(typed, expected) {
+    return typed === expected;
+  }
+
   return {
     SECTIONS: SECTIONS,
     normalizeSection: normalizeSection,
@@ -467,5 +478,7 @@
     buildOfficialUpdatePayload: buildOfficialUpdatePayload,
     stageLabel: stageLabel,
     runListingSequence: runListingSequence,
+    buildReleasePreviewPayload: buildReleasePreviewPayload,
+    canConfirmDangerousAction: canConfirmDangerousAction,
   };
 });

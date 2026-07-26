@@ -78,4 +78,13 @@ assert.deepEqual(admin.MARKET_PAYLOADS, {
   all: ["resale", "presale"],
 });
 
+assert.equal(admin.REASON_LABELS.data_quality, "資料品質不足");
+
+assert.equal(admin.formatDatetime("2026-07-26T12:00:00Z").length > 0, true);
+assert.equal(admin.formatDatetime(null), "—");
+assert.equal(admin.formatDatetime(""), "—");
+
+assert.equal(typeof admin.buildReleasePreviewPayload, "function");
+assert.equal(typeof admin.canConfirmDangerousAction, "function");
+
 process.stdout.write("model admin contract passed\n");
