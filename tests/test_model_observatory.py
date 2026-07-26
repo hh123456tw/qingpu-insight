@@ -142,6 +142,7 @@ def observatory_fixture(
     tmp_path: Path,
     official_models: dict[str, ValuationBundle] | None = None,
     candidate_runs: list[TrainingManifest] | None = None,
+    latest_data_date: pd.Timestamp | None = None,
 ) -> ModelObservatory:
     artifact_dir = tmp_path / "artifacts"
     artifact_dir.mkdir()
@@ -194,6 +195,11 @@ def observatory_fixture(
     input_path = tmp_path / "data" / "processed" / "market_transactions.parquet"
     input_path.parent.mkdir(parents=True, exist_ok=True)
 
+    start_date = (
+        latest_data_date - pd.DateOffset(days=99)
+        if latest_data_date is not None
+        else pd.Timestamp("2023-01-01")
+    )
     rows = []
     for ttype in ("resale", "presale"):
         for i in range(100):
@@ -201,8 +207,7 @@ def observatory_fixture(
                 {
                     "transaction_type": ttype,
                     "analysis_eligible": True,
-                    "transaction_date": pd.Timestamp("2023-01-01")
-                    + pd.DateOffset(days=i),
+                    "transaction_date": start_date + pd.DateOffset(days=i),
                     "station_code": ["A17", "A18", "A19"][i % 3],
                 }
             )
@@ -250,6 +255,9 @@ class TestModelObservatoryStatus:
             "available": False,
             "role": "official",
             "warning": "resale_model_unavailable",
+            "age_days": None,
+            "stale": False,
+            "stale_after_days": 180,
         }
 
     def test_legacy_runtime_model_is_visible_when_manifest_is_missing(
@@ -376,3 +384,27 @@ class TestModelObservatoryStatus:
             assert "publishable" in result["markets"][m]
             assert "release_blockers" in result["markets"][m]
             assert "current_official_version_id" in result["markets"][m]
+
+
+def test_official_model_status_marks_2024_model_stale(tmp_path: Path) -> None:
+    observatory = observatory_fixture(
+        tmp_path,
+        official_models={"resale": bundle_fixture()},
+        latest_data_date=pd.Timestamp("2026-06-12"),
+    )
+    status = observatory.status()
+    resale = status["official_models"]["resale"]
+    assert resale["stale"] is True
+    assert resale["age_days"] > 180
+    assert resale["stale_after_days"] == 180
+
+
+def test_schema_v1_run_detail_has_safe_empty_analysis(tmp_path: Path) -> None:
+    manifest = manifest_fixture(markets=["resale"])
+    observatory = observatory_fixture(tmp_path, candidate_runs=[manifest])
+    detail = observatory.get_run(str(manifest.run_id))
+    result = detail["manifest"]["results"][0]
+    assert result["analysis_available"] is False
+    assert result["feature_experiments"] == []
+    assert result["backtests"] == []
+    assert result["release_checks"] == {}

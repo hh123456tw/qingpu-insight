@@ -17,6 +17,15 @@ from qingpu_insight.model_training_service import ModelTrainingService, build_da
 from qingpu_insight.valuation import ValuationBundle
 
 
+def _project_result(r: Any) -> dict[str, Any]:
+    data = r.model_dump(mode="json")
+    fe = data.get("feature_experiments", [])
+    bt = data.get("backtests", [])
+    rc = data.get("release_checks", {})
+    data["analysis_available"] = bool(fe or bt or rc)
+    return data
+
+
 class ModelObservatory:
     def __init__(
         self,
@@ -55,7 +64,7 @@ class ModelObservatory:
             "warning": "official_manifest_missing",
         }
 
-    def status(self) -> dict[str, Any]:
+    def status(self, latest_data_date: pd.Timestamp | None = None) -> dict[str, Any]:
         official_models: dict[str, Any] = {}
         for market in ("resale", "presale"):
             if self._official_store is not None:
@@ -143,6 +152,21 @@ class ModelObservatory:
             if self._cached_snapshot is not None:
                 result["data_status"] = dict(self._cached_snapshot)
 
+        ref_date = latest_data_date
+        if ref_date is None and self._cached_snapshot is not None:
+            ref_date = pd.Timestamp(self._cached_snapshot["max_date"])
+
+        for market_info in official_models.values():
+            if market_info.get("available") and market_info.get("data_max_date") is not None and ref_date is not None:
+                data_max = pd.Timestamp(market_info["data_max_date"])
+                age = (ref_date - data_max).days
+                market_info["age_days"] = age
+                market_info["stale"] = age > 180
+            else:
+                market_info["age_days"] = None
+                market_info["stale"] = False
+            market_info["stale_after_days"] = 180
+
         return result
 
     def report_path(self, run_id: str, report_type: str) -> Path:
@@ -210,7 +234,7 @@ class ModelObservatory:
                 "source_dirty": manifest.source_dirty,
                 "data_snapshot": manifest.data_snapshot.model_dump(mode="json"),
                 "results": [
-                    r.model_dump(mode="json") for r in manifest.results
+                    _project_result(r) for r in manifest.results
                 ],
             }
 
