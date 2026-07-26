@@ -93,4 +93,18 @@ assert.equal(admin.marketLabel("presale"), "預售屋");
 assert.equal(admin.statusLabel("succeeded"), "成功");
 assert.equal(admin.statusLabel("interrupted"), "已中斷");
 
+var result = {
+  feature_experiments: [
+    { name: "enhanced", selected_model: "hist_gradient_boosting",
+      metrics: { overall: { mae: 67000 }, "station:A18": { mape: 16.2 } } }
+  ],
+  backtests: [{ cutoff_date: "2026-06-12", passed: true }],
+  release_checks: { overall_mae_improved: true, a18_improved: true, recommended: true }
+};
+assert.equal(admin.ablationRows(result)[0].name, "enhanced");
+assert.equal(admin.stationRows(result)[0].station, "A18");
+assert.equal(admin.backtestRows(result)[0].passed, true);
+assert.equal(admin.releaseCheckRows(result).at(-1).code, "recommended");
+assert.deepEqual(admin.ablationRows({}), []);
+
 process.stdout.write("model admin contract passed\n");

@@ -229,6 +229,12 @@
           if (m.role === "legacy_fallback") {
             lines.push("提醒：目前沿用舊版模型，尚未發布正式 manifest");
           }
+          if (m.stale) {
+            var staleLine = document.createElement("div");
+            staleLine.className = "ma-stale-badge";
+            staleLine.textContent = "模型已過期（落後 " + (m.age_days || "?") + " 天）";
+            card.appendChild(staleLine);
+          }
           for (var j = 0; j < lines.length; j++) {
             var line = document.createElement("div");
             line.className = "ma-label";
@@ -405,6 +411,187 @@
         }
       }
 
+      function renderComparisonTable(container, comparisons) {
+        if (comparisons.length === 0) return;
+        var h = document.createElement("h5");
+        h.textContent = "候選比較（整體 MAE）";
+        container.appendChild(h);
+        var wrap = document.createElement("div");
+        wrap.className = "ma-table-wrap ma-compact";
+        var table = document.createElement("table");
+        table.className = "ma-table";
+        var thead = document.createElement("thead");
+        var hr = document.createElement("tr");
+        ["實驗名稱", "MAE"].forEach(function(t) {
+          var th = document.createElement("th"); th.textContent = t; hr.appendChild(th);
+        });
+        thead.appendChild(hr);
+        table.appendChild(thead);
+        var tbody = document.createElement("tbody");
+        for (var i = 0; i < comparisons.length; i++) {
+          var r = comparisons[i];
+          var tr = document.createElement("tr");
+          var nameTd = document.createElement("td"); nameTd.textContent = r.name; tr.appendChild(nameTd);
+          var maeTd = document.createElement("td"); maeTd.textContent = r.mae != null ? String(r.mae) : "—"; tr.appendChild(maeTd);
+          tbody.appendChild(tr);
+        }
+        table.appendChild(tbody);
+        wrap.appendChild(table);
+        container.appendChild(wrap);
+      }
+
+      function renderStationTable(container, stations) {
+        if (stations.length === 0) return;
+        var h = document.createElement("h5");
+        h.textContent = "站點 MAPE";
+        container.appendChild(h);
+        var wrap = document.createElement("div");
+        wrap.className = "ma-table-wrap ma-compact";
+        var table = document.createElement("table");
+        table.className = "ma-table";
+        var thead = document.createElement("thead");
+        var hr = document.createElement("tr");
+        ["站點", "MAPE"].forEach(function(t) {
+          var th = document.createElement("th"); th.textContent = t; hr.appendChild(th);
+        });
+        thead.appendChild(hr);
+        table.appendChild(thead);
+        var tbody = document.createElement("tbody");
+        for (var i = 0; i < stations.length; i++) {
+          var s = stations[i];
+          var tr = document.createElement("tr");
+          var stTd = document.createElement("td"); stTd.textContent = s.station; tr.appendChild(stTd);
+          var mpTd = document.createElement("td");
+          mpTd.textContent = s.mape != null ? s.mape + "%" : "—";
+          mpTd.className = "ma-station-mape";
+          tr.appendChild(mpTd);
+          tbody.appendChild(tr);
+        }
+        table.appendChild(tbody);
+        wrap.appendChild(table);
+        container.appendChild(wrap);
+      }
+
+      function renderAblationTable(container, experiments) {
+        if (!experiments || experiments.length === 0) return;
+        var h = document.createElement("h5");
+        h.textContent = "特徵實驗／消融";
+        container.appendChild(h);
+        var wrap = document.createElement("div");
+        wrap.className = "ma-table-wrap ma-compact";
+        var table = document.createElement("table");
+        table.className = "ma-table";
+        var thead = document.createElement("thead");
+        var hr = document.createElement("tr");
+        ["實驗", "選定模型", "整體 MAE"].forEach(function(t) {
+          var th = document.createElement("th"); th.textContent = t; hr.appendChild(th);
+        });
+        thead.appendChild(hr);
+        table.appendChild(thead);
+        var tbody = document.createElement("tbody");
+        for (var i = 0; i < experiments.length; i++) {
+          var e = experiments[i];
+          var tr = document.createElement("tr");
+          var nTd = document.createElement("td"); nTd.textContent = e.name; tr.appendChild(nTd);
+          var sTd = document.createElement("td"); sTd.textContent = e.selected_model || "—"; tr.appendChild(sTd);
+          var mTd = document.createElement("td");
+          mTd.textContent = (e.metrics && e.metrics.overall && e.metrics.overall.mae != null)
+            ? String(e.metrics.overall.mae) : "—";
+          tr.appendChild(mTd);
+          tbody.appendChild(tr);
+        }
+        table.appendChild(tbody);
+        wrap.appendChild(table);
+        container.appendChild(wrap);
+      }
+
+      function renderBacktestTable(container, backtests) {
+        if (!backtests || backtests.length === 0) return;
+        var h = document.createElement("h5");
+        h.textContent = "時間回測";
+        container.appendChild(h);
+        var wrap = document.createElement("div");
+        wrap.className = "ma-table-wrap ma-compact";
+        var table = document.createElement("table");
+        table.className = "ma-table";
+        var thead = document.createElement("thead");
+        var hr = document.createElement("tr");
+        ["截止日", "通過"].forEach(function(t) {
+          var th = document.createElement("th"); th.textContent = t; hr.appendChild(th);
+        });
+        thead.appendChild(hr);
+        table.appendChild(thead);
+        var tbody = document.createElement("tbody");
+        for (var i = 0; i < backtests.length; i++) {
+          var b = backtests[i];
+          var tr = document.createElement("tr");
+          var cTd = document.createElement("td"); cTd.textContent = b.cutoff_date || "—"; tr.appendChild(cTd);
+          var pTd = document.createElement("td");
+          pTd.textContent = b.passed ? "是" : "否";
+          pTd.className = b.passed ? "ma-gate-pass" : "ma-gate-fail";
+          tr.appendChild(pTd);
+          tbody.appendChild(tr);
+        }
+        table.appendChild(tbody);
+        wrap.appendChild(table);
+        container.appendChild(wrap);
+      }
+
+      function renderReleaseChecks(container, checks) {
+        if (!checks || checks.length === 0) return;
+        var h = document.createElement("h5");
+        h.textContent = "發布檢查";
+        container.appendChild(h);
+        var list = document.createElement("div");
+        list.className = "ma-check-list";
+        for (var i = 0; i < checks.length; i++) {
+          var c = checks[i];
+          var item = document.createElement("div");
+          item.className = "ma-check-item";
+          var badge = document.createElement("span");
+          badge.className = c.passed ? "ma-badge-pass" : "ma-badge-fail";
+          badge.textContent = c.passed ? "通過" : "未通過";
+          item.appendChild(badge);
+          var label = document.createElement("span");
+          label.textContent = c.code;
+          item.appendChild(label);
+          list.appendChild(item);
+        }
+        container.appendChild(list);
+      }
+
+      function renderDataDiagnostics(container, diagnostics) {
+        if (!diagnostics || typeof diagnostics !== "object") return;
+        var h = document.createElement("h5");
+        h.textContent = "資料診斷";
+        container.appendChild(h);
+        var wrap = document.createElement("div");
+        wrap.className = "ma-diagnostics";
+        if (diagnostics.station_counts) {
+          var sc = document.createElement("div");
+          sc.className = "ma-diag-item";
+          sc.textContent = "站點筆數：" + JSON.stringify(diagnostics.station_counts).replace(/[{}",]/g, function(m) {
+            return m === "," ? "、" : m === "{" || m === "}" ? "" : "";
+          });
+          wrap.appendChild(sc);
+        }
+        if (diagnostics.split_summary) {
+          var ss = diagnostics.split_summary;
+          var splits = ["train", "calibration", "test"];
+          for (var i = 0; i < splits.length; i++) {
+            var sk = splits[i];
+            var sp = ss[sk];
+            if (sp && sp.row_count != null) {
+              var si = document.createElement("div");
+              si.className = "ma-diag-item";
+              si.textContent = sk + "：" + sp.row_count + " 筆 | " + (sp.date_min || "—") + " ～ " + (sp.date_max || "—");
+              wrap.appendChild(si);
+            }
+          }
+        }
+        container.appendChild(wrap);
+      }
+
       function renderTrainingDetail(detail) {
         var container = document.getElementById("ma-detail-content");
         container.innerHTML = "";
@@ -466,6 +653,24 @@
               section.appendChild(link);
             }
           }
+
+          var manifestObj = detail.manifest;
+          if (manifestObj) {
+            if (manifestObj.schema_version === 1) {
+              var v1Notice = document.createElement("p");
+              v1Notice.className = "ma-schema-notice";
+              v1Notice.textContent = "舊版模型未包含特徵實驗與時間回測。";
+              section.appendChild(v1Notice);
+            }
+          }
+
+          renderDataDiagnostics(section, result.diagnostics);
+          renderComparisonTable(section, ma.modelComparisonRows(result));
+          renderStationTable(section, ma.stationRows(result));
+          renderAblationTable(section, ma.ablationRows(result));
+          renderBacktestTable(section, ma.backtestRows(result));
+          renderReleaseChecks(section, ma.releaseCheckRows(result));
+
           container.appendChild(section);
         }
       }

@@ -149,6 +149,74 @@
     });
   }
 
+  function modelComparisonRows(result) {
+    var out = [];
+    var exps = (result && result.feature_experiments) || [];
+    for (var i = 0; i < exps.length; i++) {
+      var mae = exps[i].metrics && exps[i].metrics.overall && exps[i].metrics.overall.mae;
+      out.push({ name: exps[i].name, mae: mae != null ? mae : null });
+    }
+    return out;
+  }
+
+  function stationRows(result) {
+    var out = [];
+    if (!result) return out;
+    var fMetrics = result.final_test_metrics;
+    if (fMetrics && typeof fMetrics === "object") {
+      var keys = Object.keys(fMetrics);
+      var target = null;
+      if (result.selected_model && fMetrics[result.selected_model]) {
+        target = fMetrics[result.selected_model];
+      } else if (keys.length > 0) {
+        target = fMetrics[keys[0]];
+      }
+      if (target && typeof target === "object") {
+        var mk = Object.keys(target);
+        for (var i = 0; i < mk.length; i++) {
+          if (mk[i].indexOf("station:") === 0) {
+            var s = mk[i].substring(8);
+            if (target[mk[i]] && target[mk[i]].mape != null) {
+              out.push({ station: s, mape: target[mk[i]].mape });
+            }
+          }
+        }
+      }
+      if (out.length > 0) return out;
+    }
+    var exps = result.feature_experiments || [];
+    var seen = {};
+    for (var i = 0; i < exps.length; i++) {
+      var m = exps[i].metrics || {};
+      var names = Object.keys(m);
+      for (var j = 0; j < names.length; j++) {
+        if (names[j].indexOf("station:") === 0) {
+          var st = names[j].substring(8);
+          if (!seen[st]) { seen[st] = true; out.push({ station: st, mape: m[names[j]].mape }); }
+        }
+      }
+    }
+    return out;
+  }
+
+  function ablationRows(result) {
+    return (result && result.feature_experiments) || [];
+  }
+
+  function backtestRows(result) {
+    return (result && result.backtests) || [];
+  }
+
+  function releaseCheckRows(result) {
+    var checks = (result && result.release_checks) || {};
+    var names = Object.keys(checks);
+    var out = [];
+    for (var i = 0; i < names.length; i++) {
+      out.push({ code: names[i], passed: checks[names[i]] });
+    }
+    return out;
+  }
+
   return {
     MARKET_PAYLOADS: MARKET_PAYLOADS,
     STAGE_LABELS: STAGE_LABELS,
@@ -163,5 +231,10 @@
     canConfirmDangerousAction: canConfirmDangerousAction,
     submitTraining: submitTraining,
     csrfToken: csrfToken,
+    modelComparisonRows: modelComparisonRows,
+    stationRows: stationRows,
+    ablationRows: ablationRows,
+    backtestRows: backtestRows,
+    releaseCheckRows: releaseCheckRows,
   };
 });
