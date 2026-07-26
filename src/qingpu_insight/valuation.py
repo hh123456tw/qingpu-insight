@@ -112,6 +112,11 @@ class ModelRegistry:
         return self._bundles[transaction_type]
 
 
+def model_age_days(bundle: ValuationBundle, latest_data_date: pd.Timestamp) -> int:
+    data_date = pd.Timestamp(bundle.data_max_date).normalize()
+    return (latest_data_date.normalize() - data_date).days
+
+
 def prediction_interval(bundle: ValuationBundle, unit_price: float) -> tuple[float, float]:
     radius = bundle.interval_abs_residual_twd_per_ping
     return max(0.0, unit_price - radius), unit_price + radius
@@ -278,8 +283,13 @@ def valuate(
     input_: ValuationInput,
     registry: ModelRegistry,
     market: pd.DataFrame,
+    latest_data_date: pd.Timestamp | None = None,
+    stale_after_days: int = 180,
 ) -> dict[str, Any]:
+    from qingpu_insight.model_training import RecentMedianBaseline
+
     degraded = False
+    degraded_reason: str | None = None
     try:
         bundle = registry.get(input_.transaction_type)
     except ModelUnavailableError:
@@ -317,6 +327,7 @@ def valuate(
             "comparable_scope": "degraded",
             "data_date": str(data_date.date()),
             "degraded": True,
+            "degraded_reason": "artifact_unavailable",
             "asking_price_assessment": None,
             "model": {
                 "name": "recent_median_baseline",
@@ -324,6 +335,69 @@ def valuate(
                 "transaction_type": input_.transaction_type,
             },
         }
+
+    # Staleness check
+    stale = False
+    if latest_data_date is not None:
+        age = model_age_days(bundle, latest_data_date)
+        if age > stale_after_days:
+            stale = True
+            degraded = True
+            degraded_reason = "stale_model"
+
+    if stale:
+        recent = market.loc[market["transaction_type"] == input_.transaction_type].copy()
+        recent = recent.dropna(subset=["transaction_date", "unit_price_per_ping_twd"])
+        if recent.empty:
+            raise ModelUnavailableError("model artifact and market data are unavailable")
+        cutoff = latest_data_date.normalize() - pd.DateOffset(months=12)
+        recent = recent.loc[recent["transaction_date"] >= cutoff].copy()
+        recent["target_unit_price_twd"] = recent["unit_price_per_ping_twd"]
+        baseline = RecentMedianBaseline(months=12).fit(recent)
+        row = input_frame(input_, pd.Timestamp(bundle.data_max_date))
+        unit_price = float(baseline.predict(row)[0])
+        total_price = unit_price * input_.building_area_ping
+        interval = prediction_interval(bundle, unit_price)
+        factors = []
+        comparables_result = similar_transactions(bundle, row, market)
+        comparables_list = comparables_result["comparables"]
+        comparable_scope = comparables_result["comparable_scope"]
+        assessing = confidence_assessment(bundle, row, unit_price, interval, comparables_list, degraded=True)
+        assessing["confidence_reasons"].append("正式模型資料過舊")
+        result: dict[str, Any] = {
+            "transaction_type": input_.transaction_type,
+            "estimated_unit_price_per_ping_twd": round(unit_price),
+            "estimated_total_price_twd": round(total_price),
+            "interval_total_price_twd": (
+                round(interval[0] * input_.building_area_ping),
+                round(interval[1] * input_.building_area_ping),
+            ),
+            "confidence": assessing["confidence"],
+            "confidence_reasons": assessing["confidence_reasons"],
+            "factors": factors,
+            "comparables": comparables_list,
+            "comparable_scope": comparable_scope,
+            "data_date": bundle.data_max_date,
+            "degraded": True,
+            "degraded_reason": degraded_reason,
+            "model": {
+                "name": "recent_median_baseline",
+                "version": "fallback",
+                "transaction_type": input_.transaction_type,
+            },
+        }
+        if input_.asking_total_price_twd is not None and input_.asking_total_price_twd > 0:
+            low, high = result["interval_total_price_twd"]
+            if input_.asking_total_price_twd < low:
+                assessment = "偏低"
+            elif input_.asking_total_price_twd <= high:
+                assessment = "合理區間"
+            else:
+                assessment = "偏高"
+            result["asking_price_assessment"] = assessment
+        else:
+            result["asking_price_assessment"] = None
+        return result
 
     data_date = pd.Timestamp(bundle.data_max_date)
     row = input_frame(input_, data_date)
@@ -354,6 +428,7 @@ def valuate(
         "comparable_scope": comparable_scope,
         "data_date": bundle.data_max_date,
         "degraded": False,
+        "degraded_reason": None,
         "model": {
             "name": bundle.model_name,
             "version": bundle.model_version,

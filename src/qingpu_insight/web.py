@@ -907,9 +907,10 @@ def create_app(
             ), 400
 
         market = ds.load(MarketFilters(transaction_type=input_.transaction_type))
+        latest_data_date = pd.Timestamp(market["transaction_date"].max()) if not market.empty else None
         market_model = build_model_frame(market, input_.transaction_type)
 
-        result = valuate(input_, registry, market_model)
+        result = valuate(input_, registry, market_model, latest_data_date=latest_data_date)
         result["valuation_id"] = str(uuid.uuid4())
         store.save_with_id(result["valuation_id"], result)
         return jsonify(result), 201

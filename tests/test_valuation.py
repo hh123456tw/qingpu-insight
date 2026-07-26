@@ -309,6 +309,42 @@ def test_confidence_low_when_degraded():
     assert result["confidence"] == "low"
 
 
+def test_model_age_days_returns_non_negative(bundle):
+    from qingpu_insight.valuation import model_age_days
+    age = model_age_days(bundle, pd.Timestamp("2026-06-12"))
+    assert age > 0
+
+
+def test_stale_model_uses_recent_baseline(bundle, market, valid_resale_input):
+    from dataclasses import replace
+    stale_bundle = replace(bundle, data_max_date="2024-12-12")
+    result = valuate(
+        valid_resale_input,
+        FakeRegistry(stale_bundle),
+        market,
+        latest_data_date=pd.Timestamp("2026-06-12"),
+        stale_after_days=180,
+    )
+    assert result["degraded"] is True
+    assert result["degraded_reason"] == "stale_model"
+    assert result["model"]["name"] == "recent_median_baseline"
+    assert "正式模型資料過舊" in result["confidence_reasons"]
+
+
+def test_fresh_model_remains_official(bundle, market, valid_resale_input):
+    from dataclasses import replace
+    fresh_bundle = replace(bundle, data_max_date="2024-12-12")
+    result = valuate(
+        valid_resale_input,
+        FakeRegistry(fresh_bundle),
+        market,
+        latest_data_date=pd.Timestamp("2025-01-01"),
+        stale_after_days=180,
+    )
+    assert result["degraded"] is False
+    assert result["degraded_reason"] is None
+
+
 def test_degraded_valuation_uses_recent_same_station_and_building_type(valid_resale_input):
     market = pd.DataFrame(
         {
