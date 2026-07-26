@@ -1,3 +1,4 @@
+import inspect
 from dataclasses import dataclass
 from typing import Any
 
@@ -12,6 +13,18 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from qingpu_insight.model_features import FEATURE_COLUMNS
+
+
+def recency_weights(
+    frame: pd.DataFrame,
+    reference_date: pd.Timestamp | None = None,
+    half_life_months: int = 24,
+    minimum: float = 0.10,
+) -> np.ndarray:
+    latest = pd.Timestamp(reference_date or frame["transaction_date"].max()).normalize()
+    dates = pd.to_datetime(frame["transaction_date"])
+    ages = ((latest.year - dates.dt.year) * 12 + latest.month - dates.dt.month).clip(lower=0)
+    return np.maximum(minimum, np.power(0.5, ages.to_numpy() / half_life_months))
 
 
 @dataclass(frozen=True)
@@ -40,7 +53,7 @@ def split_by_time(
 
 
 class RecentMedianBaseline(BaseEstimator):
-    def __init__(self, months: int = 24):
+    def __init__(self, months: int = 12):
         self.months = months
         self._group_medians: pd.Series | None = None
         self._group_counts: pd.Series | None = None
@@ -151,25 +164,38 @@ class BaselineEvaluationError(Exception):
     pass
 
 
+def _fit_candidate(est, X, y, sample_weight=None):
+    if sample_weight is None:
+        est.fit(X, y)
+    elif isinstance(est, Pipeline):
+        est.fit(X, y, model__sample_weight=sample_weight)
+    elif "sample_weight" in inspect.signature(est.fit).parameters:
+        est.fit(X, y, sample_weight=sample_weight)
+    else:
+        est.fit(X, y)
+
+
 def evaluate_candidate(
     name: str,
     estimator: Any,
     train_frame: pd.DataFrame,
     evaluation_frame: pd.DataFrame,
+    feature_columns=FEATURE_COLUMNS,
 ) -> CandidateEvaluation:
     estimator.fit(
-        train_frame[list(FEATURE_COLUMNS)],
+        train_frame[list(feature_columns)],
         train_frame["target_unit_price_twd"],
     )
-    return evaluate_fitted_candidate(name, estimator, evaluation_frame)
+    return evaluate_fitted_candidate(name, estimator, evaluation_frame, feature_columns=feature_columns)
 
 
 def evaluate_fitted_candidate(
     name: str,
     estimator: Any,
     evaluation_frame: pd.DataFrame,
+    feature_columns=FEATURE_COLUMNS,
 ) -> CandidateEvaluation:
-    predicted = estimator.predict(evaluation_frame[list(FEATURE_COLUMNS)])
+    predicted = estimator.predict(evaluation_frame[list(feature_columns)])
     actual = evaluation_frame["target_unit_price_twd"].to_numpy()
     metrics = metric_rows(actual, predicted, evaluation_frame)
     return CandidateEvaluation(
@@ -202,7 +228,9 @@ NUMERIC_FEATURES = [
 CATEGORICAL_FEATURES = ["station_code", "building_type", "parking_type"]
 
 
-def make_preprocessor() -> ColumnTransformer:
+def make_preprocessor(feature_columns=FEATURE_COLUMNS) -> ColumnTransformer:
+    num = [c for c in NUMERIC_FEATURES if c in feature_columns]
+    cat = [c for c in CATEGORICAL_FEATURES if c in feature_columns]
     return ColumnTransformer(
         [
             (
@@ -220,7 +248,7 @@ def make_preprocessor() -> ColumnTransformer:
                         ("scale", StandardScaler()),
                     ]
                 ),
-                NUMERIC_FEATURES,
+                num,
             ),
             (
                 "categorical",
@@ -230,18 +258,19 @@ def make_preprocessor() -> ColumnTransformer:
                         ("onehot", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
                     ]
                 ),
-                CATEGORICAL_FEATURES,
+                cat,
             ),
         ]
     )
 
 
-def candidate_estimators(seed: int = 42) -> dict[str, Pipeline]:
+def candidate_estimators(feature_columns=FEATURE_COLUMNS, seed: int = 42) -> dict[str, Pipeline]:
+    prep = make_preprocessor(feature_columns)
     return {
-        "ridge": Pipeline([("features", make_preprocessor()), ("model", Ridge(alpha=10.0))]),
+        "ridge": Pipeline([("features", prep), ("model", Ridge(alpha=10.0))]),
         "random_forest": Pipeline(
             [
-                ("features", make_preprocessor()),
+                ("features", prep),
                 (
                     "model",
                     RandomForestRegressor(
@@ -256,7 +285,7 @@ def candidate_estimators(seed: int = 42) -> dict[str, Pipeline]:
         ),
         "hist_gradient_boosting": Pipeline(
             [
-                ("features", make_preprocessor()),
+                ("features", prep),
                 (
                     "model",
                     HistGradientBoostingRegressor(
@@ -297,9 +326,11 @@ def select_release_candidate(results: list[CandidateEvaluation]) -> CandidateEva
 def run_model_experiment(
     split: TimeSplit,
     estimators: dict[str, Any] | None = None,
+    feature_columns=FEATURE_COLUMNS,
+    use_recency_weights: bool = True,
 ) -> ModelExperiment:
     if estimators is None:
-        estimators = candidate_estimators()
+        estimators = candidate_estimators(feature_columns=feature_columns)
 
     baseline = RecentMedianBaseline()
 
@@ -314,7 +345,13 @@ def run_model_experiment(
 
     for name, est in estimators.items():
         try:
-            est.fit(split.train[list(FEATURE_COLUMNS)], split.train["target_unit_price_twd"])
+            w = recency_weights(split.train) if use_recency_weights else None
+            _fit_candidate(
+                est,
+                split.train[list(feature_columns)],
+                split.train["target_unit_price_twd"],
+                sample_weight=w,
+            )
             result = evaluate_fitted_candidate(name, est, split.calibration)
             calibration_results.append(result)
         except Exception:
