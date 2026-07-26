@@ -1,6 +1,105 @@
 # 青埔智價 Qingpu Insight
 
-以桃園機場捷運 A17～A19 生活圈為範圍的房價分析與 AI 估價專案。本倉庫實作 M0 資料可行性工作流程。
+以桃園機場捷運 A17～A19 生活圈為範圍的本機房價分析產品。專案整合官方實價登錄、
+公開房屋刊登、scikit-learn 估價模型、Flask Web、MySQL 維運，以及有 fact ID
+證據約束的 AI 買方報告。
+
+本專案同時服務三個目標：
+
+- **自用**：查詢青埔市場、比較刊登開價並產生單一物件買方報告。
+- **AIPE04 期中專題**：展示資料工程、機器學習、資料庫、Web 與生成式 AI 整合。
+- **求職作品集**：呈現一個從資料取得到本機產品化、測試與維運的完整 Python 專案。
+
+> 本工具僅供資料分析與購屋參考，不構成正式不動產鑑價、投資建議或未來價格預測。
+
+## 目前狀態
+
+截至 2026-07-25：
+
+- M0～M5 主要流程已完成。
+- 模型觀測台：`http://127.0.0.1:5000/admin/models`（限本機存取）
+  - 僅接受中古屋／預售屋／全部三種選擇
+  - 訓練結果寫入 `artifacts/candidates/<run_id>/`
+  - 絕不取代 `artifacts/resale.joblib` 或 `artifacts/presale.joblib`
+  - 需要 `QINGPU_SECRET_KEY`、MySQL 與本機存取
+- 完整測試：**999 tests passed**。
+- 靜態檢查：**Ruff passed**。
+- Rule Provider 真實 CLI smoke：`success=true`、Fact Accuracy `1.0`、Coverage `1.0`。
+- 正式使用方式是 **Windows 本機執行**；公開雲端部署不在目前必要範圍。
+
+## 五分鐘啟動
+
+### 前置需求
+
+- Windows 10/11
+- Python 3.11 以上
+- Chrome（需要更新 591 刊登時）
+- MySQL 8（需要刊登發布、工作中心、維運與買方報告時）
+
+### 1. 安裝（只在第一次建立環境時執行）
+
+若專案已經有 `.venv`，先不要再次執行 `python -m venv .venv`。直接使用既有環境，
+或確認 Python 版本後乾淨重建；不要用不同 Python 版本覆寫既有 `.venv`，否則可能留下
+不相容的 NumPy／Pandas binary。
+
+```powershell
+cd C:\path\to\qingpu-insight
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+```
+
+### 2. 啟動既有本機成果
+
+若 `data/processed/` 已有處理後資料，且 `artifacts/` 已有估價模型：
+
+```powershell
+.\.venv\Scripts\qingpu-web.exe
+```
+
+開啟 <http://127.0.0.1:5000>。未設定 MySQL 時可展示市場分析與 Parquet 相容功能；
+刊登發布、工作中心、維運與 M4.4 買方報告需要 MySQL。
+
+### 3. 驗證安裝
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\qingpu-data.exe llm-smoke --provider rule --model rule `
+  --output-dir outputs/m44-benchmark
+```
+
+Rule smoke 不需要 MySQL、Ollama 或 Gemini。成功時輸出 JSON 內的 `success`、
+`schema_success` 應為 `true`，Fact Accuracy 與 Coverage 應為 `1.0`。
+
+若看到 NumPy C-extension 的 `cp311`／`cp312` 不相容訊息，代表 `.venv` 曾被另一個
+Python 版本覆寫。確認沒有程式正在使用環境後，刪除並以同一版本乾淨重建：
+
+```powershell
+Remove-Item -Recurse -Force .venv
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+```
+
+## 系統流程
+
+```text
+官方實價登錄 + 桃園門牌
+        │
+        ▼
+下載 → 清理／定位 → 市場資料集 → 中古屋／預售屋估價模型
+                              │
+591 公開刊登 → 正規化／定位 ──┼→ MySQL 版本發布 → Flask Web
+                              │
+                              └→ Evidence Pack → Rule／Ollama／Gemini 報告
+```
+
+重要設計：
+
+- 中古屋（`resale`）與預售屋（`presale`）始終分開分析與建模。
+- 刊登價不會冒充成交價；租屋資料不會混入買賣實價比較。
+- 估價由已評估的模型負責；LLM 只負責依 Evidence Pack 整理說明。
+- 報告中的數字必須引用現有 fact ID；無效報告不會被 benchmark/smoke 判為成功。
+- 買方報告目前一次只分析 **一個物件**，避免多物件證據交叉引用。
 
 ## 資料來源
 
@@ -63,16 +162,19 @@ python -m venv .venv
 
 ```powershell
 # 設定連線字串
-$env:QINGPU_DATABASE_URL = "mysql+pymysql://qingpu:password@127.0.0.1:3306/qingpu_insight"
+$env:QINGPU_DATABASE_URL = "mysql+pymysql://<user>:<url-encoded-password>@127.0.0.1:3306/qingpu_insight"
 
-# 建立資料庫表格
-mysql -u root -p < database/001_market_schema.sql
+# 僅建立 M1 市場表格；完整 M4 migration 請見後文
+$env:MYSQL_PWD = Read-Host "MySQL password"
+Get-Content -Raw -Encoding UTF8 database/001_market_schema.sql |
+  mysql -h 127.0.0.1 -u <user> qingpu_insight
+Remove-Item Env:MYSQL_PWD
 
 # 載入市場資料到 MySQL
-.\.venv\Scripts\qingpu-data mysql-load
+.\.venv\Scripts\qingpu-data.exe mysql-load
 
 # 啟動網頁伺服器（自動使用 MySQL 資料源）
-.\.venv\Scripts\qingpu-web
+.\.venv\Scripts\qingpu-web.exe
 ```
 
 ### 環境變數
@@ -257,16 +359,26 @@ $env:QINGPU_PORT = "5000"
 $env:QINGPU_DEBUG = "0"
 ```
 
-MySQL 8 migration 依序套用；若用 `<database>` 與 `<user>`，MySQL client 會互動要求密碼，不把密碼寫進命令：
+MySQL 8 migration 必須依序套用。PowerShell 不支援 Linux 式的 `< file.sql`；
+以下把密碼暫存在目前 process 的環境變數，執行完成後立即移除，不把密碼寫進文件或 Git：
 
 ```powershell
-Get-Content database/001_market_schema.sql | mysql -h 127.0.0.1 -u <user> -p <database>
-Get-Content database/002_add_valuation_columns.sql | mysql -h 127.0.0.1 -u <user> -p <database>
-Get-Content database/003_listing_intelligence_schema.sql | mysql -h 127.0.0.1 -u <user> -p <database>
-Get-Content database/004_listing_range_fields.sql | mysql -h 127.0.0.1 -u <user> -p <database>
-Get-Content database/004_m4_jobs_publishing_schema.sql | mysql -h 127.0.0.1 -u <user> -p <database>
-Get-Content database/005_m43_health_backup_schema.sql | mysql -h 127.0.0.1 -u <user> -p <database>
-Get-Content database/006_m44_reports_schema.sql | mysql -h 127.0.0.1 -u <user> -p <database>
+$env:MYSQL_PWD = Read-Host "MySQL password"
+Get-Content -Raw -Encoding UTF8 database/001_market_schema.sql |
+  mysql -h 127.0.0.1 -u <user> <database>
+Get-Content -Raw -Encoding UTF8 database/002_add_valuation_columns.sql |
+  mysql -h 127.0.0.1 -u <user> <database>
+Get-Content -Raw -Encoding UTF8 database/003_listing_intelligence_schema.sql |
+  mysql -h 127.0.0.1 -u <user> <database>
+Get-Content -Raw -Encoding UTF8 database/004_listing_range_fields.sql |
+  mysql -h 127.0.0.1 -u <user> <database>
+Get-Content -Raw -Encoding UTF8 database/004_m4_jobs_publishing_schema.sql |
+  mysql -h 127.0.0.1 -u <user> <database>
+Get-Content -Raw -Encoding UTF8 database/005_m43_health_backup_schema.sql |
+  mysql -h 127.0.0.1 -u <user> <database>
+Get-Content -Raw -Encoding UTF8 database/006_m44_reports_schema.sql |
+  mysql -h 127.0.0.1 -u <user> <database>
+Remove-Item Env:MYSQL_PWD
 ```
 
 正式 artifact 寫入 `data/processed/listing_versions/<version>.parquet`；advisory lock 位於
@@ -357,6 +469,9 @@ code/message；不包含 DB URL、SQL、traceback、HTML、電話或內部 repos
 
 ### M4.4 Reports 工作流程
 
+M4.4 報告以已發布的 MySQL 刊登與市場資料建立 Evidence Pack，目前每次只接受一個
+candidate listing ID。這是刻意的產品限制，用來避免多物件的事實與數字交叉引用。
+
 ```powershell
 # 更新刊登資料（最少 1 頁）
 .\.venv\Scripts\qingpu-data.exe listing-update --types sale newhouse rental --max-pages 1
@@ -375,12 +490,13 @@ $listingId = mysql -h 127.0.0.1 -u root -p --batch --skip-column-names qingpu_in
 ```
 
 Ollama 與 Gemini 為可選的 LLM report provider。未設定時 Web UI 與 CLI 可選 provider `rule`，
-以 RuleReportProvider 產生規則式報告，不將 fallback 描述為模型成功。設定方式：
+以 RuleReportProvider 產生規則式報告。指定 Ollama／Gemini 但缺少必要設定時會明確失敗，
+不會以 Rule 結果冒充指定模型成功。設定方式：
 
 ```powershell
 $env:QINGPU_OLLAMA_MODEL = "gemma3:4b"
 $env:QINGPU_GEMINI_API_KEY = "<your-key>"
-$env:QINGPU_GEMINI_MODEL = "gemini-2.0-flash"
+$env:QINGPU_GEMINI_MODEL = "<available-model-id>"
 ```
 
 ### Smoke 與 Benchmark
@@ -392,17 +508,104 @@ $env:QINGPU_GEMINI_MODEL = "gemini-2.0-flash"
 # Ollama benchmark（需要已安裝的模型）
 $env:M44_BENCHMARK_MODELS = ((ollama list | Select-Object -Skip 1 -First 1) -split '\s+')[0]
 .\.venv\Scripts\qingpu-data.exe llm-benchmark --cases benchmarks/m44_cases.json --models-env M44_BENCHMARK_MODELS --provider ollama --output-dir outputs/m44-benchmark
+
+# Gemini benchmark；每個 --models 值都會真的建立對應模型 provider
+.\.venv\Scripts\qingpu-data.exe llm-benchmark `
+  --cases benchmarks/m44_cases.json `
+  --models "<available-model-id>" `
+  --provider gemini `
+  --output-dir outputs/m44-benchmark
 ```
 
-## M4.3 acceptance
+Benchmark artifact 位於：
+
+- `outputs/m44-benchmark/benchmark_results.json`
+- `outputs/m44-benchmark/benchmark_results.md`
+- `outputs/m44-benchmark/smoke_result.json`
+
+每筆結果同時保留 requested 與 actual provider/model。只有 schema 與 evidence validation
+都通過才算成功；所有案例失敗或沒有結果時，CLI 以非零 exit code 結束。
+
+## 驗收
+
+### 自動驗收
 
 ```powershell
 $env:PYTHONPATH = (Resolve-Path "src").Path
-.\.venv\Scripts\python.exe -m pytest tests/test_health.py tests/test_health_repository.py tests/test_backups.py tests/test_backup_repository.py tests/test_m43_release_gate.py tests/test_cli.py tests/test_web.py -q
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\python.exe -m ruff check .
 git diff --check
 ```
+
+2026-07-25 最近一次結果：
+
+- pytest：999 tests passed
+- Ruff：All checks passed
+- `git diff --check`：passed
+- Rule CLI smoke：passed
+
+### 展示前人工驗收
+
+自動測試不取代真實本機環境，期中展示或作品集錄影前仍需完成：
+
+1. 在真實 MySQL 套用 001～006 migrations（兩個 004 都要執行）。
+2. 以可見 Chrome 跑一次 `listing-update --types sale newhouse rental --max-pages 1`。
+3. 執行 `health-run`，確認目前 published dataset 與備份狀態。
+4. 建立一次真實備份，並以 `backup-restore-drill --backup-id <uuid>` 驗證。
+5. 實際操作市場分析、估價與一筆 Rule 買方報告。
+6. 若要展示 Ollama／Gemini，先在同一台展示電腦跑 smoke 或 benchmark。
+
+## 期中報告與求職作品集方向
+
+### 期中報告主線
+
+建議以這句話開場：
+
+> 我把分散的實價登錄與房屋刊登資料，整理成一個能查市場、估合理價格，
+> 並產生可追溯買方報告的青埔購屋決策工具。
+
+8～10 頁簡報可依序說明：
+
+1. 購屋者面對的資料分散與價格判讀問題。
+2. A17～A19 範圍、資料來源與授權邊界。
+3. 下載、清理、定位、版本發布的資料流程。
+4. 中古屋／預售屋分流與時間切分。
+5. 候選模型、release gate 與真實 MAE／MAPE／R²。
+6. Web 市場查詢與估價 Demo。
+7. 刊登更新與單一物件買方報告 Demo。
+8. Evidence Pack／fact ID 如何限制 LLM 幻覺。
+9. 999 個測試、隱私措施與已知限制。
+10. 結論與下一步。
+
+簡報中的資料筆數、最新日期與模型指標必須來自 `outputs/reports/`、
+model card 或 benchmark artifact，不自行補數字。
+
+### 求職作品集定位
+
+建議定位為「Python 資料／AI 應用工程師作品」，不要描述成已上線的全台房產平台。
+
+履歷範例：
+
+> 建置青埔 A17～A19 房價分析產品，串接官方實價登錄與公開刊登資料，
+> 完成 Pandas ETL、MySQL 資料版本、scikit-learn 估價模型訓練與比較、
+> Flask Web，以及具 fact ID 驗證的 LLM 買方報告。
+
+公開作品集建議包含：
+
+- 一張系統架構圖。
+- 3～5 張去識別化畫面。
+- 2～3 分鐘本機 Demo 影片。
+- 真實模型評估、模型卡與限制。
+- 可重現的安裝、測試與 smoke 指令。
+- 不提交密碼、Cookie、聯絡資訊、備份、原始 HTML、資料集與模型 artifact。
+
+面試時最值得深入說明的四個決策：
+
+1. 為何中古屋與預售屋必須分開。
+2. 為何模型評估使用時間切分。
+3. 為何 LLM 使用 Evidence Pack／fact ID。
+4. 如何用 immutable artifact、published version、health check 與 restore drill
+   降低資料更新風險。
 
 ## M4.2 acceptance
 
