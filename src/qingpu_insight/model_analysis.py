@@ -1,12 +1,11 @@
 import calendar
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import timedelta
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
-from qingpu_insight.model_features import FEATURE_COLUMNS
+from qingpu_insight.model_features import BASE_FEATURE_COLUMNS, FEATURE_COLUMNS
 from qingpu_insight.model_training import (
     RecentMedianBaseline,
     TimeSplit,
@@ -38,8 +37,6 @@ ABLATIONS = {
 
 
 def run_feature_experiments(split: TimeSplit) -> tuple[FeatureExperiment, ...]:
-    from qingpu_insight.model_features import BASE_FEATURE_COLUMNS
-    from qingpu_insight.model_training import candidate_estimators
     experiments: list[FeatureExperiment] = []
 
     base_result = run_model_experiment(split, feature_columns=BASE_FEATURE_COLUMNS)
