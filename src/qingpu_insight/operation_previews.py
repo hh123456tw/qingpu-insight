@@ -166,7 +166,7 @@ class InMemoryOperationPreviewRepository:
     def consume(self, preview_id: str, confirmation_text: str, now: datetime) -> OperationPreview:
         preview = self._previews.get(preview_id)
         if preview is None:
-            raise ValueError(f"Preview {preview_id!r} not found")
+            raise PreviewNotFound(f"Preview {preview_id!r} not found")
         if preview.confirmation_text != confirmation_text:
             raise PreviewConfirmationMismatch("Confirmation text does not match")
         if preview.consumed_at is not None:
