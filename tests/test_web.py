@@ -1026,9 +1026,18 @@ def admin_app(market_frame: pd.DataFrame):
     job_service = JobService(repo)
     listing_service = StubListingUpdateService(job_service)
     executor = FakeAdminExecutor()
+    official_ds = StubOfficialDataService(job_service)
     app = create_app(
         data_source=InMemoryMarketDataSource(market_frame),
-        admin_services=AdminServices(job_service, listing_service, executor),
+        admin_services=AdminServices(
+            job_service, listing_service, executor,
+            official_data_service=official_ds,
+        ),
+    )
+    from dataclasses import replace
+    app.extensions["qingpu_admin_runtime"] = replace(
+        app.extensions["qingpu_admin_runtime"],
+        dashboard_service=StubDashboardService(),
     )
     return app, repo, listing_service, executor
 
@@ -2014,6 +2023,24 @@ class StubModelObservatory:
         return path
 
 
+class StubOfficialDataService:
+    def __init__(self, job_service) -> None:
+        self.job_service = job_service
+        self.handoffs: list[str] = []
+        self.handoff_error: Exception | None = None
+
+    def submit(self, request):
+        return self.job_service.create(
+            "official_data_update", "official_data_update:active", request.trigger,
+        )
+
+    def handoff(self, submission, request, executor):
+        if self.handoff_error is not None:
+            raise self.handoff_error
+        self.handoffs.append(submission.run.run_id)
+        return executor.submit(submission.run.run_id, lambda: None)
+
+
 class StubDashboardService:
     def read(self) -> dict[str, object]:
         return {
@@ -2422,5 +2449,50 @@ def test_admin_jobs_rejects_invalid_limit(admin_app, admin_client):
     response = admin_client.get("/api/admin/jobs?limit=abc")
     assert response.status_code == 400
     assert response.get_json()["error"]["fields"]["limit"] == "integer_1_to_100"
+
+
+# ------------------------------------------------------------------
+# Official Data Update tests
+# ------------------------------------------------------------------
+
+
+def csrf_headers(client):
+    return {"X-Qingpu-CSRF": "test-token"}
+
+
+def post_official_update(client):
+    return client.post(
+        "/api/admin/official-data-updates",
+        json={"start_season": "110S3", "end_season": "115S2"},
+        headers=csrf_headers(client),
+    )
+
+
+def test_official_update_rejects_paths_and_unknown_fields(admin_client):
+    response = admin_client.post(
+        "/api/admin/official-data-updates",
+        json={"start_season": "110S3", "end_season": "115S2", "input": "C:/secret"},
+        headers=csrf_headers(admin_client),
+    )
+    assert response.status_code == 400
+    assert response.get_json()["error"]["fields"]["input"] == "not_allowed"
+
+
+def test_official_update_accepts_only_fixed_checkpoint_names(admin_client):
+    response = admin_client.post(
+        "/api/admin/official-data-updates",
+        json={"start_season": "110S3", "end_season": "115S2", "start_at": "C:/processed/transactions.parquet"},
+        headers=csrf_headers(admin_client),
+    )
+    assert response.status_code == 400
+    assert response.get_json()["error"]["fields"]["start_at"] == "unsupported"
+
+
+def test_official_update_returns_existing_active_job(admin_client):
+    first = post_official_update(admin_client)
+    second = post_official_update(admin_client)
+    assert first.status_code == 202
+    assert second.status_code == 200
+    assert second.get_json()["run_id"] == first.get_json()["run_id"]
 
 

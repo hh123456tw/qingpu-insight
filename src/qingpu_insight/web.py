@@ -662,6 +662,7 @@ def create_app(
             model_training_service=admin_services.model_training_service,
             model_observatory=admin_services.model_observatory,
             official_data_service=admin_services.official_data_service,
+            root=root,
         )
     else:
         admin_runtime = AdminRuntime(job_service=None, executor=None)

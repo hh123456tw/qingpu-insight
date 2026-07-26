@@ -26,7 +26,30 @@
   </aside>
   <main>
     <section id="admin-overview"><h2>總覽</h2><div class="admin-content"></div><div class="admin-mutation-blocked"></div></section>
-    <section id="admin-data"><h2>資料</h2><div class="admin-content"></div></section>
+    <section id="admin-data"><h2>資料</h2><div class="admin-content">
+        <h3>官方資料更新</h3>
+        <form id="official-data-form" class="admin-official-form">
+          <div class="admin-field-row">
+            <label>起始季度 <input type="text" id="od-start-season" value="110S3" class="admin-input" placeholder="ex: 110S3"></label>
+            <label>結束季度 <input type="text" id="od-end-season" value="115S2" class="admin-input" placeholder="ex: 115S2"></label>
+          </div>
+          <div class="admin-field-row admin-advanced-panel" style="display:none">
+            <label>從檢查點開始
+              <select id="od-start-at" class="admin-input">
+                <option value="acquire">取得資料 (acquire)</option>
+                <option value="analyse">分析地理編碼 (analyse)</option>
+                <option value="market_build">建立市場資料 (market_build)</option>
+                <option value="mysql_publish">發布至 MySQL (mysql_publish)</option>
+              </select>
+            </label>
+          </div>
+          <div class="admin-field-row">
+            <button type="submit" class="mutation-btn admin-btn" id="od-submit-btn">一鍵更新官方資料</button>
+            <button type="button" class="admin-btn admin-btn-secondary" id="od-toggle-advanced">進階選項</button>
+          </div>
+          <div id="od-status" class="admin-od-status"></div>
+        </form>
+      </div></section>
     <section id="admin-listings"><h2>刊登</h2><div class="admin-content"></div></section>
     <section id="admin-models"><h2>模型</h2><div class="admin-content"></div></section>
     <section id="admin-llm"><h2>LLM</h2><div class="admin-content"></div></section>

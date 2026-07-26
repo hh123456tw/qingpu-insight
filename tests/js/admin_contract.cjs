@@ -28,4 +28,12 @@ assert.equal(admin.jobStatusLabel("succeeded"), "成功");
 assert.equal(admin.jobStatusLabel("failed"), "失敗");
 assert.equal(admin.jobStatusLabel("interrupted"), "已中斷");
 
+assert.deepEqual(admin.buildOfficialUpdatePayload("110S3", "115S2", "acquire"), {
+  start_season: "110S3",
+  end_season: "115S2",
+  start_at: "acquire",
+});
+assert.throws(() => admin.buildOfficialUpdatePayload("115S2", "110S3"), /起始季度/);
+assert.equal(admin.stageLabel("publishing_mysql"), "正在發布正式市場資料");
+
 process.stdout.write("admin contract passed\n");

@@ -38,6 +38,35 @@
     return labels[status] || status;
   }
 
+  function buildOfficialUpdatePayload(startSeason, endSeason, startAt) {
+    if (startSeason && endSeason) {
+      var sk = startSeason.toUpperCase().split("S");
+      var ek = endSeason.toUpperCase().split("S");
+      if (parseInt(sk[0], 10) > parseInt(ek[0], 10) ||
+          (parseInt(sk[0], 10) === parseInt(ek[0], 10) &&
+           parseInt(sk[1], 10) > parseInt(ek[1], 10))) {
+        throw new Error("起始季度不得晚於結束季度");
+      }
+    }
+    return {
+      start_season: startSeason,
+      end_season: endSeason,
+      start_at: startAt || "acquire",
+    };
+  }
+
+  var STAGE_LABELS = {
+    acquiring: "正在取得官方資料",
+    analysing: "正在分析地理編碼",
+    building_market: "正在建立市場資料集",
+    publishing_mysql: "正在發布正式市場資料",
+    verifying: "正在驗證",
+  };
+
+  function stageLabel(stage) {
+    return STAGE_LABELS[stage] || stage;
+  }
+
   function renderOverview(data) {
     var view = overviewView(data);
     var container = document.querySelector("#admin-overview .admin-content");
@@ -148,8 +177,80 @@
     }
   }
 
+  function getCSRFToken() {
+    var meta = document.querySelector('meta[name="csrf-token"]');
+    return meta ? meta.getAttribute("content") : "";
+  }
+
+  function setupOfficialDataForm() {
+    var form = document.getElementById("official-data-form");
+    if (!form) return;
+    var statusEl = document.getElementById("od-status");
+    var toggleBtn = document.getElementById("od-toggle-advanced");
+    var advancedPanel = document.querySelector(".admin-advanced-panel");
+
+    if (toggleBtn && advancedPanel) {
+      toggleBtn.addEventListener("click", function () {
+        var hidden = advancedPanel.style.display === "none";
+        advancedPanel.style.display = hidden ? "block" : "none";
+        toggleBtn.textContent = hidden ? "隱藏進階選項" : "進階選項";
+      });
+    }
+
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var startSeason = document.getElementById("od-start-season").value.trim();
+      var endSeason = document.getElementById("od-end-season").value.trim();
+      var startAt = document.getElementById("od-start-at").value;
+      var submitBtn = document.getElementById("od-submit-btn");
+
+      var payload;
+      try {
+        payload = buildOfficialUpdatePayload(startSeason, endSeason, startAt);
+      } catch (err) {
+        statusEl.textContent = err.message;
+        statusEl.className = "admin-od-status admin-od-error";
+        return;
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = "更新中…";
+      statusEl.textContent = "";
+      statusEl.className = "admin-od-status";
+
+      fetch("/api/admin/official-data-updates", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Qingpu-CSRF": getCSRFToken(),
+        },
+        body: JSON.stringify(payload),
+      })
+        .then(function (r) { return r.json().then(function (d) { return { status: r.status, body: d }; }); })
+        .then(function (result) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = "一鍵更新官方資料";
+          if (result.body.error) {
+            var msg = result.body.error.message || "更新啟動失敗";
+            statusEl.textContent = msg;
+            statusEl.className = "admin-od-status admin-od-error";
+          } else {
+            statusEl.textContent = "更新工作已啟動 (run_id: " + result.body.run_id + ")";
+            statusEl.className = "admin-od-status admin-od-ok";
+          }
+        })
+        .catch(function () {
+          submitBtn.disabled = false;
+          submitBtn.textContent = "一鍵更新官方資料";
+          statusEl.textContent = "網路錯誤，請稍後再試。";
+          statusEl.className = "admin-od-status admin-od-error";
+        });
+    });
+  }
+
   if (typeof document !== "undefined") {
     document.addEventListener("DOMContentLoaded", function () {
+      setupOfficialDataForm();
       var sidebarLinks = document.querySelectorAll(".admin-sidebar a[href^='#']");
       for (var i = 0; i < sidebarLinks.length; i++) {
         sidebarLinks[i].addEventListener("click", function (e) {
@@ -181,5 +282,7 @@
     normalizeSection: normalizeSection,
     overviewView: overviewView,
     jobStatusLabel: jobStatusLabel,
+    buildOfficialUpdatePayload: buildOfficialUpdatePayload,
+    stageLabel: stageLabel,
   };
 });
