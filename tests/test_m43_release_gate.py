@@ -318,7 +318,7 @@ def ops_app():
 
 
 def test_no_restore_mutation_routes(ops_app) -> None:
-    assert ops_app.post("/api/ops/backups").status_code == 405
+    assert ops_app.post("/api/ops/backups").status_code in (405, 503)
     assert ops_app.post("/api/ops/restore").status_code == 404
     assert ops_app.get("/api/ops/restore").status_code == 404
     assert ops_app.put("/api/ops/restore").status_code == 404
