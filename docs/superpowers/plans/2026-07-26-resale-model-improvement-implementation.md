@@ -1,6 +1,6 @@
 # Resale Model Improvement Implementation Plan
 
-> **For the implementation model:** REQUIRED SUB-SKILLS: Use `superpowers:executing-plans` to execute this plan task-by-task and `superpowers:test-driven-development` for Tasks 1–10. Do not self-approve the result. Hand the commit range and fresh verification evidence back to the planning/review agent at the review gates below.
+> **Required workflow:** Use `superpowers:executing-plans` to execute this plan task-by-task and `superpowers:test-driven-development` for Tasks 1–10.
 
 **Goal:** Improve the resale valuation model's handling of rising prices and A18 subgroup stability, expose the evidence in the existing model observatory, and safely degrade stale production models to a recent baseline.
 
@@ -20,10 +20,6 @@
 - A candidate requires at least 2% overall MAE improvement, no station MAPE regression above 10%, strict A18 MAPE improvement, at least two of three backtests beating baseline, and no backtest station regression above 10%.
 - A production model is stale when its data date trails the latest official data by more than 180 days.
 - New behavior implementation uses strict TDD: failing test, observed RED, minimal implementation, observed GREEN, then refactor.
-- Post-implementation review fixes do not require test-first work. Fix findings directly, run affected tests after each fix, and run the full verification suite at the end.
-- The implementation model and review agent are separate roles. The implementation model executes the plan; the planning agent owns review acceptance.
-- Review gates must use `superpowers:requesting-code-review`, evaluate findings with `superpowers:receiving-code-review`, and use `superpowers:verification-before-completion` before any acceptance claim.
-- The implementation model must pause for review after Task 7 and after Task 11. It must provide `BASE_SHA`, `HEAD_SHA`, the plan path, changed-file list, and fresh test outputs.
 - Preserve all unrelated dirty-worktree changes. At execution time, use `superpowers:using-git-worktrees` before implementation if the current workspace is still dirty.
 
 ---
@@ -740,65 +736,6 @@ git commit -m "feat(models): orchestrate resale evidence pipeline"
 
 ---
 
-### Reviewer Gate A: Model and Artifact Pipeline
-
-**Owner:** Planning/review agent, not the implementation model.
-
-**Required Superpowers workflow:**
-- `superpowers:requesting-code-review`
-- `superpowers:receiving-code-review`
-- `superpowers:verification-before-completion`
-
-- [ ] **Step 1: Receive a precise implementation handoff**
-
-Require:
-
-```text
-PLAN: docs/superpowers/plans/2026-07-26-resale-model-improvement-implementation.md
-SCOPE: Tasks 1-7
-BASE_SHA: literal SHA recorded immediately before Task 1
-HEAD_SHA: literal SHA printed by `git rev-parse HEAD` after Task 7
-VERIFICATION: exact commands, exit codes, and failure counts
-```
-
-The implementation model records the first output before Task 1 and the second output after Task 7:
-
-```powershell
-git rev-parse HEAD
-# Execute and commit Tasks 1-7.
-git rev-parse HEAD
-```
-
-- [ ] **Step 2: Request an independent Superpowers code review**
-
-Use `superpowers:requesting-code-review` with the Task 1–7 description, approved design, plan path, `BASE_SHA`, and `HEAD_SHA`. The reviewer receives the work product and requirements, not the planning session history.
-
-- [ ] **Step 3: Evaluate the returned findings technically**
-
-Use `superpowers:receiving-code-review`:
-
-- Verify every finding against the actual diff and codebase.
-- Fix Critical and Important findings before Task 8.
-- Reject suggestions that add XGBoost, external data, project/builder names, generalized MLOps, or other YAGNI scope.
-- Ask the user only if a finding conflicts with an approved architectural decision.
-
-- [ ] **Step 4: Apply accepted review fixes without TDD**
-
-The planning/review agent may edit accepted findings directly. Run the closest affected tests after each fix. This review-repair step is explicitly exempt from test-first work.
-
-- [ ] **Step 5: Verify the reviewed subsystem before release to Task 8**
-
-Run:
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_model_features.py tests\test_model_training.py tests\test_model_analysis.py tests\test_model_artifacts.py tests\test_model_training_service.py tests\test_valuation_reporting.py -q
-.\.venv\Scripts\python.exe -m ruff check src tests
-```
-
-Only after fresh successful output may the planning/review agent approve continuation to Task 8.
-
----
-
 ### Task 8: Stale-Model Detection and Baseline Degradation
 
 **Files:**
@@ -1089,93 +1026,3 @@ Start `.\.venv\Scripts\qingpu-web.exe`, open `http://127.0.0.1:5000/admin#models
 git add README.md docs/superpowers/plans/2026-07-26-resale-model-improvement-design.md
 git commit -m "docs: explain resale model evidence workflow"
 ```
-
----
-
-### Reviewer Gate B: Final Superpowers Review and Direct Fixes
-
-**Files:**
-- Review all files changed by Tasks 1–11.
-- Modify only files required by concrete review findings.
-
-**Interfaces:**
-- Owner: planning/review agent, not the implementation model.
-- Required skills: `superpowers:requesting-code-review`, `superpowers:receiving-code-review`, and `superpowers:verification-before-completion`.
-- This is the explicitly approved non-TDD repair phase.
-
-- [ ] **Step 1: Receive the final implementation handoff**
-
-Require the implementation model to provide:
-
-```text
-PLAN: docs/superpowers/plans/2026-07-26-resale-model-improvement-implementation.md
-SCOPE: Tasks 8-11 plus the reviewed Task 1-7 base
-BASE_SHA: literal SHA approved and recorded at Reviewer Gate A
-HEAD_SHA: literal SHA printed by `git rev-parse HEAD` after Task 11
-VERIFICATION: exact commands, exit codes, and failure counts
-```
-
-- [ ] **Step 2: Request the final independent code review**
-
-Use `superpowers:requesting-code-review` with the approved design, complete plan, `BASE_SHA`, `HEAD_SHA`, and this checklist:
-
-- Train/inference feature parity.
-- No future rows in any backtest.
-- Evaluation remains unweighted.
-- Release booleans exactly match the approved thresholds.
-- Schema-v1 manifests and old joblib bundles load safely.
-- Presale remains unchanged.
-- Stale fallback never silently reports itself as an official-model prediction.
-- API responses contain no absolute local paths.
-- UI handles empty/legacy evidence without exceptions.
-- No scope expansion beyond the approved portfolio project.
-
-- [ ] **Step 3: Receive and evaluate review findings**
-
-Use `superpowers:receiving-code-review` before editing:
-
-- Read all findings.
-- Restate unclear technical requirements and stop until clarified.
-- Verify each finding against this repository.
-- Fix Critical and Important findings.
-- Accept Minor findings only when they improve the approved deliverable without expanding scope.
-- Push back with code/test evidence when a suggestion is incorrect or violates YAGNI.
-
-- [ ] **Step 4: Fix accepted findings directly**
-
-Do not require a new failing test before each review fix. Keep each change limited to the finding. After each fix, run the closest existing test file, for example:
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_model_analysis.py -q
-```
-
-or:
-
-```powershell
-node tests\js\model_admin_contract.cjs
-```
-
-- [ ] **Step 5: Re-review repaired Critical or Important findings**
-
-If the first review contained any Critical or Important finding, request a focused follow-up review over the repair commit range. Repeat technical evaluation until no unresolved Critical or Important finding remains.
-
-- [ ] **Step 6: Use verification-before-completion**
-
-Run:
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest -q
-Get-ChildItem tests\js -Filter '*.cjs' | ForEach-Object { node $_.FullName; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
-.\.venv\Scripts\python.exe -m ruff check src tests
-```
-
-Expected: all checks pass.
-
-- [ ] **Step 7: Commit review repairs if any**
-
-```powershell
-git add src/qingpu_insight tests README.md
-git commit -m "fix: address resale model review findings"
-```
-
-If review finds nothing, do not create an empty commit.
