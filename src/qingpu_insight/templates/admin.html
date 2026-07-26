@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="csrf-token" content="{{ csrf_token }}">
+<title>管理中心 - 青埔智價</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='admin.css') }}">
+</head>
+<body class="admin-page">
+  <aside class="admin-sidebar">
+    <h1>管理中心</h1>
+    <a href="/">&larr; 回首頁</a>
+    <nav>
+      <ul>
+        <li><a href="#overview">總覽</a></li>
+        <li><a href="#data">資料</a></li>
+        <li><a href="#listings">刊登</a></li>
+        <li><a href="#models">模型</a></li>
+        <li><a href="#llm">LLM</a></li>
+        <li><a href="#backups">備份</a></li>
+        <li><a href="#jobs">工作</a></li>
+        <li><a href="#diagnostics">診斷</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main>
+    <section id="admin-overview"><h2>總覽</h2><div class="admin-content"></div></section>
+    <section id="admin-data"><h2>資料</h2><div class="admin-content"></div></section>
+    <section id="admin-listings"><h2>刊登</h2><div class="admin-content"></div></section>
+    <section id="admin-models"><h2>模型</h2><div class="admin-content"></div></section>
+    <section id="admin-llm"><h2>LLM</h2><div class="admin-content"></div></section>
+    <section id="admin-backups"><h2>備份</h2><div class="admin-content"></div></section>
+    <section id="admin-jobs"><h2>工作</h2><div class="admin-content"></div></section>
+    <section id="admin-diagnostics"><h2>診斷</h2><div class="admin-content"></div></section>
+  </main>
+  <script src="{{ url_for('static', filename='job_polling.js') }}"></script>
+  <script src="{{ url_for('static', filename='admin.js') }}"></script>
+</body>
+</html>

@@ -19,6 +19,7 @@ from flask import Flask, jsonify, render_template, request, send_file, session
 from werkzeug.datastructures import MultiDict
 from werkzeug.exceptions import HTTPException
 
+from qingpu_insight.admin_web import AdminRuntime, create_admin_blueprint
 from qingpu_insight.backup_repository import MySQLBackupRepository
 from qingpu_insight.config import get_settings
 from qingpu_insight.evidence import UnknownCandidateError
@@ -540,6 +541,18 @@ def create_app(
 
     app.extensions["qingpu_admin_services"] = admin_services
     app.extensions["qingpu_admin_shutdown"] = shutdown_admin
+
+    if admin_services is not None:
+        runtime = AdminRuntime(
+            job_service=admin_services.job_service,
+            executor=admin_services.executor,
+            listing_update_service=admin_services.listing_update_service,
+            model_training_service=admin_services.model_training_service,
+            model_observatory=admin_services.model_observatory,
+        )
+    else:
+        runtime = AdminRuntime(job_service=None, executor=None)
+    app.register_blueprint(create_admin_blueprint(runtime))
 
     @app.before_request
     def ensure_session():

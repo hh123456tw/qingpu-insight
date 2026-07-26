@@ -15,6 +15,8 @@ import pytest
 from flask.testing import FlaskClient
 from sklearn.dummy import DummyRegressor
 
+from bs4 import BeautifulSoup
+
 from qingpu_insight.jobs import JobRun, JobSubmission
 from qingpu_insight.market_metrics import MarketFilters
 from qingpu_insight.valuation import ModelRegistry, ValuationBundle
@@ -2278,5 +2280,24 @@ class TestModelAdminPage:
         response = model_admin_client.get("/admin/models")
         html = response.get_data(as_text=True)
         assert "不會自動發佈" in html
+
+
+def test_admin_page_is_local_only(model_admin_client):
+    assert model_admin_client.get(
+        "/admin", environ_base={"REMOTE_ADDR": "10.0.0.2"}
+    ).status_code == 403
+
+
+def test_admin_page_has_eight_classified_sections(model_admin_client):
+    
+
+    response = model_admin_client.get("/admin")
+    soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+    assert response.status_code == 200
+    assert [node["id"] for node in soup.select("main > section[id]")] == [
+        "admin-overview", "admin-data", "admin-listings", "admin-models",
+        "admin-llm", "admin-backups", "admin-jobs", "admin-diagnostics",
+    ]
+    assert soup.select_one('meta[name="csrf-token"]')["content"]
 
 
