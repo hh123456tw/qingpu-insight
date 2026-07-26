@@ -336,7 +336,7 @@ def run_model_experiment(
 
     try:
         baseline.fit(split.train)
-        baseline_cal = evaluate_fitted_candidate("baseline", baseline, split.calibration)
+        baseline_cal = evaluate_fitted_candidate("baseline", baseline, split.calibration, feature_columns=feature_columns)
     except Exception as exc:
         raise BaselineEvaluationError("baseline evaluation failed") from exc
 
@@ -352,7 +352,7 @@ def run_model_experiment(
                 split.train["target_unit_price_twd"],
                 sample_weight=w,
             )
-            result = evaluate_fitted_candidate(name, est, split.calibration)
+            result = evaluate_fitted_candidate(name, est, split.calibration, feature_columns=feature_columns)
             calibration_results.append(result)
         except Exception:
             candidate_errors[name] = "candidate_failed"
@@ -362,11 +362,11 @@ def run_model_experiment(
     selected_estimator = selected.estimator
 
     final_test_results: dict[str, CandidateEvaluation] = {}
-    final_baseline = evaluate_fitted_candidate("baseline", baseline, split.test)
+    final_baseline = evaluate_fitted_candidate("baseline", baseline, split.test, feature_columns=feature_columns)
     final_test_results["baseline"] = final_baseline
 
     if selected_name != "baseline":
-        final_selected = evaluate_fitted_candidate(selected_name, selected_estimator, split.test)
+        final_selected = evaluate_fitted_candidate(selected_name, selected_estimator, split.test, feature_columns=feature_columns)
         final_test_results[selected_name] = final_selected
     else:
         final_selected = final_baseline
