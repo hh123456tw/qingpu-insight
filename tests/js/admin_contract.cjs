@@ -35,5 +35,34 @@ assert.deepEqual(admin.buildOfficialUpdatePayload("110S3", "115S2", "acquire"), 
 });
 assert.throws(() => admin.buildOfficialUpdatePayload("115S2", "110S3"), /起始季度/);
 assert.equal(admin.stageLabel("publishing_mysql"), "正在發布正式市場資料");
+assert.equal(typeof admin.runListingSequence, "function");
 
-process.stdout.write("admin contract passed\n");
+async function testListingSequenceKeepsTypesIndependent() {
+  var submitted = [];
+  var result = await admin.runListingSequence({
+    types: ["sale", "newhouse", "rental"],
+    maxPages: 10,
+    submit: async function (type) {
+      submitted.push(type);
+      return { run_id: "run-" + type, created: true };
+    },
+    waitForTerminal: async function (runId) {
+      return runId === "run-newhouse"
+        ? { status: "failed", error_code: "schema_error" }
+        : { status: "succeeded", output_version: "v-" + runId };
+    },
+    onTypeStart: function () {},
+    onTypeDone: function () {},
+  });
+  assert.deepEqual(submitted, ["sale", "newhouse", "rental"]);
+  assert.equal(result.sale.status, "succeeded");
+  assert.equal(result.newhouse.status, "failed");
+  assert.equal(result.rental.status, "succeeded");
+}
+
+testListingSequenceKeepsTypesIndependent().then(function () {
+  process.stdout.write("admin contract passed\n");
+}).catch(function (err) {
+  console.error(err);
+  process.exit(1);
+});

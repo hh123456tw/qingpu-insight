@@ -50,7 +50,29 @@
           <div id="od-status" class="admin-od-status"></div>
         </form>
       </div></section>
-    <section id="admin-listings"><h2>刊登</h2><div class="admin-content"></div></section>
+    <section id="admin-listings"><h2>刊登</h2><div class="admin-content"><div class="listing-sequencer">
+  <div class="admin-field-row">
+    <label>最大頁數 <input type="number" id="ls-max-pages" value="10" min="1" max="50" class="admin-input" style="width:80px"></label>
+  </div>
+  <div class="listing-status-list">
+    <div class="listing-status-item" data-type="sale">
+      <span class="listing-type-label">中古屋</span>
+      <span class="listing-type-status" id="ls-status-sale">—</span>
+      <button class="mutation-btn admin-btn listing-retry-btn" data-type="sale" style="display:none">重試</button>
+    </div>
+    <div class="listing-status-item" data-type="newhouse">
+      <span class="listing-type-label">預售屋</span>
+      <span class="listing-type-status" id="ls-status-newhouse">—</span>
+      <button class="mutation-btn admin-btn listing-retry-btn" data-type="newhouse" style="display:none">重試</button>
+    </div>
+    <div class="listing-status-item" data-type="rental">
+      <span class="listing-type-label">租屋</span>
+      <span class="listing-type-status" id="ls-status-rental">—</span>
+      <button class="mutation-btn admin-btn listing-retry-btn" data-type="rental" style="display:none">重試</button>
+    </div>
+  </div>
+  <button class="mutation-btn admin-btn" id="ls-run-all-btn">更新三類</button>
+</div></div></section>
     <section id="admin-models"><h2>模型</h2><div class="admin-content"></div></section>
     <section id="admin-llm"><h2>LLM</h2><div class="admin-content"></div></section>
     <section id="admin-backups"><h2>備份</h2><div class="admin-content"></div></section>

@@ -67,6 +67,147 @@
     return STAGE_LABELS[stage] || stage;
   }
 
+  function runListingSequence(_a) {
+    var types = _a.types, submit = _a.submit, waitForTerminal = _a.waitForTerminal, onTypeStart = _a.onTypeStart, onTypeDone = _a.onTypeDone;
+    var order = ["sale", "newhouse", "rental"];
+    var ordered = [];
+    for (var i = 0; i < order.length; i++) {
+      if (types.indexOf(order[i]) !== -1) ordered.push(order[i]);
+    }
+    for (var j = 0; j < types.length; j++) {
+      if (ordered.indexOf(types[j]) === -1) ordered.push(types[j]);
+    }
+    var results = {};
+    function step(idx) {
+      if (idx >= ordered.length) return Promise.resolve(results);
+      var type = ordered[idx];
+      onTypeStart(type);
+      return Promise.resolve().then(function () {
+        return submit(type);
+      }).then(function (job) {
+        return waitForTerminal(job.run_id);
+      }).then(function (finalState) {
+        results[type] = { status: finalState.status, output_version: finalState.output_version, error_code: finalState.error_code };
+        onTypeDone(type, results[type]);
+        return step(idx + 1);
+      }, function (err) {
+        results[type] = { status: "error", error_code: String(err) };
+        onTypeDone(type, results[type]);
+        return step(idx + 1);
+      });
+    }
+    return step(0);
+  }
+
+  function runAllListings() {
+    var maxPagesInput = document.getElementById("ls-max-pages");
+    var maxPages = parseInt(maxPagesInput.value, 10);
+    if (isNaN(maxPages) || maxPages < 1 || maxPages > 50) { maxPagesInput.focus(); return; }
+    var runBtn = document.getElementById("ls-run-all-btn");
+    runBtn.disabled = true;
+    runBtn.classList.add("disabled");
+    var statusItems = document.querySelectorAll(".listing-type-status");
+    for (var i = 0; i < statusItems.length; i++) {
+      statusItems[i].textContent = "—";
+      statusItems[i].className = "listing-type-status";
+    }
+    var retryBtns = document.querySelectorAll(".listing-retry-btn");
+    for (var j = 0; j < retryBtns.length; j++) { retryBtns[j].style.display = "none"; }
+    runListingSequence({
+      types: ["sale", "newhouse", "rental"],
+      maxPages: maxPages,
+      submit: function (type) {
+        return fetch("/api/admin/listing-updates", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Qingpu-CSRF": getCSRFToken() },
+          body: JSON.stringify({ types: [type], max_pages: maxPages }),
+        }).then(function (r) { return r.json(); });
+      },
+      waitForTerminal: function (runId) {
+        return new Promise(function (resolve) {
+          (function poll() {
+            fetch("/api/jobs/" + runId)
+              .then(function (r) { return r.json(); })
+              .then(function (job) {
+                if (job.status === "succeeded" || job.status === "failed" || job.status === "interrupted") {
+                  resolve(job);
+                } else {
+                  setTimeout(poll, 2000);
+                }
+              });
+          })();
+        });
+      },
+      onTypeStart: function (type) {
+        var el = document.getElementById("ls-status-" + type);
+        el.textContent = "執行中…";
+        el.className = "listing-type-status status-running";
+      },
+      onTypeDone: function (type, result) {
+        var el = document.getElementById("ls-status-" + type);
+        if (result.status === "succeeded") {
+          el.textContent = "成功 (" + (result.output_version || "?") + ")";
+          el.className = "listing-type-status status-success";
+        } else {
+          el.textContent = "失敗" + (result.error_code ? " (" + result.error_code + ")" : "");
+          el.className = "listing-type-status status-fail";
+          var btn = document.querySelector('.listing-retry-btn[data-type="' + type + '"]');
+          if (btn) btn.style.display = "";
+        }
+      },
+    }).then(function () {
+      runBtn.disabled = false;
+      runBtn.classList.remove("disabled");
+    });
+  }
+
+  function retrySingleType(type, maxPages) {
+    var retryBtn = document.querySelector('.listing-retry-btn[data-type="' + type + '"]');
+    if (retryBtn) { retryBtn.disabled = true; retryBtn.style.display = "none"; }
+    var el = document.getElementById("ls-status-" + type);
+    el.textContent = "執行中…";
+    el.className = "listing-type-status status-running";
+    runListingSequence({
+      types: [type],
+      maxPages: maxPages,
+      submit: function (t) {
+        return fetch("/api/admin/listing-updates", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Qingpu-CSRF": getCSRFToken() },
+          body: JSON.stringify({ types: [t], max_pages: maxPages }),
+        }).then(function (r) { return r.json(); });
+      },
+      waitForTerminal: function (runId) {
+        return new Promise(function (resolve) {
+          (function poll() {
+            fetch("/api/jobs/" + runId)
+              .then(function (r) { return r.json(); })
+              .then(function (job) {
+                if (job.status === "succeeded" || job.status === "failed" || job.status === "interrupted") {
+                  resolve(job);
+                } else {
+                  setTimeout(poll, 2000);
+                }
+              });
+          })();
+        });
+      },
+      onTypeStart: function () {},
+      onTypeDone: function (t, result) {
+        var el = document.getElementById("ls-status-" + t);
+        if (result.status === "succeeded") {
+          el.textContent = "成功 (" + (result.output_version || "?") + ")";
+          el.className = "listing-type-status status-success";
+        } else {
+          el.textContent = "失敗" + (result.error_code ? " (" + result.error_code + ")" : "");
+          el.className = "listing-type-status status-fail";
+          var btn = document.querySelector('.listing-retry-btn[data-type="' + t + '"]');
+          if (btn) { btn.disabled = false; btn.style.display = ""; }
+        }
+      },
+    });
+  }
+
   function renderOverview(data) {
     var view = overviewView(data);
     var container = document.querySelector("#admin-overview .admin-content");
@@ -274,6 +415,16 @@
         .then(function (data) {
           if (data) renderJobs(data);
         });
+
+      var runAllBtn = document.getElementById("ls-run-all-btn");
+      if (runAllBtn) runAllBtn.addEventListener("click", runAllListings);
+      document.addEventListener("click", function (e) {
+        if (e.target.classList.contains("listing-retry-btn")) {
+          var type = e.target.getAttribute("data-type");
+          var mp = parseInt(document.getElementById("ls-max-pages").value, 10) || 10;
+          retrySingleType(type, mp);
+        }
+      });
     });
   }
 
@@ -284,5 +435,6 @@
     jobStatusLabel: jobStatusLabel,
     buildOfficialUpdatePayload: buildOfficialUpdatePayload,
     stageLabel: stageLabel,
+    runListingSequence: runListingSequence,
   };
 });
