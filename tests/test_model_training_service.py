@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from qingpu_insight.job_executor import LocalJobExecutor
 from qingpu_insight.jobs import ACTIVE_STATUSES, JobRun, JobService, JobStatus
 from qingpu_insight.model_artifacts import CandidateArtifactStore, sha256_file
 from qingpu_insight.model_training_service import (

@@ -276,7 +276,12 @@ class ProductionOfficialDataRunner:
 
 
 class OfficialDataUpdateService:
-    def __init__(self, job_service: JobService, runner: OfficialDataRunner, root: Path | None = None) -> None:
+    def __init__(
+        self,
+        job_service: JobService,
+        runner: OfficialDataRunner,
+        root: Path | None = None,
+    ) -> None:
         self._job_service = job_service
         self._runner = runner
         self._root = root

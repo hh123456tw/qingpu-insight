@@ -19,7 +19,7 @@ from qingpu_insight.model_artifacts import (
     TrainingManifest,
     sha256_file,
 )
-from qingpu_insight.model_features import FEATURE_COLUMNS, build_model_frame
+from qingpu_insight.model_features import build_model_frame
 from qingpu_insight.model_training import (
     BaselineEvaluationError,
     ModelExperiment,
@@ -73,12 +73,12 @@ def runtime_versions() -> dict[str, str]:
 def build_data_snapshot(input_path: Path, frame: pd.DataFrame) -> DataSnapshot:
     sha = sha256_file(input_path)
     raw_count = len(frame)
-    usable = frame[frame["analysis_eligible"] == True]
+    usable = frame[frame["analysis_eligible"]]
     usable_counts: dict[str, int] = {}
     excluded_counts: dict[str, int] = {}
     for market in ("resale", "presale"):
         market_frame = frame[frame["transaction_type"] == market]
-        usable_market = market_frame[market_frame["analysis_eligible"] == True]
+        usable_market = market_frame[market_frame["analysis_eligible"]]
         usable_counts[market] = len(usable_market)
         excluded_counts[market] = len(market_frame) - len(usable_market)
     station_counts: dict[str, int] = (
@@ -276,7 +276,7 @@ class ModelTrainingService:
                 try:
                     experiment = run_model_experiment(split)
                 except BaselineEvaluationError as exc:
-                    raise ModelTrainingError("baseline_failed", str(exc))
+                    raise ModelTrainingError("baseline_failed", str(exc)) from exc
                 locked = experiment.final_test_results[experiment.selected_name]
                 seed_bundle = ValuationBundle(
                     transaction_type=market,
@@ -301,7 +301,9 @@ class ModelTrainingService:
                     )
                     bundle: ValuationBundle = joblib.load(artifact_path)
                 except Exception as exc:
-                    raise ModelTrainingError("candidate_write_failed", str(exc))
+                    raise ModelTrainingError(
+                        "candidate_write_failed", str(exc)
+                    ) from exc
                 self._jobs.progress(
                     run_id,
                     {
@@ -318,7 +320,9 @@ class ModelTrainingService:
                         bundle, experiment, leakage_audit(split), report_dir
                     )
                 except Exception as exc:
-                    raise ModelTrainingError("candidate_write_failed", str(exc))
+                    raise ModelTrainingError(
+                        "candidate_write_failed", str(exc)
+                    ) from exc
 
                 try:
                     results.append(
@@ -333,7 +337,9 @@ class ModelTrainingService:
                         )
                     )
                 except Exception as exc:
-                    raise ModelTrainingError("candidate_validation_failed", str(exc))
+                    raise ModelTrainingError(
+                        "candidate_validation_failed", str(exc)
+                    ) from exc
                 completed.append(market)
 
             self._jobs.progress(

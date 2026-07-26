@@ -1,13 +1,10 @@
 import pandas as pd
 import pytest
 
-from qingpu_insight.model_features import FEATURE_COLUMNS
 from qingpu_insight.model_training import (
-    CandidateEvaluation,
     ModelExperiment,
     TimeSplit,
     run_model_experiment,
-    split_by_time,
 )
 from qingpu_insight.valuation import ValuationBundle
 from qingpu_insight.valuation_reporting import write_evaluation, write_model_card
@@ -150,11 +147,9 @@ def test_model_card_discloses_required_evidence(
 
 
 def test_write_evaluation_creates_json(tmp_path, trained_bundle, experiment):
+    import json
     from dataclasses import replace
 
-    import json
-
-    import numpy as np
 
     split = _build_experiment_frame(300, 100, 200, seed=99)
     exp = run_model_experiment(split)

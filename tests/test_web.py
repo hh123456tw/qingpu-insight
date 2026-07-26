@@ -2281,7 +2281,9 @@ class TestModelAdminApi:
         assert "official_models" in body
         assert "candidate_count" in body
 
-    def test_model_training_post_canonicalizes_markets(self, model_admin_client: FlaskClient) -> None:
+    def test_model_training_post_canonicalizes_markets(
+        self, model_admin_client: FlaskClient,
+    ) -> None:
         response = model_admin_client.post(
             "/api/admin/model-training-runs",
             json={"markets": ["presale", "resale"]},
@@ -2515,7 +2517,11 @@ def test_official_update_rejects_paths_and_unknown_fields(admin_client):
 def test_official_update_rejects_unrecognized_checkpoint(admin_client):
     response = admin_client.post(
         "/api/admin/official-data-updates",
-        json={"start_season": "110S3", "end_season": "115S2", "start_at": "C:/processed/transactions.parquet"},
+        json={
+            "start_season": "110S3",
+            "end_season": "115S2",
+            "start_at": "C:/processed/transactions.parquet",
+        },
         headers=csrf_headers(admin_client),
     )
     assert response.status_code == 400
@@ -3065,13 +3071,14 @@ class TestBackupAdminApi:
         assert response.status_code == 403
 
     def test_backup_admin_unavailable_without_service(self, client) -> None:
+        with client.session_transaction() as sess:
+            sess["_csrf_token"] = "test-token"
         response = client.post(
             "/api/admin/backups",
             environ_base={"REMOTE_ADDR": "127.0.0.1"},
-            headers={"X-Qingpu-CSRF": "test-token"} if False else {},
+            headers={"X-Qingpu-CSRF": "test-token"},
         )
-        # Without admin service, should fail
-        pass
+        assert response.status_code == 503
 
     def test_ops_backups_still_lists(self, ops_app) -> None:
         response = ops_app.get("/api/ops/backups?limit=10")

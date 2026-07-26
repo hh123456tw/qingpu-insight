@@ -207,8 +207,10 @@ class ProductionCursor(FakeCursor):
             return len(self.result)
         if normalized.startswith("select * from job_runs where job_type"):
             self.result = [
-                dict(row) for row in database.job_runs.values()
-                if row["job_type"] == params[0] and row["status"] in {"pending", "running", "retry_wait"}
+                dict(row)
+                for row in database.job_runs.values()
+                if row["job_type"] == params[0]
+                and row["status"] in {"pending", "running", "retry_wait"}
             ]
             return len(self.result)
         if normalized.startswith("update job_runs set status"):

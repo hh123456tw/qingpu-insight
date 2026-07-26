@@ -10,6 +10,7 @@ from datetime import datetime
 from ipaddress import ip_address
 from pathlib import Path
 from threading import BoundedSemaphore, Lock
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -1007,7 +1008,8 @@ def create_app(
         if not _is_trusted_local_request():
             return jsonify({"error": {"code": "forbidden", "message": "僅允許本機存取。"}}), 403
         if admin_services is None or admin_services.model_observatory is None:
-            return jsonify({"error": {"code": "admin_unavailable", "message": "管理功能未啟用。"}}), 503
+            error = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
+            return jsonify({"error": error}), 503
         return jsonify(admin_services.model_observatory.status())
 
     @app.get("/api/admin/model-training-runs")
@@ -1015,7 +1017,8 @@ def create_app(
         if not _is_trusted_local_request():
             return jsonify({"error": {"code": "forbidden", "message": "僅允許本機存取。"}}), 403
         if admin_services is None or admin_services.model_observatory is None:
-            return jsonify({"error": {"code": "admin_unavailable", "message": "管理功能未啟用。"}}), 503
+            error = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
+            return jsonify({"error": error}), 503
         raw_limit = request.args.get("limit", "20")
         try:
             limit = int(raw_limit)
@@ -1026,7 +1029,8 @@ def create_app(
         try:
             runs = admin_services.model_observatory.list_runs(limit)
         except Exception:
-            return jsonify({"error": {"code": "admin_unavailable", "message": "工作歷史暫時無法取得。"}}), 503
+            error = {"code": "admin_unavailable", "message": "工作歷史暫時無法取得。"}
+            return jsonify({"error": error}), 503
         return jsonify({"items": runs, "limit": limit})
 
     @app.get("/api/admin/model-training-runs/<run_id>")
@@ -1034,7 +1038,8 @@ def create_app(
         if not _is_trusted_local_request():
             return jsonify({"error": {"code": "forbidden", "message": "僅允許本機存取。"}}), 403
         if admin_services is None or admin_services.model_observatory is None:
-            return jsonify({"error": {"code": "admin_unavailable", "message": "管理功能未啟用。"}}), 503
+            error = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
+            return jsonify({"error": error}), 503
         try:
             uuid.UUID(run_id)
         except (ValueError, AttributeError):
@@ -1042,7 +1047,8 @@ def create_app(
         try:
             run = admin_services.model_observatory.get_run(run_id)
         except Exception:
-            return jsonify({"error": {"code": "admin_unavailable", "message": "工作狀態暫時無法取得。"}}), 503
+            error = {"code": "admin_unavailable", "message": "工作狀態暫時無法取得。"}
+            return jsonify({"error": error}), 503
         if run is None:
             return jsonify({"error": {"code": "not_found", "message": "工作不存在。"}}), 404
         return jsonify(run)
@@ -1054,7 +1060,8 @@ def create_app(
         if request.headers.get("X-Qingpu-CSRF", "") != session.get("_csrf_token", ""):
             return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
         if admin_services is None or admin_services.model_training_service is None:
-            return jsonify({"error": {"code": "admin_unavailable", "message": "管理功能未啟用。"}}), 503
+            error = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
+            return jsonify({"error": error}), 503
         try:
             markets = _parse_model_training_request()
         except ApiInputError:
@@ -1067,7 +1074,8 @@ def create_app(
         try:
             submission = admin_services.model_training_service.submit(request_obj)
         except Exception:
-            return jsonify({"error": {"code": "admin_unavailable", "message": "管理功能暫時無法使用。"}}), 503
+            error = {"code": "admin_unavailable", "message": "管理功能暫時無法使用。"}
+            return jsonify({"error": error}), 503
 
         if submission.created:
             try:
@@ -1075,7 +1083,8 @@ def create_app(
                     submission, request_obj, admin_services.executor,
                 )
             except Exception:
-                return jsonify({"error": {"code": "enqueue_failed", "message": "工作無法啟動。"}}), 503
+                error = {"code": "enqueue_failed", "message": "工作無法啟動。"}
+                return jsonify({"error": error}), 503
 
         body = _public_job(submission.run)
         body["created"] = submission.created
@@ -1086,7 +1095,8 @@ def create_app(
         if not _is_trusted_local_request():
             return jsonify({"error": {"code": "forbidden", "message": "僅允許本機存取。"}}), 403
         if admin_services is None or admin_services.model_observatory is None:
-            return jsonify({"error": {"code": "admin_unavailable", "message": "管理功能未啟用。"}}), 503
+            error = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
+            return jsonify({"error": error}), 503
         try:
             uuid.UUID(run_id)
         except (ValueError, AttributeError):

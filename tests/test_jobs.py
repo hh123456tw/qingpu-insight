@@ -238,7 +238,11 @@ class TestProgressAndRecovery:
 
         recovered = service.recover_interrupted("model_training")
 
-        assert {run.run_id for run in recovered} == {pending.run_id, running.run_id, retry_wait.run_id}
+        assert {run.run_id for run in recovered} == {
+            pending.run_id,
+            running.run_id,
+            retry_wait.run_id,
+        }
         assert all(run.status == "failed" for run in recovered)
         assert all(run.error_code == "worker_interrupted" for run in recovered)
         assert service.get(listing.run_id).status == "running"  # type: ignore[union-attr]
