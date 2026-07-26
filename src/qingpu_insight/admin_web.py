@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from dataclasses import dataclass
 from ipaddress import ip_address
@@ -255,7 +256,7 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
         try:
             resolved = quality_path.resolve()
             base = (Path(root) / "outputs" / "admin").resolve()
-            if not str(resolved).startswith(str(base)):
+            if not str(resolved).startswith(str(base) + os.sep):
                 err = {"code": "forbidden", "message": "路徑無效。"}
                 return jsonify({"error": err}), 403
         except (OSError, ValueError):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import secrets
 import subprocess
 from concurrent.futures import Future
@@ -2478,7 +2479,7 @@ def test_official_update_rejects_paths_and_unknown_fields(admin_client):
     assert response.get_json()["error"]["fields"]["input"] == "not_allowed"
 
 
-def test_official_update_accepts_only_fixed_checkpoint_names(admin_client):
+def test_official_update_rejects_unrecognized_checkpoint(admin_client):
     response = admin_client.post(
         "/api/admin/official-data-updates",
         json={"start_season": "110S3", "end_season": "115S2", "start_at": "C:/processed/transactions.parquet"},
@@ -2494,5 +2495,106 @@ def test_official_update_returns_existing_active_job(admin_client):
     assert first.status_code == 202
     assert second.status_code == 200
     assert second.get_json()["run_id"] == first.get_json()["run_id"]
+
+
+def test_official_update_rejects_when_mutation_not_ready(admin_client, monkeypatch):
+    monkeypatch.setattr(
+        admin_client.application.extensions["qingpu_admin_runtime"].dashboard_service,
+        "read",
+        lambda: {"mutation_ready": False},
+    )
+    response = admin_client.post(
+        "/api/admin/official-data-updates",
+        json={"start_season": "110S3", "end_season": "115S2"},
+        headers=csrf_headers(admin_client),
+    )
+    assert response.status_code == 409
+    assert response.get_json()["error"]["code"] == "mutation_not_ready"
+
+
+def test_official_data_quality_validates_uuid_format(admin_client):
+    response = admin_client.get(
+        "/api/admin/official-data-updates/not-a-uuid/reports/quality"
+    )
+    assert response.status_code == 400
+    assert response.get_json()["error"]["fields"]["run_id"] == "invalid_uuid"
+
+
+def test_official_data_quality_returns_404_for_nonexistent_job(admin_client):
+    response = admin_client.get(
+        "/api/admin/official-data-updates/"
+        "00000000-0000-4000-8000-000000000000/reports/quality"
+    )
+    assert response.status_code == 404
+
+
+def test_official_data_quality_returns_404_for_non_succeeded_job(
+    admin_app, admin_client,
+) -> None:
+    _, repo, _, _ = admin_app
+    from qingpu_insight.jobs import JobService
+    service = JobService(repo)
+    submission = service.create("official_data_update", "pending-job", "manual")
+    response = admin_client.get(
+        f"/api/admin/official-data-updates/{submission.run.run_id}/reports/quality"
+    )
+    assert response.status_code == 404
+
+
+def test_official_data_quality_returns_404_for_wrong_job_type(
+    admin_app, admin_client,
+) -> None:
+    _, repo, _, _ = admin_app
+    from qingpu_insight.jobs import JobService
+    service = JobService(repo)
+    submission = service.create("listing_update", "wrong-type", "manual")
+    service.start(submission.run.run_id)
+    service.succeed(submission.run.run_id, "v1", {"rows": 5})
+    response = admin_client.get(
+        f"/api/admin/official-data-updates/{submission.run.run_id}/reports/quality"
+    )
+    assert response.status_code == 404
+
+
+def test_official_data_quality_happy_path(market_frame, tmp_path) -> None:
+    from qingpu_insight.jobs import JobService
+    from qingpu_insight.web import AdminServices, create_app
+
+    repo = MemoryAdminJobRepository()
+    job_service = JobService(repo)
+    executor = FakeAdminExecutor()
+    listing_service = StubListingUpdateService(job_service)
+    official_ds = StubOfficialDataService(job_service)
+
+    app = create_app(
+        root=tmp_path,
+        data_source=InMemoryMarketDataSource(market_frame),
+        admin_services=AdminServices(
+            job_service, listing_service, executor,
+            official_data_service=official_ds,
+        ),
+    )
+
+    submission = job_service.create("official_data_update", "quality-happy", "manual")
+    run = submission.run
+    job_service.start(run.run_id)
+    job_service.succeed(run.run_id, "v1", {"rows": 100})
+
+    quality_dir = tmp_path / "outputs" / "admin" / "official-data" / run.run_id
+    quality_dir.mkdir(parents=True)
+    quality_path = quality_dir / "quality.json"
+    expected_data = {"quality_score": 0.95, "row_count": 100}
+    quality_path.write_text(json.dumps(expected_data), encoding="utf-8")
+
+    with app.test_client() as client:
+        with client.session_transaction() as sess:
+            sess["_csrf_token"] = "test-token"
+        response = client.get(
+            f"/api/admin/official-data-updates/{run.run_id}/reports/quality",
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+
+    assert response.status_code == 200
+    assert response.get_json() == expected_data
 
 
