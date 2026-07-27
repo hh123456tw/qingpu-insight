@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import pytest
 
+from qingpu_insight.conversation_fallback import ConversationFallbackExecutor
 from qingpu_insight.conversation_import import ConversationImportService
 from qingpu_insight.conversation_listing_parser import (
     ListingPageVerificationRequired,
@@ -207,6 +208,7 @@ class FakeConversationRepository:
         self, *, conversation_id: str, role: str, content: str,
         evidence_revision: int | None, provider: str | None,
         model: str | None, citations: list[str],
+        fallback_reason: str | None = None,
     ) -> MessageRecord:
         msg_id = str(uuid4())
         now = datetime.now(UTC)
@@ -217,6 +219,7 @@ class FakeConversationRepository:
             sequence_no=prev_seq + 1, role=role, content=content,
             evidence_revision=evidence_revision, provider=provider,
             model=model, citations=citations, created_at=now,
+            fallback_reason=fallback_reason,
         )
         if conversation_id not in self.messages:
             self.messages[conversation_id] = []
@@ -619,6 +622,7 @@ class TestConversationReleaseGate:
         service = ConversationService(
             repository=repo, import_service=import_service,
             provider_registry=provider_registry,
+            reply_executor=MagicMock(),
             validator=validate_chat_answer,
             job_service=job_service, executor=executor,
         )
@@ -645,7 +649,7 @@ class TestConversationReleaseGate:
         """Two invalid provider outputs → no assistant message stored."""
         repo = FakeConversationRepository()
 
-        conv = repo.create_conversation(provider="ollama", model="gemma3")
+        conv = repo.create_conversation(provider="ollama", model="gemma4:e2b")
         listing = repo.add_initial_listing(conversation_id=conv.id)
         snapshot = repo.append_snapshot(
             listing_id=listing.id,
@@ -668,6 +672,7 @@ class TestConversationReleaseGate:
             def reply(
                 self, *, model: str, question: str,
                 context: object,
+                repair_hint: str | None = None,
             ) -> ChatAnswerDraft:
                 return ChatAnswerDraft(
                     answer="bad answer",
@@ -680,6 +685,11 @@ class TestConversationReleaseGate:
 
         provider_registry = ConversationProviderRegistry()
         provider_registry.register("ollama", InvalidProvider())
+        provider_registry.register("rule", InvalidProvider())
+        reply_executor = ConversationFallbackExecutor(
+            provider_registry=provider_registry,
+            validator=validate_chat_answer,
+        )
 
         fake_job_repo = FakeJobRepository()
         job_service = JobService(fake_job_repo)
@@ -688,6 +698,7 @@ class TestConversationReleaseGate:
         service = ConversationService(
             repository=repo, import_service=MagicMock(),
             provider_registry=provider_registry,
+            reply_executor=reply_executor,
             validator=validate_chat_answer,
             job_service=job_service, executor=executor,
         )
@@ -698,8 +709,7 @@ class TestConversationReleaseGate:
         )
         job_service.start(submission.run.run_id)
         service._run_reply(
-            submission.run.run_id, conv.id, "價格合理嗎？",
-            "ollama", "gemma3", 1,
+            submission.run.run_id, conv.id, "價格合理嗎？", 1,
         )
 
         msgs = repo.get_messages(conversation_id=conv.id)
@@ -709,7 +719,7 @@ class TestConversationReleaseGate:
         run = job_service.get(submission.run.run_id)
         assert run is not None
         assert run.status == "failed"
-        assert run.error_code == "validation_failed"
+        assert run.error_code == "reply_providers_unavailable"
         executor.shutdown()
 
     # ------------------------------------------------------------------

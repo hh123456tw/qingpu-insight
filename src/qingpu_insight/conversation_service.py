@@ -7,7 +7,9 @@ from dataclasses import dataclass
 from threading import Lock
 
 from qingpu_insight.conversation_evidence import EvidenceFact
+from qingpu_insight.conversation_fallback import ConversationFallbackExecutor
 from qingpu_insight.conversation_import import ConversationImportService
+from qingpu_insight.conversation_models import resolve_conversation_model
 from qingpu_insight.conversation_providers import (
     ConversationContext,
     ConversationProviderRegistry,
@@ -16,9 +18,6 @@ from qingpu_insight.conversation_repository import (
     ConversationRecord,
     MySQLConversationRepository,
 )
-from qingpu_insight.conversation_validation import (
-    GroundingValidationError,
-)
 from qingpu_insight.job_executor import LocalJobExecutor
 from qingpu_insight.jobs import (
     CONVERSATION_IMPORT,
@@ -26,6 +25,7 @@ from qingpu_insight.jobs import (
     CONVERSATION_REPLY,
     JobService,
 )
+from qingpu_insight.ollama_report_provider import ProviderError
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +70,7 @@ class ConversationService:
         repository: MySQLConversationRepository,
         import_service: ConversationImportService,
         provider_registry: ConversationProviderRegistry,
+        reply_executor: ConversationFallbackExecutor,
         validator: Callable[..., object],
         job_service: JobService,
         executor: LocalJobExecutor,
@@ -77,6 +78,7 @@ class ConversationService:
         self._repository = repository
         self._import_service = import_service
         self._provider_registry = provider_registry
+        self._reply_executor = reply_executor
         self._validator = validator
         self._job_service = job_service
         self._executor = executor
@@ -84,10 +86,11 @@ class ConversationService:
         self._active_replies: set[str] = set()
 
     def create_conversation(
-        self, *, provider: str, model: str
+        self, *, model: str
     ) -> ConversationRecord:
+        definition = resolve_conversation_model(model)
         return self._repository.create_conversation(
-            provider=provider, model=model
+            provider=definition.provider, model=model
         )
 
     def start_import(
@@ -171,8 +174,6 @@ class ConversationService:
         *,
         conversation_id: str,
         question: str,
-        provider: str,
-        model: str,
         evidence_revision: int,
         idempotency_key: str,
     ) -> ConversationCommand:
@@ -181,7 +182,7 @@ class ConversationService:
             raise ValueError(f"conversation {conversation_id} not found")
         if conv.active_evidence_revision != evidence_revision:
             raise ValueError("stale evidence revision")
-        if provider == "rule":
+        if conv.default_provider == "rule":
             raise ValueError("rule provider does not support free-form replies")
         with self._reply_lock:
             if conversation_id in self._active_replies:
@@ -217,8 +218,6 @@ class ConversationService:
                             submission.run.run_id,
                             conversation_id,
                             question,
-                            provider,
-                            model,
                             evidence_revision,
                         ),
                     )
@@ -323,8 +322,6 @@ class ConversationService:
         run_id: str,
         conversation_id: str,
         question: str,
-        provider_name: str,
-        model: str,
         evidence_revision: int,
     ) -> None:
         try:
@@ -340,6 +337,7 @@ class ConversationService:
                 provider=None,
                 model=None,
                 citations=[],
+                fallback_reason=None,
             )
             messages = self._repository.get_messages(
                 conversation_id=conversation_id, limit=12
@@ -357,13 +355,11 @@ class ConversationService:
                 evidence_facts = _facts_from_pack(evidence_pack.facts)
                 available_fact_ids = {f.id for f in evidence_facts}
 
-            provider = self._provider_registry.get(provider_name)
+            conversation = self._repository.get_conversation(conversation_id)
+            if conversation is None:
+                raise ValueError(f"conversation {conversation_id} not found")
             context = ConversationContext(
-                rolling_summary=(
-                    self._repository.get_conversation(
-                        conversation_id
-                    ).rolling_summary
-                ),
+                rolling_summary=conversation.rolling_summary,
                 recent_messages=tuple(
                     {"role": m.role, "content": m.content}
                     for m in reversed(messages)
@@ -376,36 +372,23 @@ class ConversationService:
                 run_id,
                 {"stage": "asking_provider"},
             )
-            draft = provider.reply(
-                model=model, question=question, context=context
+            execution = self._reply_executor.execute(
+                requested_model=conversation.default_model,
+                question=question,
+                context=context,
+                available_fact_ids=available_fact_ids,
+                evidence_revision=evidence_revision,
             )
-            self._job_service.progress(
-                run_id,
-                {"stage": "validating_citations"},
-            )
-            try:
-                validated = self._validator(
-                    draft,
-                    available_fact_ids=available_fact_ids,
-                    evidence_revision=evidence_revision,
-                )
-            except GroundingValidationError:
-                draft = provider.reply(
-                    model=model, question=question, context=context
-                )
-                validated = self._validator(
-                    draft,
-                    available_fact_ids=available_fact_ids,
-                    evidence_revision=evidence_revision,
-                )
+            validated = execution.validated
             self._repository.append_message(
                 conversation_id=conversation_id,
                 role="assistant",
                 content=validated.answer,
                 evidence_revision=evidence_revision,
-                provider=provider_name,
-                model=model,
+                provider=execution.actual_provider,
+                model=execution.actual_model,
                 citations=list(validated.citations),
+                fallback_reason=execution.fallback_reason,
             )
             self._update_rolling_summary(conversation_id)
             self._job_service.progress(
@@ -415,9 +398,13 @@ class ConversationService:
             self._job_service.succeed(
                 run_id, f"rev{evidence_revision}", {}
             )
-        except GroundingValidationError:
+        except ProviderError as error:
+            if error.code != "all_conversation_providers_unavailable":
+                raise
             self._job_service.fail(
-                run_id, "validation_failed", "answer validation failed"
+                run_id,
+                "reply_providers_unavailable",
+                "all conversation providers unavailable",
             )
         except Exception as e:
             self._job_service.fail(run_id, "reply_failed", str(e))

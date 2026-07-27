@@ -9,15 +9,12 @@ from qingpu_insight.conversation_repository import (
     ConversationRecord,
     MessageRecord,
 )
+from qingpu_insight.conversation_fallback import ReplyExecution
 from qingpu_insight.conversation_service import (
     ConversationCommand,
     ConversationService,
 )
-from qingpu_insight.conversation_validation import (
-    ChatAnswerDraft,
-    GroundingValidationError,
-    ValidatedChatAnswer,
-)
+from qingpu_insight.conversation_validation import ValidatedChatAnswer
 from qingpu_insight.jobs import (
     CONVERSATION_IMPORT,
     CONVERSATION_REFRESH,
@@ -82,6 +79,7 @@ def deps() -> dict:
         "repository": MagicMock(),
         "import_service": MagicMock(),
         "provider_registry": MagicMock(),
+        "reply_executor": MagicMock(),
         "validator": MagicMock(),
         "job_service": MagicMock(),
         "executor": MagicMock(),
@@ -102,14 +100,20 @@ class TestCreateConversation:
     def test_create_conversation(self, service: ConversationService, deps: dict) -> None:
         deps["repository"].create_conversation.return_value = sentinel.conv
 
-        result = service.create_conversation(
-            provider="ollama", model="gpt-4"
-        )
+        result = service.create_conversation(model="gemma-4-31b-it")
 
         deps["repository"].create_conversation.assert_called_once_with(
-            provider="ollama", model="gpt-4"
+            provider="gemini", model="gemma-4-31b-it"
         )
         assert result is sentinel.conv
+
+    def test_create_conversation_rejects_unknown_model(
+        self, service: ConversationService, deps: dict
+    ) -> None:
+        with pytest.raises(ValueError, match="unknown conversation model"):
+            service.create_conversation(model="custom-model")
+
+        deps["repository"].create_conversation.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -290,8 +294,6 @@ class TestStartReply:
         cmd = service.start_reply(
             conversation_id="conv-1",
             question="hello",
-            provider="ollama",
-            model="gpt-4",
             evidence_revision=1,
             idempotency_key="ik-3",
         )
@@ -323,8 +325,6 @@ class TestStartReply:
             service.start_reply(
                 conversation_id="conv-999",
                 question="hello",
-                provider="ollama",
-                model="gpt-4",
                 evidence_revision=1,
                 idempotency_key="ik-3",
             )
@@ -342,8 +342,6 @@ class TestStartReply:
             service.start_reply(
                 conversation_id="conv-1",
                 question="hello",
-                provider="ollama",
-                model="gpt-4",
                 evidence_revision=1,
                 idempotency_key="ik-3",
             )
@@ -363,8 +361,25 @@ class TestStartReply:
             service.start_reply(
                 conversation_id="conv-1",
                 question="hello",
-                provider="ollama",
-                model="gpt-4",
+                evidence_revision=1,
+                idempotency_key="ik-3",
+            )
+
+        deps["job_service"].create.assert_not_called()
+
+    def test_start_reply_uses_saved_rule_provider_to_reject_free_form(
+        self, service: ConversationService, deps: dict
+    ) -> None:
+        deps["repository"].get_conversation.return_value = _conv(
+            default_provider="rule",
+            default_model="rule",
+            active_evidence_revision=1,
+        )
+
+        with pytest.raises(ValueError, match="rule provider"):
+            service.start_reply(
+                conversation_id="conv-1",
+                question="hello",
                 evidence_revision=1,
                 idempotency_key="ik-3",
             )
@@ -382,6 +397,8 @@ def reply_deps(service: ConversationService, deps: dict) -> dict:
     """Set up mocks for a successful reply flow."""
     conv = _conv(
         conversation_id="conv-1",
+        default_provider="gemini",
+        default_model="gemini-3.5-flash-lite",
         active_evidence_revision=1,
         rolling_summary="Previous summary",
     )
@@ -401,11 +418,6 @@ def reply_deps(service: ConversationService, deps: dict) -> dict:
     )
     deps["repository"].get_messages.return_value = [msg]
 
-    provider = MagicMock()
-    draft = ChatAnswerDraft(answer="Great price", property_claims=[])
-    provider.reply.return_value = draft
-    deps["provider_registry"].get.return_value = provider
-
     validated = ValidatedChatAnswer(
         answer="Great price",
         citations=["fact-1"],
@@ -413,14 +425,19 @@ def reply_deps(service: ConversationService, deps: dict) -> dict:
         general_guidance=["advice"],
         suggested_questions=["What else?"],
     )
-    deps["validator"].return_value = validated
+    execution = ReplyExecution(
+        validated=validated,
+        actual_provider="ollama",
+        actual_model="gemma4:e2b",
+        fallback_reason="cloud_timeout",
+    )
+    deps["reply_executor"].execute.return_value = execution
 
     return {
         "conv": conv,
         "msg": msg,
-        "provider": provider,
-        "draft": draft,
         "validated": validated,
+        "execution": execution,
     }
 
 
@@ -431,9 +448,7 @@ class TestReplyWorker:
         deps: dict,
         reply_deps: dict,
     ) -> None:
-        service._run_reply(
-            "run-3", "conv-1", "hello", "ollama", "gpt-4", 1
-        )
+        service._run_reply("run-3", "conv-1", "hello", 1)
 
         deps["job_service"].start.assert_not_called()
         deps["repository"].append_message.assert_has_calls([
@@ -445,6 +460,7 @@ class TestReplyWorker:
                 provider=None,
                 model=None,
                 citations=[],
+                fallback_reason=None,
             ),
             call(
                 conversation_id="conv-1",
@@ -452,13 +468,15 @@ class TestReplyWorker:
                 content="Great price",
                 evidence_revision=1,
                 provider="ollama",
-                model="gpt-4",
+                model="gemma4:e2b",
                 citations=["fact-1"],
+                fallback_reason="cloud_timeout",
             ),
         ])
-        deps["provider_registry"].get.assert_called_once_with("ollama")
-        deps["validator"].assert_called_once_with(
-            reply_deps["draft"],
+        deps["reply_executor"].execute.assert_called_once_with(
+            requested_model="gemini-3.5-flash-lite",
+            question="hello",
+            context=ANY,
             available_fact_ids=set(),
             evidence_revision=1,
         )
@@ -467,129 +485,25 @@ class TestReplyWorker:
         )
         deps["repository"].set_rolling_summary.assert_called_once()
 
-    def test_reply_worker_validation_failure(
+    def test_reply_worker_terminal_provider_failure_is_safe(
         self,
         service: ConversationService,
         deps: dict,
         reply_deps: dict,
     ) -> None:
-        deps["validator"].side_effect = GroundingValidationError(
-            "bad fact IDs"
+        from qingpu_insight.ollama_report_provider import ProviderError
+
+        deps["reply_executor"].execute.side_effect = ProviderError(
+            "all_conversation_providers_unavailable"
         )
 
-        service._run_reply(
-            "run-3", "conv-1", "hello", "ollama", "gpt-4", 1
-        )
+        service._run_reply("run-3", "conv-1", "hello", 1)
 
         deps["job_service"].fail.assert_called_once_with(
-            "run-3", "validation_failed", "answer validation failed"
+            "run-3",
+            "reply_providers_unavailable",
+            "all conversation providers unavailable",
         )
-        deps["job_service"].succeed.assert_not_called()
-        assert deps["repository"].append_message.call_count == 1
-        assert deps["repository"].append_message.call_args[1]["role"] == "user"
-        deps["repository"].set_rolling_summary.assert_not_called()
-
-    def test_reply_worker_one_repair_passes(
-        self,
-        service: ConversationService,
-        deps: dict,
-        reply_deps: dict,
-    ) -> None:
-        draft2 = ChatAnswerDraft(
-            answer="Fixed answer", property_claims=[]
-        )
-        validated2 = ValidatedChatAnswer(
-            answer="Fixed answer",
-            citations=["fact-2"],
-            evidence_revision=1,
-            general_guidance=[],
-            suggested_questions=[],
-        )
-        deps["validator"].side_effect = [
-            GroundingValidationError("bad fact IDs"),
-            validated2,
-        ]
-        deps["provider_registry"].get.return_value.reply.side_effect = [
-            reply_deps["draft"],
-            draft2,
-        ]
-
-        service._run_reply(
-            "run-3", "conv-1", "hello", "ollama", "gpt-4", 1
-        )
-
-        deps["job_service"].start.assert_not_called()
-        deps["job_service"].succeed.assert_called_once_with(
-            "run-3", "rev1", {}
-        )
-        assert deps["repository"].append_message.call_count == 2
-        assistant_call = deps["repository"].append_message.call_args_list[1]
-        assert assistant_call.kwargs["content"] == "Fixed answer"
-        assert assistant_call.kwargs["citations"] == ["fact-2"]
-
-    def test_reply_worker_both_attempts_fail(
-        self,
-        service: ConversationService,
-        deps: dict,
-        reply_deps: dict,
-    ) -> None:
-        deps["validator"].side_effect = GroundingValidationError(
-            "bad fact IDs"
-        )
-        deps["provider_registry"].get.return_value.reply.side_effect = [
-            reply_deps["draft"],
-            reply_deps["draft"],
-        ]
-
-        service._run_reply(
-            "run-3", "conv-1", "hello", "ollama", "gpt-4", 1
-        )
-
-        deps["job_service"].start.assert_not_called()
-        deps["job_service"].fail.assert_called_once_with(
-            "run-3", "validation_failed", "answer validation failed"
-        )
-        deps["job_service"].succeed.assert_not_called()
-        assert deps["repository"].append_message.call_count == 1
-        deps["repository"].set_rolling_summary.assert_not_called()
-
-    def test_reply_worker_exception(
-        self,
-        service: ConversationService,
-        deps: dict,
-        reply_deps: dict,
-    ) -> None:
-        deps["provider_registry"].get.side_effect = ValueError(
-            "unknown provider: bad"
-        )
-
-        with pytest.raises(ValueError, match="unknown provider"):
-            service._run_reply(
-                "run-3", "conv-1", "hello", "bad", "gpt-4", 1
-            )
-
-        deps["job_service"].start.assert_not_called()
-        deps["job_service"].fail.assert_called_once_with(
-            "run-3", "reply_failed", "unknown provider: bad"
-        )
-        deps["job_service"].succeed.assert_not_called()
-
-    def test_reply_worker_no_partial_assistant_on_provider_failure(
-        self,
-        service: ConversationService,
-        deps: dict,
-        reply_deps: dict,
-    ) -> None:
-        deps["provider_registry"].get.return_value.reply.side_effect = RuntimeError(
-            "provider down"
-        )
-
-        with pytest.raises(RuntimeError, match="provider down"):
-            service._run_reply(
-                "run-3", "conv-1", "hello", "ollama", "gpt-4", 1
-            )
-
-        deps["job_service"].start.assert_not_called()
         assert deps["repository"].append_message.call_count == 1
         assert deps["repository"].append_message.call_args[1]["role"] == "user"
         deps["repository"].set_rolling_summary.assert_not_called()
@@ -600,16 +514,13 @@ class TestReplyWorker:
         deps: dict,
         reply_deps: dict,
     ) -> None:
-        service._run_reply(
-            "run-3", "conv-1", "hello", "ollama", "gpt-4", 1
-        )
+        service._run_reply("run-3", "conv-1", "hello", 1)
 
         deps["job_service"].start.assert_not_called()
         deps["repository"].get_messages.assert_any_call(
             conversation_id="conv-1", limit=12
         )
-        provider = deps["provider_registry"].get.return_value
-        context = provider.reply.call_args[1]["context"]
+        context = deps["reply_executor"].execute.call_args.kwargs["context"]
         assert context.rolling_summary == "Previous summary"
         assert len(context.recent_messages) == 1
         assert context.recent_messages[0] == {
@@ -630,15 +541,20 @@ class TestReplyWorker:
             general_guidance=[],
             suggested_questions=[],
         )
-        deps["validator"].return_value = validated
-
-        service._run_reply(
-            "run-3", "conv-1", "hello", "ollama", "gpt-4", 1
+        deps["reply_executor"].execute.return_value = ReplyExecution(
+            validated=validated,
+            actual_provider="gemini",
+            actual_model="gemini-3.5-flash-lite",
+            fallback_reason=None,
         )
+
+        service._run_reply("run-3", "conv-1", "hello", 1)
 
         deps["job_service"].start.assert_not_called()
         assistant_call = deps["repository"].append_message.call_args_list[1]
         assert assistant_call.kwargs["citations"] == ["fact-1", "fact-2"]
+        assert assistant_call.kwargs["provider"] == "gemini"
+        assert assistant_call.kwargs["fallback_reason"] is None
 
 
 # ---------------------------------------------------------------------------
