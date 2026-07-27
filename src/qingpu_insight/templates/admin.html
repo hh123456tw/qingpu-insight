@@ -489,7 +489,7 @@
           var item = items[i];
           var el = document.createElement("div");
           el.className = "mr-history-item";
-          el.textContent = item.run_id.slice(0, 8) + " — " + (item.status || "—") + " — " + (item.finished_at || "—");
+          el.textContent = item.run_id.slice(0, 8) + " — " + (item.status || "—") + " — " + formatDatetime(item.finished_at);
           container.appendChild(el);
         }
       }

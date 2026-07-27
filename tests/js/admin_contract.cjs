@@ -27,6 +27,11 @@ assert.deepEqual(
 assert.equal(admin.jobStatusLabel("succeeded"), "成功");
 assert.equal(admin.jobStatusLabel("failed"), "失敗");
 assert.equal(admin.jobStatusLabel("interrupted"), "已中斷");
+assert.match(
+  admin.formatTaipeiDatetime("2026-07-28T00:00:00Z"),
+  /2026\/7\/28.*8:00:00/
+);
+assert.equal(admin.formatTaipeiDatetime(null), "—");
 
 assert.deepEqual(admin.buildOfficialUpdatePayload("110S3", "115S2", "acquire"), {
   start_season: "110S3",

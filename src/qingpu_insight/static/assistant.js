@@ -6,6 +6,13 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   "use strict";
 
+  function formatTaipeiDatetime(value) {
+    if (!value) return "\u2014";
+    var date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    return date.toLocaleString("zh-TW", { timeZone: "Asia/Taipei" });
+  }
+
   function el(tag, attrs, children) {
     if (typeof document === "undefined") return null;
     var node = document.createElement(tag);
@@ -119,7 +126,7 @@
       panel.appendChild(el("div", { "class": "evidence-meta" }, [
         el("span", { "class": "evidence-revision" }, ["\u8b49\u64da\u7248\u672c rev" + (data.revision || "?")]),
         el("span", { "class": "evidence-timestamp" }, [
-          "\u7522\u751f\u6642\u9593 " + new Date(data.generated_at).toLocaleString("zh-TW"),
+          "\u7522\u751f\u6642\u9593 " + formatTaipeiDatetime(data.generated_at),
         ]),
       ]));
     }
@@ -671,6 +678,7 @@
     el: el,
     getCsrfToken: getCsrfToken,
     formatMoney: formatMoney,
+    formatTaipeiDatetime: formatTaipeiDatetime,
     stageLabel: stageLabel,
     buildReplyPayload: buildReplyPayload,
     actualModelLabel: actualModelLabel,

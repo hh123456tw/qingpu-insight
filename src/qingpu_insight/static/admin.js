@@ -40,6 +40,13 @@
     return labels[status] || status;
   }
 
+  function formatTaipeiDatetime(value) {
+    if (!value) return "—";
+    var date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    return date.toLocaleString("zh-TW", { timeZone: "Asia/Taipei" });
+  }
+
   function buildOfficialUpdatePayload(startSeason, endSeason, startAt) {
     if (startSeason && endSeason) {
       var sk = startSeason.toUpperCase().split("S");
@@ -324,7 +331,7 @@
       var cells = [
         job.job_type,
         jobStatusLabel(job.display_status),
-        job.started_at || "",
+        formatTaipeiDatetime(job.started_at),
         job.output_version || "",
       ];
       for (var k = 0; k < cells.length; k++) {
@@ -441,7 +448,7 @@
           });
           var tdDrill = document.createElement("td");
           tdDrill.appendChild(drillBtn);
-          tr.innerHTML = "<td>" + shortId + "</td><td>" + (bk.created_at || "") + "</td><td>" + sizeStr + "</td><td>" + shortSha + "</td><td>" + restoreLabel + "</td>";
+          tr.innerHTML = "<td>" + shortId + "</td><td>" + formatTaipeiDatetime(bk.created_at) + "</td><td>" + sizeStr + "</td><td>" + shortSha + "</td><td>" + restoreLabel + "</td>";
           tr.appendChild(tdDrill);
           tbody.appendChild(tr);
         }
@@ -944,6 +951,7 @@
     normalizeSection: normalizeSection,
     overviewView: overviewView,
     jobStatusLabel: jobStatusLabel,
+    formatTaipeiDatetime: formatTaipeiDatetime,
     buildOfficialUpdatePayload: buildOfficialUpdatePayload,
     stageLabel: stageLabel,
     runListingSequence: runListingSequence,

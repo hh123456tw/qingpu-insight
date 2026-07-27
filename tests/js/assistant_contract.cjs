@@ -63,6 +63,11 @@ assert.equal(asst.stageLabel("capturing_listing"), "擷取物件資料…");
 assert.equal(asst.stageLabel("building_evidence"), "建立證據資料…");
 assert.equal(asst.stageLabel("ready"), "準備就緒");
 assert.equal(asst.stageLabel("unknown_stage"), "unknown_stage");
+assert.match(
+  asst.formatTaipeiDatetime("2026-07-28T00:00:00Z"),
+  /2026\/7\/28.*8:00:00/
+);
+assert.equal(asst.formatTaipeiDatetime(null), "—");
 
 // --- buildReplyPayload ---
 
