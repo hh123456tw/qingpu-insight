@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -12,7 +13,12 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from qingpu_insight.model_features import FEATURE_COLUMNS
-from qingpu_insight.model_tuning import TrainingProfile, BALANCED_PROFILE
+from qingpu_insight.model_tuning import (
+    TrainingProfile,
+    BALANCED_PROFILE,
+    PRESET_PROFILES,
+    PROFILE_ORDER,
+)
 
 
 @dataclass(frozen=True)
@@ -160,6 +166,38 @@ class ModelExperiment:
     candidate_errors: dict[str, str]
     recommended: bool
     reason_codes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ProfileCandidateEvaluation:
+    profile_name: str
+    model_name: str
+    evaluation: CandidateEvaluation
+
+
+@dataclass(frozen=True)
+class ProfileEvaluation:
+    profile: TrainingProfile
+    candidates: tuple[ProfileCandidateEvaluation, ...]
+    candidate_errors: dict[str, str]
+
+
+@dataclass(frozen=True)
+class TunedModelExperiment:
+    profile_results: tuple[ProfileEvaluation, ...]
+    selected_profile: str
+    selected_model: str
+    selected_evaluation: CandidateEvaluation
+    selected_estimator: Any
+    final_test_results: dict[str, CandidateEvaluation]
+    recommended: bool
+    reason_codes: tuple[str, ...]
+
+
+class ProfileEvaluationError(Exception):
+    def __init__(self, profile_name: str) -> None:
+        self.profile_name = profile_name
+        super().__init__(f"profile evaluation failed: {profile_name}")
 
 
 class BaselineEvaluationError(Exception):
@@ -378,6 +416,144 @@ def run_model_experiment(
         selected_estimator=selected_estimator,
         final_test_results=final_test_results,
         candidate_errors=candidate_errors,
+        recommended=recommended,
+        reason_codes=reason_codes,
+    )
+
+
+def run_tuned_model_experiment(
+    split: TimeSplit,
+    *,
+    profiles: tuple[TrainingProfile, ...] = PRESET_PROFILES,
+    feature_columns: tuple[str, ...] = FEATURE_COLUMNS,
+    use_recency_weights: bool = False,
+    baseline_months: int = 24,
+    on_profile_start: Callable[[str], None] | None = None,
+) -> TunedModelExperiment:
+    baseline = RecentMedianBaseline(months=baseline_months)
+    try:
+        baseline.fit(split.train)
+        baseline_cal = evaluate_fitted_candidate("baseline", baseline, split.calibration)
+    except Exception as exc:
+        raise BaselineEvaluationError("baseline evaluation failed") from exc
+
+    profile_results: list[ProfileEvaluation] = []
+    all_candidates: list[ProfileCandidateEvaluation] = []
+
+    for profile in profiles:
+        if on_profile_start is not None:
+            on_profile_start(profile.name)
+
+        candidate_errors: dict[str, str] = {}
+        candidates: list[ProfileCandidateEvaluation] = []
+        estimators = candidate_estimators(profile=profile)
+
+        for model_name, est in estimators.items():
+            try:
+                if use_recency_weights and profile.recency_half_life_months is not None:
+                    weights = recency_weights(
+                        split.train,
+                        half_life_months=profile.recency_half_life_months,
+                    )
+                    est.fit(
+                        split.train[list(feature_columns)],
+                        split.train["target_unit_price_twd"],
+                        model__sample_weight=weights,
+                    )
+                else:
+                    est.fit(
+                        split.train[list(feature_columns)],
+                        split.train["target_unit_price_twd"],
+                    )
+
+                predicted = est.predict(split.calibration[list(feature_columns)])
+                actual = split.calibration["target_unit_price_twd"].to_numpy()
+                metrics = metric_rows(actual, predicted, split.calibration)
+                evaluation = CandidateEvaluation(
+                    name=model_name,
+                    estimator=est,
+                    overall_mae=float(metrics.loc["overall", "mae"]),
+                    station_mape={
+                        idx.split(":", 1)[1]: float(row["mape"])
+                        for idx, row in metrics.iterrows()
+                        if idx.startswith("station:")
+                    },
+                    metrics=metrics,
+                )
+                candidates.append(ProfileCandidateEvaluation(
+                    profile_name=profile.name,
+                    model_name=model_name,
+                    evaluation=evaluation,
+                ))
+            except Exception:
+                candidate_errors[model_name] = "candidate_failed"
+
+        if len(candidates) == 0:
+            raise ProfileEvaluationError(profile.name)
+
+        all_candidates.extend(candidates)
+        profile_results.append(ProfileEvaluation(
+            profile=profile,
+            candidates=tuple(candidates),
+            candidate_errors=candidate_errors,
+        ))
+
+    def tuned_candidate_sort_key(item: ProfileCandidateEvaluation) -> tuple:
+        overall = item.evaluation.metrics.loc["overall"]
+        return (
+            float(overall["mae"]),
+            float(overall["mape"]),
+            float(overall["rmse"]),
+            PROFILE_ORDER.index(item.profile_name),
+            item.model_name,
+        )
+
+    selected_pce = min(all_candidates, key=tuned_candidate_sort_key)
+    selected_name = selected_pce.model_name
+    selected_profile = selected_pce.profile_name
+    selected_evaluation = selected_pce.evaluation
+    selected_estimator = selected_evaluation.estimator
+
+    final_test_results: dict[str, CandidateEvaluation] = {}
+    final_baseline = evaluate_fitted_candidate("baseline", baseline, split.test)
+    final_test_results["baseline"] = final_baseline
+
+    if selected_name != "baseline":
+        final_predicted = selected_estimator.predict(split.test[list(feature_columns)])
+        final_actual = split.test["target_unit_price_twd"].to_numpy()
+        final_metrics = metric_rows(final_actual, final_predicted, split.test)
+        final_selected = CandidateEvaluation(
+            name=selected_name,
+            estimator=selected_estimator,
+            overall_mae=float(final_metrics.loc["overall", "mae"]),
+            station_mape={
+                idx.split(":", 1)[1]: float(row["mape"])
+                for idx, row in final_metrics.iterrows()
+                if idx.startswith("station:")
+            },
+            metrics=final_metrics,
+        )
+        final_test_results[selected_name] = final_selected
+    else:
+        final_selected = final_baseline
+
+    if selected_name == "baseline":
+        recommended = False
+        reason_codes: tuple[str, ...] = ("baseline_selected",)
+    elif passes_release_gate(final_selected, final_baseline):
+        recommended = True
+        reason_codes = ()
+    else:
+        recommended = False
+        reason_codes = ("final_gate_failed",)
+
+    return TunedModelExperiment(
+        profile_results=tuple(profile_results),
+        selected_profile=selected_profile,
+        selected_model=selected_name,
+        selected_evaluation=selected_evaluation,
+        selected_estimator=selected_estimator,
+        final_test_results=final_test_results,
         recommended=recommended,
         reason_codes=reason_codes,
     )

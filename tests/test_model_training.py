@@ -10,18 +10,21 @@ import qingpu_insight.model_training as model_training
 from qingpu_insight.model_training import (
     BaselineEvaluationError,
     CandidateEvaluation,
+    ProfileEvaluationError,
     RecentMedianBaseline,
     TimeSplit,
+    TunedModelExperiment,
     candidate_estimators,
     evaluate_candidate,
     leakage_audit,
     make_preprocessor,
     metric_rows,
     run_model_experiment,
+    run_tuned_model_experiment,
     select_release_candidate,
     split_by_time,
 )
-from qingpu_insight.model_tuning import TrainingProfile
+from qingpu_insight.model_tuning import TrainingProfile, PRESET_PROFILES
 
 
 def _build_synthetic_frame(n_rows: int = 800) -> pd.DataFrame:
@@ -338,6 +341,17 @@ def test_release_gate_ignores_unpublished_small_station_metrics():
     assert select_release_candidate([baseline, candidate]).name == "ridge"
 
 
+class ConstantEstimator:
+    def __init__(self, value: float) -> None:
+        self.value = value
+
+    def fit(self, X, y, **kwargs):
+        return self
+
+    def predict(self, X):
+        return np.full(len(X), self.value)
+
+
 class FailingRegressor(BaseEstimator):
     def fit(self, X, y=None):
         raise RuntimeError("fit failed")
@@ -506,3 +520,182 @@ def test_evaluate_candidate_uses_requested_half_life(
         recency_half_life_months=30,
     )
     assert captured["half_life"] == 30
+
+
+def test_tuned_model_experiment_selects_on_calibration(monkeypatch) -> None:
+    n = 800
+    np.random.seed(42)
+    base = pd.Timestamp("2022-01-01")
+    dates = [base + pd.DateOffset(days=int(i * 1095 / n)) for i in range(n)]
+    day_offsets = [int(i * 1095 / n) for i in range(n)]
+
+    targets = []
+    for d in day_offsets:
+        if d < 546:
+            targets.append(600_000.0)
+        elif d < 730:
+            targets.append(610_000.0)
+        else:
+            targets.append(590_000.0)
+
+    frame = pd.DataFrame({
+        "transaction_date": dates,
+        "station_code": ["A17"] * n,
+        "station_distance_m": 500.0,
+        "building_area_ping": 35.0,
+        "building_type": ["住宅大樓"] * n,
+        "bedrooms": 3,
+        "living_rooms": 2,
+        "bathrooms": 2,
+        "building_age_years": 10.0,
+        "floor": 8,
+        "total_floors": 15,
+        "floor_ratio": 0.53,
+        "parking_type": [""] * n,
+        "parking_area_ping": 0.0,
+        "transaction_year": [d.year for d in dates],
+        "transaction_month": [d.month for d in dates],
+        "target_unit_price_twd": targets,
+        "transaction_key": [f"T{i}" for i in range(n)],
+        "road_key": [f"R{i % 10}" for i in range(n)],
+    })
+    split = split_by_time(frame, test_months=12, calibration_months=6)
+
+    profile_specific = {
+        "quick": {
+            "ridge": ConstantEstimator(610_000.0),
+            "random_forest": ConstantEstimator(500_000.0),
+            "hist_gradient_boosting": ConstantEstimator(550_000.0),
+        },
+        "thorough": {
+            "ridge": ConstantEstimator(600_000.0),
+            "random_forest": ConstantEstimator(500_000.0),
+            "hist_gradient_boosting": ConstantEstimator(550_000.0),
+        },
+    }
+
+    def mock_candidate_estimators(seed=42, profile=None):
+        return profile_specific[profile.name]
+
+    monkeypatch.setattr(model_training, "candidate_estimators", mock_candidate_estimators)
+
+    experiment = run_tuned_model_experiment(
+        split,
+        profiles=(PRESET_PROFILES[0], PRESET_PROFILES[2]),
+        feature_columns=("building_area_ping",),
+        use_recency_weights=False,
+    )
+    assert experiment.selected_profile == "quick"
+    assert experiment.selected_model == "ridge"
+    assert set(experiment.final_test_results) == {"baseline", "ridge"}
+
+
+def test_tuned_model_tie_breaking(monkeypatch) -> None:
+    n = 800
+    np.random.seed(42)
+    base = pd.Timestamp("2022-01-01")
+    dates = [base + pd.DateOffset(days=int(i * 1095 / n)) for i in range(n)]
+    targets = [600_000.0 if i < n // 2 else 400_000.0 for i in range(n)]
+
+    frame = pd.DataFrame({
+        "transaction_date": dates,
+        "station_code": ["A17"] * n,
+        "station_distance_m": 500.0,
+        "building_area_ping": 35.0,
+        "building_type": ["住宅大樓"] * n,
+        "bedrooms": 3,
+        "living_rooms": 2,
+        "bathrooms": 2,
+        "building_age_years": 10.0,
+        "floor": 8,
+        "total_floors": 15,
+        "floor_ratio": 0.53,
+        "parking_type": [""] * n,
+        "parking_area_ping": 0.0,
+        "transaction_year": [d.year for d in dates],
+        "transaction_month": [d.month for d in dates],
+        "target_unit_price_twd": targets,
+        "transaction_key": [f"T{i}" for i in range(n)],
+        "road_key": [f"R{i % 10}" for i in range(n)],
+    })
+    split = split_by_time(frame)
+
+    profile_specific = {
+        "quick": {
+            "ridge": ConstantEstimator(500_000.0),
+            "random_forest": ConstantEstimator(600_000.0),
+        },
+        "balanced": {
+            "ridge": ConstantEstimator(500_000.0),
+        },
+    }
+
+    def mock_candidate_estimators(seed=42, profile=None):
+        return profile_specific[profile.name]
+
+    monkeypatch.setattr(model_training, "candidate_estimators", mock_candidate_estimators)
+
+    experiment = run_tuned_model_experiment(
+        split,
+        profiles=(PRESET_PROFILES[0], PRESET_PROFILES[1]),
+        feature_columns=("building_area_ping",),
+        use_recency_weights=False,
+    )
+    assert experiment.selected_profile == "quick"
+    assert experiment.selected_model == "ridge"
+
+
+def test_tuned_model_profile_failure(monkeypatch) -> None:
+    n = 800
+    np.random.seed(42)
+    base = pd.Timestamp("2022-01-01")
+    dates = [base + pd.DateOffset(days=int(i * 1095 / n)) for i in range(n)]
+    targets = [600_000.0] * n
+
+    frame = pd.DataFrame({
+        "transaction_date": dates,
+        "station_code": ["A17"] * n,
+        "station_distance_m": 500.0,
+        "building_area_ping": 35.0,
+        "building_type": ["住宅大樓"] * n,
+        "bedrooms": 3,
+        "living_rooms": 2,
+        "bathrooms": 2,
+        "building_age_years": 10.0,
+        "floor": 8,
+        "total_floors": 15,
+        "floor_ratio": 0.53,
+        "parking_type": [""] * n,
+        "parking_area_ping": 0.0,
+        "transaction_year": [d.year for d in dates],
+        "transaction_month": [d.month for d in dates],
+        "target_unit_price_twd": targets,
+        "transaction_key": [f"T{i}" for i in range(n)],
+        "road_key": [f"R{i % 10}" for i in range(n)],
+    })
+    split = split_by_time(frame)
+
+    profile_specific = {
+        "quick": {
+            "ridge": ConstantEstimator(600_000.0),
+        },
+    }
+
+    def mock_candidate_estimators(seed=42, profile=None):
+        if profile.name == "balanced":
+            return {
+                "broken": FailingRegressor(),
+                "also_broken": FailingRegressor(),
+            }
+        return profile_specific[profile.name]
+
+    monkeypatch.setattr(model_training, "candidate_estimators", mock_candidate_estimators)
+
+    with pytest.raises(ProfileEvaluationError) as exc:
+        run_tuned_model_experiment(
+            split,
+            profiles=(PRESET_PROFILES[0], PRESET_PROFILES[1]),
+            feature_columns=("building_area_ping",),
+            use_recency_weights=False,
+        )
+    assert exc.value.profile_name == "balanced"
