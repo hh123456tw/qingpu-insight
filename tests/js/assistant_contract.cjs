@@ -66,21 +66,22 @@ assert.equal(asst.stageLabel("unknown_stage"), "unknown_stage");
 
 // --- buildReplyPayload ---
 
-assert.deepEqual(asst.buildReplyPayload("這是問題", "ollama", "gemma3:4b", 1), {
+assert.deepEqual(asst.buildReplyPayload("這是問題", 1), {
   content: "這是問題",
-  provider: "ollama",
-  model: "gemma3:4b",
   evidence_revision: 1,
 });
 
-assert.deepEqual(asst.buildReplyPayload("問題", "", "", null), {
+assert.deepEqual(asst.buildReplyPayload("問題", null), {
   content: "問題",
 });
 
-assert.deepEqual(asst.buildReplyPayload("test", "rule", "", undefined), {
+assert.deepEqual(asst.buildReplyPayload("test", undefined), {
   content: "test",
-  provider: "rule",
 });
+
+assert.equal(asst.fallbackReasonLabel("cloud_timeout"), "雲端逾時，已自動切換");
+assert.equal(asst.fallbackReasonLabel("cloud_auth_failed"), "雲端驗證失敗，已自動切換");
+assert.equal(asst.fallbackReasonLabel("unknown"), "已使用備援模型");
 
 // --- formatMoney ---
 
@@ -108,6 +109,10 @@ var msg = {
   role: "assistant",
   content: "這是分析結果",
   evidence_revision: 2,
+  requested_model: "gemini-3.5-flash-lite",
+  provider: "ollama",
+  model: "gemma4:e2b",
+  fallback_reason: "cloud_timeout",
 };
 var msgEl = asst.renderMessage(msg, 2);
 assert.equal(msgEl.tagName, "DIV");
@@ -117,6 +122,9 @@ var contentEl = msgEl._children[1];
 assert.equal(contentEl.textContent, "這是分析結果");
 // Ensure no XSS via innerHTML
 assert.equal(typeof contentEl.textContent, "string");
+var messageText = collectText(msgEl);
+assert.ok(messageText.indexOf("gemma4:e2b") !== -1);
+assert.ok(messageText.indexOf("雲端逾時，已自動切換") !== -1);
 
 // User message
 var userMsg = asst.renderMessage({ role: "user", content: "<script>alert(1)</script>" }, null);
@@ -187,10 +195,10 @@ assert.equal(asst.getCsrfToken(), ""); // no meta set in mock
 
 // --- sendReply payload shape ---
 
-var payload = asst.buildReplyPayload("HELLO", "gemini", "gemini-2.0-flash", 3);
+var payload = asst.buildReplyPayload("HELLO", 3);
 assert.equal(payload.content, "HELLO");
-assert.equal(payload.provider, "gemini");
-assert.equal(payload.model, "gemini-2.0-flash");
+assert.equal(payload.provider, undefined);
+assert.equal(payload.model, undefined);
 assert.equal(payload.evidence_revision, 3);
 
 process.stdout.write("assistant contract passed\n");

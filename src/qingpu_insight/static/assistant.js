@@ -62,12 +62,23 @@
     return STAGE_LABELS[stage] || stage;
   }
 
-  function buildReplyPayload(content, provider, model, evidenceRevision) {
+  function buildReplyPayload(content, evidenceRevision) {
     var payload = { content: content };
-    if (provider) payload.provider = provider;
-    if (model) payload.model = model;
     if (evidenceRevision != null) payload.evidence_revision = evidenceRevision;
     return payload;
+  }
+
+  var FALLBACK_REASON_LABELS = {
+    cloud_timeout: "雲端逾時，已自動切換",
+    cloud_rate_limited: "雲端流量受限，已自動切換",
+    cloud_auth_failed: "雲端驗證失敗，已自動切換",
+    cloud_unavailable: "雲端暫時不可用，已自動切換",
+    cloud_invalid_response: "雲端回覆格式異常，已自動切換",
+    local_unavailable: "本機模型不可用，已切換 Rule",
+  };
+
+  function fallbackReasonLabel(reason) {
+    return FALLBACK_REASON_LABELS[reason] || "已使用備援模型";
   }
 
   function renderEvidencePanel(data) {
@@ -184,7 +195,12 @@
     header.appendChild(el("span", { "class": "message-role" }, [roleLabel]));
     if (msg.role === "assistant" && msg.provider) {
       header.appendChild(el("span", { "class": "message-provider" }, [
-        msg.provider + (msg.model ? " / " + msg.model : ""),
+        "實際：" + msg.provider + (msg.model ? " / " + msg.model : ""),
+      ]));
+    }
+    if (msg.role === "assistant" && msg.fallback_reason) {
+      header.appendChild(el("span", { "class": "fallback-badge" }, [
+        fallbackReasonLabel(msg.fallback_reason),
       ]));
     }
     if (msg.role === "assistant" && msg.evidence_revision != null) {
@@ -282,8 +298,8 @@
       });
   }
 
-  function sendReply(id, content, provider, model, evidenceRevision) {
-    var payload = buildReplyPayload(content, provider, model, evidenceRevision);
+  function sendReply(id, content, evidenceRevision) {
+    var payload = buildReplyPayload(content, evidenceRevision);
     return fetch("/api/conversations/" + encodeURIComponent(id) + "/replies", {
       method: "POST",
       headers: {
@@ -401,17 +417,12 @@
         conversation = data;
         if (titleEl) titleEl.textContent = data.title || "\u65b0\u7684\u7269\u4ef6\u5206\u6790";
         if (providerBadge) {
-          providerBadge.textContent = data.default_provider || "";
+          providerBadge.textContent = data.default_model
+            ? "回答模型：" + data.default_model
+            : "";
         }
         if (sendBtn) {
-          sendBtn.disabled = (
-            data.status !== "ready"
-            || data.default_provider === "rule"
-          );
-        }
-        if (questionInput && data.default_provider === "rule") {
-          questionInput.disabled = true;
-          questionInput.placeholder = "\u898f\u5247\u6a21\u5f0f\u53ea\u986f\u793a\u56fa\u5b9a\u8b49\u64da\u6458\u8981\uff1b\u8acb\u5207\u63db Ollama \u6216 Gemini \u9032\u884c\u5c0d\u8a71";
+          sendBtn.disabled = data.status !== "ready";
         }
         return loadEvidence(conversationId);
       }).then(function (evData) {
@@ -512,8 +523,6 @@
       sendReply(
         conversationId,
         content,
-        conversation ? conversation.default_provider : undefined,
-        conversation ? conversation.default_model : undefined,
         conversation ? conversation.active_evidence_revision : undefined
       )
         .then(function (result) {
@@ -634,6 +643,7 @@
     formatMoney: formatMoney,
     stageLabel: stageLabel,
     buildReplyPayload: buildReplyPayload,
+    fallbackReasonLabel: fallbackReasonLabel,
     renderEvidencePanel: renderEvidencePanel,
     renderMessage: renderMessage,
     renderSuggestedQuestions: renderSuggestedQuestions,

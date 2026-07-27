@@ -317,6 +317,15 @@ body {
   margin-bottom: 0.25rem;
 }
 
+.fallback-badge {
+  padding: 0.12rem 0.4rem;
+  border-radius: 999px;
+  color: #7a4b00;
+  background: #fff2cf;
+  border: 1px solid #e7c76e;
+  font-size: 0.72rem;
+}
+
 .message-role {
   font-size: 0.75rem;
   font-weight: 600;
