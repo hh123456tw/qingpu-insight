@@ -83,19 +83,22 @@
       </select>
     </label>
   </section>
-  <section id="status" role="status" aria-live="polite"></section>
-  <section class="kpis" aria-label="市場摘要">
-    <article><span>中位單價</span><strong id="median-price">—</strong></article>
-    <article><span>成交筆數</span><strong id="record-count">—</strong></article>
-    <article><span>中位總價</span><strong id="median-total">—</strong></article>
-    <article><span>資料更新至</span><strong id="latest-date">—</strong></article>
+  <section id="market-results" class="market-results" aria-label="市場分析結果">
+    <div id="active-market-filters" class="active-market-filters"></div>
+    <section id="status" role="status" aria-live="polite"></section>
+    <section class="kpis" aria-label="市場摘要">
+      <article><span>中位單價</span><strong id="median-price">—</strong></article>
+      <article><span>成交筆數</span><strong id="record-count">—</strong></article>
+      <article><span>中位總價</span><strong id="median-total">—</strong></article>
+      <article><span>資料更新至</span><strong id="latest-date">—</strong></article>
+    </section>
+    <section class="dashboard-grid">
+      <article><h2>成交地圖</h2><div id="market-map" aria-label="成交地圖"></div></article>
+      <article><h2>價格與交易量趨勢</h2><canvas id="price-trend"></canvas></article>
+    </section>
+    <section><h2>近期成交</h2><div id="recent-transactions"></div></section>
+    <aside class="method-note">成交來自官方實價登錄；座標為門牌比對結果。僅供市場研究，不構成估價、投資或購屋建議。</aside>
   </section>
-  <section class="dashboard-grid">
-    <article><h2>成交地圖</h2><div id="market-map" aria-label="成交地圖"></div></article>
-    <article><h2>價格與交易量趨勢</h2><canvas id="price-trend"></canvas></article>
-  </section>
-  <section><h2>近期成交</h2><div id="recent-transactions"></div></section>
-  <aside class="method-note">成交來自官方實價登錄；座標為門牌比對結果。僅供市場研究，不構成估價、投資或購屋建議。</aside>
   <section class="valuation-panel" aria-labelledby="valuation-title">
     <h2 id="valuation-title">AI 條件估價</h2>
     <form id="valuation-form">
@@ -189,6 +192,7 @@
 <script src="{{ url_for('static', filename='display_format.js') }}"></script>
 <script src="{{ url_for('static', filename='valuation_form.js') }}"></script>
 <script src="{{ url_for('static', filename='home_assistant.js') }}" defer></script>
+<script src="{{ url_for('static', filename='market_results.js') }}"></script>
 <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>

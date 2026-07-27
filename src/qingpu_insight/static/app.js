@@ -18,6 +18,10 @@ document.addEventListener("DOMContentLoaded", async function () {
   const transactionsDiv = document.getElementById("recent-transactions");
 
   const marketMapUi = await import("/static/market_map.mjs");
+  var marketResults = typeof QingpuMarketResults !== "undefined" ? QingpuMarketResults : null;
+
+  var recentItems = [];
+  var recentExpanded = false;
   const mapStatus = document.createElement("p");
   mapStatus.id = "map-data-status";
   mapStatus.setAttribute("role", "status");
@@ -128,6 +132,8 @@ document.addEventListener("DOMContentLoaded", async function () {
     chart.update();
   }
 
+  var display = null;
+
   function buildTable(items) {
     var table = document.createElement("table");
     var thead = document.createElement("thead");
@@ -152,8 +158,12 @@ document.addEventListener("DOMContentLoaded", async function () {
         item.building_area_ping
           ? item.building_area_ping.toFixed(1) + " 坪"
           : "",
-        item.total_price_twd ? money.format(item.total_price_twd) : "",
-        item.unit_price_per_ping_twd ? money.format(item.unit_price_per_ping_twd) : "",
+        item.total_price_twd
+          ? (display ? display.formatTotalWan(item.total_price_twd) : money.format(item.total_price_twd))
+          : "",
+        item.unit_price_per_ping_twd
+          ? (display ? display.formatUnitWan(item.unit_price_per_ping_twd) : money.format(item.unit_price_per_ping_twd))
+          : "",
       ];
       cells.forEach(function (val) {
         var td = document.createElement("td");
@@ -166,11 +176,59 @@ document.addEventListener("DOMContentLoaded", async function () {
     return table;
   }
 
+  function updateFilterChips() {
+    if (!marketResults) return;
+    var state = {
+      transactionTypeLabel: typeSelect.options[typeSelect.selectedIndex].text,
+      stations: Array.from(stationFilter.querySelectorAll('input[type="checkbox"]:checked')).map(function (cb) { return cb.value; }).sort(),
+      areaMin: areaPingMin.value,
+      areaMax: areaPingMax.value,
+    };
+    var chips = marketResults.filterSummary(state);
+    var container = document.getElementById("active-market-filters");
+    var children = chips.map(function (chip) {
+      var span = document.createElement("span");
+      span.className = "filter-chip";
+      span.textContent = chip;
+      return span;
+    });
+    var btn = document.createElement("button");
+    btn.id = "modify-filters";
+    btn.className = "modify-filters";
+    btn.textContent = "修改篩選";
+    btn.addEventListener("click", function () {
+      document.querySelector(".controls").scrollIntoView({ behavior: "smooth" });
+      document.getElementById("transaction-type").focus();
+    });
+    children.push(btn);
+    container.replaceChildren.apply(container, children);
+  }
+
+  function updateRecentTable() {
+    if (!marketResults) return;
+    var items = marketResults.visibleRecent(recentItems, recentExpanded);
+    var container = document.getElementById("recent-transactions");
+    if (items.length === 0) {
+      container.textContent = "目前條件下沒有成交資料";
+      return;
+    }
+    container.replaceChildren(buildTable(items));
+    if (recentItems.length > 8 || recentExpanded) {
+      var toggle = document.createElement("button");
+      toggle.className = "recent-toggle";
+      toggle.textContent = marketResults.recentToggleLabel(recentItems.length, recentExpanded);
+      toggle.addEventListener("click", function () {
+        recentExpanded = !recentExpanded;
+        updateRecentTable();
+      });
+      container.appendChild(toggle);
+    }
+  }
+
   function fetchData() {
     if (lastController !== null) lastController.abort();
     lastController = new AbortController();
     var params = buildParams();
-    var signal = lastController.signal;
 
     initMap();
     initChart();
@@ -187,55 +245,57 @@ document.addEventListener("DOMContentLoaded", async function () {
       mapMoveHandlerRegistered = true;
     }
 
-    var recentParams = marketMapUi.withRecentLimit(params);
-    Promise.all([
-      fetch("/api/market/summary?" + params.toString(), { signal }).then(
-        function (r) {
-          if (!r.ok) throw new Error("summary " + r.status);
-          return r.json();
-        }
-      ),
-      fetch("/api/market/trends?" + params.toString(), { signal }).then(
-        function (r) {
-          if (!r.ok) throw new Error("trends " + r.status);
-          return r.json();
-        }
-      ),
-      fetch("/api/transactions?" + recentParams.toString(), { signal }).then(
-        function (r) {
-          if (!r.ok) throw new Error("transactions " + r.status);
-          return r.json();
-        }
-      ),
-    ])
-      .then(function (results) {
-        var summary = results[0];
-        var trends = results[1];
-        var transactions = results[2];
+    display = typeof QingpuDisplayFormat !== "undefined" ? QingpuDisplayFormat : null;
+    if (!marketResults) return;
 
+    var recentParams = marketMapUi.withRecentLimit(params);
+
+    marketResults.loadSection(
+      "/api/market/summary?" + params.toString(),
+      window.fetch || fetch,
+      function (summary) {
         medianPrice.textContent = summary.median_unit_price_per_ping_twd
-          ? formatWan(summary.median_unit_price_per_ping_twd)
+          ? (display ? display.formatUnitWan(summary.median_unit_price_per_ping_twd) : formatWan(summary.median_unit_price_per_ping_twd))
           : "—";
-        recordCount.textContent =
-          summary.record_count != null ? summary.record_count : "—";
+        recordCount.textContent = summary.record_count != null ? summary.record_count : "—";
         medianTotal.textContent = summary.median_total_price_twd
-          ? money.format(summary.median_total_price_twd)
+          ? (display ? display.formatTotalWan(summary.median_total_price_twd) : money.format(summary.median_total_price_twd))
           : "—";
         latestDate.textContent = summary.latest_transaction_date
           ? summary.latest_transaction_date.slice(0, 10)
           : "—";
-
         statusEl.textContent = "";
+      },
+      function (err) {
+        statusEl.textContent = "摘要載入失敗：" + err.message;
+      }
+    );
 
+    marketResults.loadSection(
+      "/api/market/trends?" + params.toString(),
+      window.fetch || fetch,
+      function (trends) {
         updateChart(trends.items || []);
-        transactionsDiv.replaceChildren(
-          buildTable(transactions.items || [])
-        );
-      })
-      .catch(function (err) {
-        if (err.name === "AbortError") return;
-        statusEl.textContent = "資料載入失敗：" + err.message;
-      });
+      },
+      function (err) {
+        console.warn("trends error:", err.message);
+      }
+    );
+
+    marketResults.loadSection(
+      "/api/transactions?" + recentParams.toString(),
+      window.fetch || fetch,
+      function (transactions) {
+        recentItems = transactions.items || [];
+        recentExpanded = false;
+        updateRecentTable();
+        updateFilterChips();
+      },
+      function (err) {
+        var container = document.getElementById("recent-transactions");
+        container.textContent = "成交資料載入失敗：" + err.message;
+      }
+    );
   }
 
   function renderMap(payload) {
@@ -248,7 +308,7 @@ document.addEventListener("DOMContentLoaded", async function () {
       var unitPrice = (
         typeof item.median_unit_price_per_ping_twd === "number"
         && Number.isFinite(item.median_unit_price_per_ping_twd)
-      ) ? formatWan(item.median_unit_price_per_ping_twd) : "—";
+      ) ? (display ? display.formatUnitWan(item.median_unit_price_per_ping_twd) : formatWan(item.median_unit_price_per_ping_twd)) : "—";
       L.circleMarker([item.latitude, item.longitude], {
         radius: marketMapUi.markerRadius(item.record_count),
         color: "#0b5f55",

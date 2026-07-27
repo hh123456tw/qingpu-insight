@@ -616,6 +616,76 @@ select:focus:invalid {
   margin-top: 0.15rem;
 }
 
+/* --- Market Results Shell --- */
+
+.market-results {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 1rem;
+  background: var(--card);
+  margin-bottom: 1.25rem;
+}
+
+.active-market-filters {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0;
+  margin-bottom: 0.5rem;
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
+}
+
+.filter-chip {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--accent);
+  background: rgba(20, 125, 111, 0.08);
+  border: 1px solid rgba(20, 125, 111, 0.25);
+  border-radius: 4px;
+  padding: 0.2rem 0.5rem;
+  white-space: nowrap;
+}
+
+.modify-filters {
+  font-size: 0.78rem;
+  color: var(--muted);
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.2rem 0.5rem;
+  cursor: pointer;
+  margin-left: auto;
+}
+
+.modify-filters:hover {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.recent-toggle {
+  display: block;
+  width: 100%;
+  margin-top: 0.5rem;
+  padding: 0.4rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.recent-toggle:hover {
+  background: rgba(20, 125, 111, 0.06);
+}
+
 @media (max-width: 960px) {
   .dashboard-grid {
     grid-template-columns: 1fr;
