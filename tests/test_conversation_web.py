@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import ANY, MagicMock
 
 import pytest
 from flask import Flask
@@ -23,27 +23,57 @@ def service():
 
 @pytest.fixture
 def repository():
-    return MagicMock()
+    repo = MagicMock()
+    repo.get_conversation.return_value = SimpleNamespace(
+        default_provider="gemini",
+        default_model="gemini-3.5-flash-lite",
+    )
+    return repo
+
+
+@pytest.fixture
+def catalog_getter():
+    return lambda: {
+        "default_model": "gemini-3.5-flash-lite",
+        "gemini_configured": True,
+        "items": [
+            {
+                "id": "gemini-3.5-flash-lite",
+                "label": "Google Gemini 3.5 Flash-Lite",
+                "provider": "gemini",
+                "cloud": True,
+                "description": "快速、穩定",
+            }
+        ],
+    }
 
 
 _TEMPLATE_DIR = str(Path(__file__).parent.parent / "src" / "qingpu_insight" / "templates")
 
 
 @pytest.fixture
-def conversation_app_no_service():
+def conversation_app_no_service(catalog_getter):
     app = Flask(__name__)
     app.config["TESTING"] = True
     app.secret_key = "test-secret"
-    app.register_blueprint(create_conversation_blueprint(None, None))
+    app.register_blueprint(
+        create_conversation_blueprint(None, None, catalog_getter=catalog_getter)
+    )
     return app.test_client()
 
 
 @pytest.fixture
-def conversation_app(service, repository):
+def conversation_app(service, repository, catalog_getter):
     app = Flask(__name__, template_folder=_TEMPLATE_DIR)
     app.config["TESTING"] = True
     app.secret_key = "test-secret"
-    app.register_blueprint(create_conversation_blueprint(service, repository))
+    app.register_blueprint(
+        create_conversation_blueprint(
+            service,
+            repository,
+            catalog_getter=catalog_getter,
+        )
+    )
     return app.test_client()
 
 
@@ -60,8 +90,8 @@ def sample_conversation():
         id="conv-1",
         title="新的物件分析",
         status="empty",
-        default_provider="ollama",
-        default_model="gemma2:9b",
+        default_provider="gemini",
+        default_model="gemini-3.5-flash-lite",
         active_listing_id=None,
         active_evidence_revision=None,
         rolling_summary=None,
@@ -94,9 +124,10 @@ def sample_messages():
             content="Hi there",
             evidence_revision=1,
             provider="ollama",
-            model="gemma2:9b",
+            model="gemma4:e2b",
             citations=["fact-1"],
             created_at=datetime(2025, 1, 1, tzinfo=UTC),
+            fallback_reason="cloud_timeout",
         ),
     ]
 
@@ -113,8 +144,8 @@ class TestCreateConversation:
             id="conv-new",
             title="新的物件分析",
             status="empty",
-            default_provider="ollama",
-            default_model="gemma2:9b",
+            default_provider="gemini",
+            default_model="gemini-3.5-flash-lite",
             active_listing_id=None,
             active_evidence_revision=None,
             rolling_summary=None,
@@ -124,16 +155,16 @@ class TestCreateConversation:
         )
         response = csrf_client.post(
             "/api/conversations",
-            json={"provider": "ollama", "model": "gemma2:9b"},
+            json={"model": "gemini-3.5-flash-lite"},
             headers={"X-Qingpu-CSRF": "test-token"},
         )
         assert response.status_code == 201
         data = response.get_json()
         assert data["id"] == "conv-new"
         assert data["status"] == "empty"
-        assert data["default_provider"] == "ollama"
+        assert data["default_provider"] == "gemini"
         service.create_conversation.assert_called_once_with(
-            provider="ollama", model="gemma2:9b"
+            model="gemini-3.5-flash-lite"
         )
 
     def test_create_conversation_400_missing_json(self, csrf_client):
@@ -146,10 +177,10 @@ class TestCreateConversation:
         assert response.status_code == 400
         assert response.get_json()["error"]["code"] == "invalid_request"
 
-    def test_create_conversation_400_bad_provider(self, csrf_client):
+    def test_create_conversation_400_rejects_provider_override(self, csrf_client):
         response = csrf_client.post(
             "/api/conversations",
-            json={"provider": "unknown", "model": "gemma2:9b"},
+            json={"provider": "gemini", "model": "gemini-3.5-flash-lite"},
             headers={"X-Qingpu-CSRF": "test-token"},
         )
         assert response.status_code == 400
@@ -159,16 +190,37 @@ class TestCreateConversation:
         app = Flask(__name__, template_folder=_TEMPLATE_DIR)
         app.config["TESTING"] = True
         app.secret_key = "test-secret"
-        app.register_blueprint(create_conversation_blueprint(None, MagicMock()))
+        app.register_blueprint(
+            create_conversation_blueprint(
+                None,
+                MagicMock(),
+                catalog_getter=lambda: {
+                    "default_model": "gemini-3.5-flash-lite",
+                    "gemini_configured": False,
+                    "items": [],
+                },
+            )
+        )
         with app.test_client() as client:
             with client.session_transaction() as sess:
                 sess["_csrf_token"] = "test-token"
             response = client.post(
                 "/api/conversations",
-                json={"provider": "ollama", "model": "gemma2:9b"},
+                json={"model": "gemini-3.5-flash-lite"},
                 headers={"X-Qingpu-CSRF": "test-token"},
             )
         assert response.status_code == 503
+
+
+class TestConversationModels:
+    def test_catalog_endpoint_never_returns_key(self, conversation_app):
+        response = conversation_app.get("/api/conversation-models")
+
+        assert response.status_code == 200
+        payload = response.get_json()
+        assert payload["default_model"] == "gemini-3.5-flash-lite"
+        assert payload["gemini_configured"] is True
+        assert "api_key" not in response.get_data(as_text=True).lower()
 
 
 # --- GET /api/conversations ---
@@ -327,6 +379,10 @@ class TestGetMessages:
         data = response.get_json()
         assert len(data["items"]) == 2
         assert data["items"][0]["role"] == "user"
+        assistant = data["items"][1]
+        assert assistant["requested_model"] == "gemini-3.5-flash-lite"
+        assert assistant["model"] == "gemma4:e2b"
+        assert assistant["fallback_reason"] == "cloud_timeout"
 
     def test_get_messages_default_limit(self, conversation_app, repository, sample_messages):
         repository.get_messages.return_value = sample_messages
@@ -375,8 +431,6 @@ class TestCreateReply:
             "/api/conversations/conv-1/replies",
             json={
                 "content": "What is the price?",
-                "provider": "ollama",
-                "model": "gemma2:9b",
                 "evidence_revision": 1,
             },
             headers={"X-Qingpu-CSRF": "test-token"},
@@ -384,6 +438,12 @@ class TestCreateReply:
         assert response.status_code == 202
         data = response.get_json()
         assert data["run_id"] == "run-3"
+        service.start_reply.assert_called_once_with(
+            conversation_id="conv-1",
+            question="What is the price?",
+            evidence_revision=1,
+            idempotency_key=ANY,
+        )
 
     def test_create_reply_409_stale(self, csrf_client, service):
         service.start_reply.side_effect = ValueError("stale evidence revision")
@@ -391,8 +451,6 @@ class TestCreateReply:
             "/api/conversations/conv-1/replies",
             json={
                 "content": "What is the price?",
-                "provider": "ollama",
-                "model": "gemma2:9b",
                 "evidence_revision": 1,
             },
             headers={"X-Qingpu-CSRF": "test-token"},
@@ -409,8 +467,6 @@ class TestCreateReply:
             "/api/conversations/conv-1/replies",
             json={
                 "content": "What is the price?",
-                "provider": "ollama",
-                "model": "gemma2:9b",
                 "evidence_revision": 1,
             },
             headers={"X-Qingpu-CSRF": "test-token"},
@@ -449,7 +505,7 @@ class TestSecurity:
     def test_security_loopback(self, csrf_client):
         response = csrf_client.post(
             "/api/conversations",
-            json={"provider": "ollama", "model": "gemma2:9b"},
+            json={"model": "gemini-3.5-flash-lite"},
             environ_base={"REMOTE_ADDR": "10.0.0.2"},
             headers={"X-Qingpu-CSRF": "test-token"},
         )
@@ -458,7 +514,7 @@ class TestSecurity:
     def test_security_host(self, csrf_client):
         response = csrf_client.post(
             "/api/conversations",
-            json={"provider": "ollama", "model": "gemma2:9b"},
+            json={"model": "gemini-3.5-flash-lite"},
             base_url="http://attacker.example",
             headers={"X-Qingpu-CSRF": "test-token"},
         )
@@ -467,14 +523,14 @@ class TestSecurity:
     def test_security_csrf_missing(self, csrf_client):
         response = csrf_client.post(
             "/api/conversations",
-            json={"provider": "ollama", "model": "gemma2:9b"},
+            json={"model": "gemini-3.5-flash-lite"},
         )
         assert response.status_code == 403
 
     def test_security_csrf_wrong(self, csrf_client):
         response = csrf_client.post(
             "/api/conversations",
-            json={"provider": "ollama", "model": "gemma2:9b"},
+            json={"model": "gemini-3.5-flash-lite"},
             headers={"X-Qingpu-CSRF": "wrong-token"},
         )
         assert response.status_code == 403
@@ -525,7 +581,7 @@ def test_create_app_wires_conversation_blueprint():
         sess["_csrf_token"] = "wired-token"
     response = client.post(
         "/api/conversations",
-        json={"provider": "ollama", "model": "gemma3:4b"},
+        json={"model": "gemini-3.5-flash-lite"},
         headers={
             "X-Qingpu-CSRF": "wired-token",
             "Host": "127.0.0.1",

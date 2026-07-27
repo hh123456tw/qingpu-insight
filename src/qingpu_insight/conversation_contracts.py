@@ -12,7 +12,6 @@ MessageRole = Literal["user", "assistant", "system"]
 
 class ConversationCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    provider: ProviderName = "ollama"
     model: str = Field(min_length=1, max_length=120)
 
 
@@ -24,8 +23,6 @@ class ListingImportRequest(BaseModel):
 class ReplyCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     content: str = Field(min_length=1, max_length=4000)
-    provider: ProviderName
-    model: str = Field(min_length=1, max_length=120)
     evidence_revision: int = Field(ge=1)
 
 

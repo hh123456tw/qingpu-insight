@@ -5,6 +5,7 @@ import re
 import uuid
 from datetime import datetime
 from ipaddress import ip_address
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -88,7 +89,7 @@ def _evidence_to_json(ev: Any) -> dict[str, Any]:
     }
 
 
-def _message_to_json(msg: Any) -> dict[str, Any]:
+def _message_to_json(msg: Any, conversation: Any) -> dict[str, Any]:
     return {
         "id": msg.id,
         "conversation_id": msg.conversation_id,
@@ -98,13 +99,28 @@ def _message_to_json(msg: Any) -> dict[str, Any]:
         "evidence_revision": msg.evidence_revision,
         "provider": msg.provider,
         "model": msg.model,
+        "requested_provider": conversation.default_provider,
+        "requested_model": conversation.default_model,
+        "fallback_reason": getattr(msg, "fallback_reason", None),
         "citations": msg.citations,
         "created_at": msg.created_at.isoformat(),
     }
 
 
-def create_conversation_blueprint(service, repository):
+def create_conversation_blueprint(
+    service,
+    repository,
+    *,
+    catalog_getter: Callable[[], dict[str, Any]] | None = None,
+):
     bp = Blueprint("conversation", __name__, url_prefix="")
+    get_catalog = catalog_getter or (
+        lambda: {
+            "default_model": "",
+            "gemini_configured": False,
+            "items": [],
+        }
+    )
 
     @bp.errorhandler(Exception)
     def handle_conversation_error(error):
@@ -149,8 +165,12 @@ def create_conversation_blueprint(service, repository):
             return jsonify({
                 "error": {"code": "invalid_request", "message": str(e)}
             }), 400
-        record = service.create_conversation(provider=req.provider, model=req.model)
+        record = service.create_conversation(model=req.model)
         return jsonify(_conversation_to_json(record)), 201
+
+    @bp.route("/api/conversation-models", methods=["GET"])
+    def get_conversation_models():
+        return jsonify(get_catalog())
 
     @bp.route("/api/conversations", methods=["GET"])
     def list_conversations():
@@ -375,13 +395,22 @@ def create_conversation_blueprint(service, repository):
                         "fields": {"before": "integer"},
                     }
                 }), 400
+        conversation = repository.get_conversation(conversation_id)
+        if conversation is None:
+            return jsonify({
+                "error": {"code": "not_found", "message": "對話不存在。"}
+            }), 404
         messages = repository.get_messages(
             conversation_id=conversation_id,
             limit=limit,
             before_sequence=before_sequence,
         )
         return jsonify({
-            "items": [_message_to_json(m) for m in messages], "limit": limit
+            "items": [
+                _message_to_json(message, conversation)
+                for message in messages
+            ],
+            "limit": limit,
         })
 
     @bp.route("/api/conversations/<conversation_id>/replies", methods=["POST"])
@@ -411,8 +440,6 @@ def create_conversation_blueprint(service, repository):
             cmd = service.start_reply(
                 conversation_id=conversation_id,
                 question=req.content,
-                provider=req.provider,
-                model=req.model,
                 evidence_revision=req.evidence_revision,
                 idempotency_key=idempotency_key,
             )

@@ -16,23 +16,16 @@ from qingpu_insight.conversation_contracts import (
 
 
 class TestConversationCreateRequest:
-    def test_defaults(self) -> None:
-        req = ConversationCreateRequest(model="qwen2.5")
-        assert req.provider == "ollama"
-        assert req.model == "qwen2.5"
+    def test_contains_only_model(self) -> None:
+        req = ConversationCreateRequest(model="gemini-3.5-flash-lite")
+        assert req.model_dump() == {"model": "gemini-3.5-flash-lite"}
 
-    def test_valid_custom(self) -> None:
-        req = ConversationCreateRequest(provider="gemini", model="gemini-2.0-flash")
-        assert req.provider == "gemini"
-        assert req.model == "gemini-2.0-flash"
-
-    def test_valid_rule_provider(self) -> None:
-        req = ConversationCreateRequest(provider="rule", model="rule-v1")
-        assert req.provider == "rule"
-
-    def test_rejects_invalid_provider(self) -> None:
+    def test_rejects_provider_override(self) -> None:
         with pytest.raises(ValidationError):
-            ConversationCreateRequest(provider="openai")
+            ConversationCreateRequest(
+                provider="gemini",
+                model="gemini-3.5-flash-lite",
+            )
 
     def test_rejects_model_too_long(self) -> None:
         with pytest.raises(ValidationError):
@@ -40,7 +33,7 @@ class TestConversationCreateRequest:
 
     def test_rejects_extra_field(self) -> None:
         with pytest.raises(ValidationError):
-            ConversationCreateRequest(provider="ollama", title="nope")
+            ConversationCreateRequest(model="rule", title="nope")
 
 
 class TestListingImportRequest:
@@ -65,52 +58,42 @@ class TestReplyCreateRequest:
     def test_valid(self) -> None:
         req = ReplyCreateRequest(
             content="This is a reply",
-            provider="ollama",
-            model="qwen2.5",
             evidence_revision=1,
         )
         assert req.content == "This is a reply"
         assert req.evidence_revision == 1
 
-    def test_valid_rule_provider(self) -> None:
-        req = ReplyCreateRequest(
-            content="Rule-based reply",
-            provider="rule",
-            model="rule-v1",
-            evidence_revision=2,
-        )
-        assert req.provider == "rule"
-
     def test_rejects_empty_content(self) -> None:
         with pytest.raises(ValidationError):
-            ReplyCreateRequest(content="", provider="ollama", model="m", evidence_revision=1)
+            ReplyCreateRequest(content="", evidence_revision=1)
 
     def test_rejects_content_too_long(self) -> None:
         with pytest.raises(ValidationError):
             ReplyCreateRequest(
-                content="x" * 4001, provider="ollama", model="m", evidence_revision=1
+                content="x" * 4001, evidence_revision=1
             )
 
-    def test_rejects_invalid_provider(self) -> None:
+    def test_rejects_provider_and_model_override(self) -> None:
         with pytest.raises(ValidationError):
             ReplyCreateRequest(
-                content="text", provider="anthropic", model="m", evidence_revision=1
+                content="text",
+                provider="gemini",
+                model="gemma-4-31b-it",
+                evidence_revision=1,
             )
 
     def test_rejects_zero_evidence_revision(self) -> None:
         with pytest.raises(ValidationError):
-            ReplyCreateRequest(content="text", provider="ollama", model="m", evidence_revision=0)
+            ReplyCreateRequest(content="text", evidence_revision=0)
 
     def test_rejects_negative_evidence_revision(self) -> None:
         with pytest.raises(ValidationError):
-            ReplyCreateRequest(content="text", provider="ollama", model="m", evidence_revision=-1)
+            ReplyCreateRequest(content="text", evidence_revision=-1)
 
     def test_rejects_extra_field(self) -> None:
         with pytest.raises(ValidationError):
             ReplyCreateRequest(
                 content="text",
-                provider="ollama",
-                model="m",
                 evidence_revision=1,
                 author="user",
             )
