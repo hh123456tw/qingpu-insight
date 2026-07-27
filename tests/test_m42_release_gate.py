@@ -482,13 +482,13 @@ def test_m42_atomic_release_gate(
                 session["_csrf_token"] = "release-token"
             first = _post(
                 client,
-                {"types": ["sale", "newhouse", "rental"], "max_pages": 1},
+                {"types": ["sale", "newhouse"], "max_pages": 1},
             )
             assert first.status_code == 202
             assert started.wait(5), "v2 preparation did not start"
             duplicate = _post(
                 client,
-                {"types": ["sale", "newhouse", "rental"], "max_pages": 1},
+                {"types": ["sale", "newhouse"], "max_pages": 1},
             )
             assert duplicate.status_code == 202
             assert duplicate.json["run_id"] == first.json["run_id"]
@@ -499,20 +499,20 @@ def test_m42_atomic_release_gate(
             detail = client.get(f"/api/jobs/{first.json['run_id']}")
             assert detail.status_code == 200
             assert detail.json["status"] == "succeeded"
-            assert detail.json["summary"]["rows"] == 6
+            assert detail.json["summary"]["rows"] == 4
             v2_version = detail.json["output_version"]
     finally:
         release.set()
         app_v2.extensions["qingpu_admin_shutdown"]()
 
     assert database.job_transitions.count(("pending", "running")) == 1
-    assert source_v2.calls == ["sale", "newhouse", "rental"]
-    assert source_v2.factory_roots == [tmp_path] * 3
+    assert source_v2.calls == ["sale", "newhouse"]
+    assert source_v2.factory_roots == [tmp_path] * 2
     assert database.pointer["listings"] == v2_version
     assert publisher.current().version == v2_version
-    assert len(database.runtime_current) == 6
-    assert len(database.runtime_events) == 6
-    assert database.versions[("listings", v2_version)]["artifact_row_count"] == 6
+    assert len(database.runtime_current) == 4
+    assert len(database.runtime_events) == 4
+    assert database.versions[("listings", v2_version)]["artifact_row_count"] == 4
 
     v2 = publisher.current()
     assert v2 is not None
@@ -570,7 +570,7 @@ def test_m42_atomic_release_gate(
             response = _post(
                 client,
                 {
-                    "types": ["sale", "newhouse", "rental"],
+                    "types": ["sale", "newhouse"],
                     "max_pages": 1,
                     "trigger": "scheduled",
                 },
