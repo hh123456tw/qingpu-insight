@@ -21,7 +21,11 @@ class BenchmarkRequest:
 
 class BenchmarkRunner(Protocol):
     def run(
-        self, model: str, cases: list[EvidencePack], output_dir: Path
+        self,
+        provider: str,
+        model: str,
+        cases: list[EvidencePack],
+        output_dir: Path,
     ) -> dict[str, Any]:
         ...
 
@@ -148,20 +152,18 @@ class ProviderOpsService:
                 "model": request.model, "status": "failed",
                 "error": "benchmark_runner_not_configured",
             }
-        provider = self._provider_factory(request.provider)
-        if provider is None:
-            return {
-                "run_id": run_id, "provider": request.provider,
-                "model": request.model, "status": "failed",
-                "error": f"{request.provider}_unavailable",
-            }
         try:
             cases_path = Path("benchmarks/m44_cases.json")
             cases_data = json.loads(cases_path.read_text(encoding="utf-8"))
             cases = [EvidencePack(**c) for c in cases_data]
             output_dir = Path("outputs") / "m44-benchmark" / run_id
             output_dir.mkdir(parents=True, exist_ok=True)
-            result = runner.run(request.model, cases, output_dir)
+            result = runner.run(
+                request.provider,
+                request.model,
+                cases,
+                output_dir,
+            )
             result["run_id"] = run_id
             result["provider"] = request.provider
             result["model"] = request.model
@@ -171,7 +173,7 @@ class ProviderOpsService:
             return {
                 "run_id": run_id, "provider": request.provider,
                 "model": request.model, "status": "failed",
-                "error": _redacted_error(e),
+                "error": "benchmark_execution_failed",
             }
 
 
