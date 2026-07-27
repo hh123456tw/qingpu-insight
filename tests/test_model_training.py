@@ -6,6 +6,7 @@ import pytest
 from sklearn.base import BaseEstimator
 
 from qingpu_insight.model_features import FEATURE_COLUMNS
+import qingpu_insight.model_training as model_training
 from qingpu_insight.model_training import (
     BaselineEvaluationError,
     CandidateEvaluation,
@@ -20,6 +21,7 @@ from qingpu_insight.model_training import (
     select_release_candidate,
     split_by_time,
 )
+from qingpu_insight.model_tuning import TrainingProfile
 
 
 def _build_synthetic_frame(n_rows: int = 800) -> pd.DataFrame:
@@ -467,3 +469,40 @@ def test_experiment_no_candidate_beats_baseline_returns_baseline_selected(model_
     assert not result.recommended
     assert "baseline_selected" in result.reason_codes
     assert set(result.final_test_results) == {"baseline"}
+
+
+def test_candidate_estimators_use_profile_parameters() -> None:
+    profile = TrainingProfile("custom", "custom", 0.03, 444, 555, 30)
+    estimators = candidate_estimators(seed=42, profile=profile)
+    hgb = estimators["hist_gradient_boosting"].named_steps["model"]
+    forest = estimators["random_forest"].named_steps["model"]
+    assert hgb.learning_rate == 0.03
+    assert hgb.max_iter == 444
+    assert forest.n_estimators == 555
+    assert len({
+        id(pipeline.named_steps["features"])
+        for pipeline in estimators.values()
+    }) == 3
+
+
+def test_evaluate_candidate_uses_requested_half_life(
+    model_frame, monkeypatch,
+) -> None:
+    captured = {}
+    original = model_training.recency_weights
+
+    def capture(frame, reference_date=None, half_life_months=48, minimum=0.10):
+        captured["half_life"] = half_life_months
+        return original(frame, reference_date, half_life_months, minimum)
+
+    monkeypatch.setattr(model_training, "recency_weights", capture)
+    split = split_by_time(model_frame)
+    evaluate_candidate(
+        "ridge",
+        candidate_estimators()["ridge"],
+        split.train,
+        split.calibration,
+        use_recency_weights=True,
+        recency_half_life_months=30,
+    )
+    assert captured["half_life"] == 30

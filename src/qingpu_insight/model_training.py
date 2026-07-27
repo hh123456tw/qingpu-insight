@@ -12,6 +12,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from qingpu_insight.model_features import FEATURE_COLUMNS
+from qingpu_insight.model_tuning import TrainingProfile, BALANCED_PROFILE
 
 
 @dataclass(frozen=True)
@@ -82,6 +83,20 @@ class RecentMedianBaseline(BaseEstimator):
             else:
                 result.append(self._global_median)
         return np.array(result)
+
+
+def recency_weights(
+    frame: pd.DataFrame,
+    reference_date: pd.Timestamp | None = None,
+    half_life_months: int = 48,
+    minimum: float = 0.10,
+) -> np.ndarray:
+    if reference_date is None:
+        reference_date = frame["transaction_date"].max()
+    days = (reference_date - frame["transaction_date"]).dt.days.values.astype(float)
+    half_life_days = half_life_months * 30.44
+    weights = np.exp2(-days / half_life_days)
+    return np.maximum(weights, minimum)
 
 
 def _compute_metrics(actual: np.ndarray, predicted: np.ndarray, mask: np.ndarray) -> dict:
@@ -156,10 +171,20 @@ def evaluate_candidate(
     estimator: Any,
     train_frame: pd.DataFrame,
     evaluation_frame: pd.DataFrame,
+    use_recency_weights: bool = False,
+    recency_half_life_months: int = 48,
 ) -> CandidateEvaluation:
+    weights = (
+        recency_weights(
+            train_frame,
+            half_life_months=recency_half_life_months,
+        )
+        if use_recency_weights else None
+    )
     estimator.fit(
         train_frame[list(FEATURE_COLUMNS)],
         train_frame["target_unit_price_twd"],
+        **(dict(model__sample_weight=weights) if weights is not None else {}),
     )
     return evaluate_fitted_candidate(name, estimator, evaluation_frame)
 
@@ -236,7 +261,10 @@ def make_preprocessor() -> ColumnTransformer:
     )
 
 
-def candidate_estimators(seed: int = 42) -> dict[str, Pipeline]:
+def candidate_estimators(
+    seed: int = 42,
+    profile: TrainingProfile = BALANCED_PROFILE,
+) -> dict[str, Pipeline]:
     return {
         "ridge": Pipeline([("features", make_preprocessor()), ("model", Ridge(alpha=10.0))]),
         "random_forest": Pipeline(
@@ -245,7 +273,7 @@ def candidate_estimators(seed: int = 42) -> dict[str, Pipeline]:
                 (
                     "model",
                     RandomForestRegressor(
-                        n_estimators=400,
+                        n_estimators=profile.rf_n_estimators,
                         min_samples_leaf=5,
                         max_features=0.8,
                         random_state=seed,
@@ -260,8 +288,8 @@ def candidate_estimators(seed: int = 42) -> dict[str, Pipeline]:
                 (
                     "model",
                     HistGradientBoostingRegressor(
-                        learning_rate=0.06,
-                        max_iter=350,
+                        learning_rate=profile.hgb_learning_rate,
+                        max_iter=profile.hgb_max_iter,
                         max_leaf_nodes=31,
                         l2_regularization=1.0,
                         random_state=seed,

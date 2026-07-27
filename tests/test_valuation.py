@@ -556,6 +556,105 @@ def test_train_artifact_round_trip(tmp_path):
     assert loaded.metrics["overall"]["mae"] == 50000
 
 
+def test_train_artifact_half_life(tmp_path, monkeypatch):
+    import qingpu_insight.valuation as valuation_mod
+
+    np.random.seed(42)
+    n = 200
+    train = pd.DataFrame(
+        {
+            "transaction_date": pd.date_range("2024-01-01", periods=n, freq="D"),
+            "target_unit_price_twd": np.random.uniform(200_000, 800_000, n),
+        }
+    )
+    for col in FEATURE_COLUMNS:
+        if col in ("station_code", "building_type", "parking_type"):
+            train[col] = "A17"
+        else:
+            train[col] = np.random.randn(n)
+    train["transaction_year"] = 2025
+    train["transaction_month"] = 6
+    for col in FEATURE_COLUMNS:
+        if col not in train.columns:
+            train[col] = 0
+
+    calibration = train.iloc[:50].copy()
+    test = train.iloc[50:100].copy()
+
+    from dataclasses import dataclass
+
+    @dataclass
+    class FakeSplit:
+        train: pd.DataFrame
+        calibration: pd.DataFrame
+        test: pd.DataFrame
+
+    split = FakeSplit(train=train, calibration=calibration, test=test)
+
+    est = FitRecordingEstimator()
+
+    @dataclass
+    class FakeSelected:
+        name: str
+        estimator: Any
+        metrics: pd.DataFrame
+
+    metrics = pd.DataFrame(
+        {"overall": {"mae": 50000, "mape": 10, "rmse": 60000, "r2": 0.5, "count": 50}}
+    ).T
+
+    bundle = ValuationBundle(
+        transaction_type="resale",
+        model_name="baseline",
+        model_version="v1",
+        pipeline=est,
+        interval_abs_residual_twd_per_ping=50000,
+        feature_ranges={},
+        feature_hard_ranges={},
+        feature_medians={},
+        global_importance=[],
+        reference_rows=train,
+        data_min_date="2024-01-01",
+        data_max_date="2026-06-01",
+        metrics={},
+    )
+    selected = FakeSelected(name="baseline", estimator=est, metrics=metrics)
+
+    captured = {}
+    original = valuation_mod.recency_weights
+
+    def capture(frame, reference_date=None, half_life_months=48, minimum=0.10):
+        captured["half_life"] = half_life_months
+        return original(frame, reference_date, half_life_months, minimum)
+
+    monkeypatch.setattr(valuation_mod, "recency_weights", capture)
+
+    import sklearn.inspection
+
+    original_pi = sklearn.inspection.permutation_importance
+
+    def fake_pi(estimator, X, y, **kwargs):
+        from types import SimpleNamespace
+        return SimpleNamespace(importances_mean=np.zeros(len(FEATURE_COLUMNS)))
+
+    sklearn.inspection.permutation_importance = fake_pi
+
+    try:
+        train_artifact(
+            "resale",
+            selected,
+            split,
+            bundle,
+            tmp_path,
+            use_recency_weights=True,
+            recency_half_life_months=30,
+        )
+    finally:
+        sklearn.inspection.permutation_importance = original_pi
+
+    assert captured["half_life"] == 30
+
+
 class TestModelRegistryOfficialPreference:
     def test_registry_prefers_official_manifest_over_legacy_file(self, tmp_path: Path) -> None:
         from datetime import UTC, date, datetime

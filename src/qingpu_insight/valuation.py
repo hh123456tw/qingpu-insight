@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from qingpu_insight.model_features import FEATURE_COLUMNS, ValuationInput, input_frame
+from qingpu_insight.model_training import recency_weights
 
 
 @dataclass
@@ -380,8 +381,19 @@ def train_artifact(
     split: Any,
     bundle: ValuationBundle,
     artifact_dir: Path,
+    use_recency_weights: bool = False,
+    recency_half_life_months: int = 48,
 ) -> Path:
     from sklearn.inspection import permutation_importance
+
+    train_frame = split.train
+    _weights = (
+        recency_weights(
+            train_frame,
+            half_life_months=recency_half_life_months,
+        )
+        if use_recency_weights else None
+    )
 
     calibration_pred = selected.estimator.predict(split.calibration[list(FEATURE_COLUMNS)])
     radius = float(
@@ -409,7 +421,6 @@ def train_artifact(
     contract_hash = hashlib.sha256(contract_str.encode()).hexdigest()
     version = _model_version(transaction_type, bundle.data_max_date, contract_hash)
 
-    train_frame = split.train
     feature_ranges: dict[str, tuple[float, float]] = {}
     feature_hard_ranges: dict[str, tuple[float, float]] = {}
     feature_medians: dict[str, float] = {}
