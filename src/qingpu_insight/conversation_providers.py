@@ -1,0 +1,327 @@
+from __future__ import annotations
+
+import json
+import logging
+import re
+import time
+from dataclasses import dataclass
+from typing import Any, Protocol
+
+import requests
+
+from qingpu_insight.conversation_validation import ChatAnswerDraft, PropertyClaim
+from qingpu_insight.ollama_report_provider import ProviderError
+from qingpu_insight.report_contracts import EvidenceFact
+
+logger = logging.getLogger(__name__)
+
+@dataclass(frozen=True)
+class ConversationContext:
+    rolling_summary: str | None
+    recent_messages: tuple[dict, ...]
+    evidence_revision: int
+    evidence_facts: tuple[EvidenceFact, ...]
+    limitations: tuple[str, ...]
+
+
+class ConversationProvider(Protocol):
+    def reply(
+        self, *, model: str, question: str, context: ConversationContext
+    ) -> ChatAnswerDraft: ...
+
+
+class ConversationProviderRegistry:
+    def __init__(self) -> None:
+        self._providers: dict[str, ConversationProvider] = {}
+
+    def register(self, name: str, provider: ConversationProvider) -> None:
+        self._providers[name] = provider
+
+    def get(self, provider: str) -> ConversationProvider:
+        if provider not in self._providers:
+            raise ValueError(f"unknown provider: {provider}")
+        return self._providers[provider]
+
+
+_SYSTEM_PROMPT = """You are a structured assistant for a real estate property inquiry system. \
+Respond in valid JSON following the schema below.
+
+Schema:
+{schema}
+
+Available evidence facts:
+{fact_list}
+
+Rules:
+- Property-specific claims MUST cite at least one evidence fact ID.
+- General advice must be placed in general_guidance labeled as "一般建議".
+- Do not invent facts, values, or fact IDs not listed above.
+- Output valid JSON only."""
+
+
+def _build_prompt(question: str, context: ConversationContext) -> str:
+    parts: list[str] = []
+    if context.rolling_summary:
+        parts.append(f"[Rolling Summary]\n{context.rolling_summary}\n")
+    if context.recent_messages:
+        lines: list[str] = []
+        for msg in context.recent_messages[-12:]:
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            lines.append(f"{role.capitalize()}: {content}")
+        parts.append("[Recent Messages]\n" + "\n".join(lines) + "\n")
+    if context.evidence_facts:
+        fact_lines: list[str] = []
+        for f in context.evidence_facts:
+            fact_lines.append(f"  - ID: {f.fact_id}, {f.label}: {f.value} ({f.unit})")
+        parts.append("[Evidence Facts]\n" + "\n".join(fact_lines) + "\n")
+    if context.limitations:
+        lim_lines = [f"  - {lim}" for lim in context.limitations]
+        parts.append("[Limitations]\n" + "\n".join(lim_lines) + "\n")
+    parts.append(f"[User Question]\n{question}")
+    return "\n".join(parts)
+
+
+class RuleConversationProvider:
+    def reply(
+        self, *, model: str, question: str, context: ConversationContext
+    ) -> ChatAnswerDraft:
+        return self._build_draft(context)
+
+    def _build_draft(self, context: ConversationContext) -> ChatAnswerDraft:
+        claims: list[PropertyClaim] = []
+        for fact in context.evidence_facts:
+            claims.append(PropertyClaim(
+                text=f"{fact.label}: {fact.value}",
+                fact_ids=[fact.fact_id],
+            ))
+        guidance: list[str] = [
+            "一般建議：購屋前應確認產權清楚，建議履約保證。",
+            "一般建議：比較周邊成交行情，避免追高。",
+            "一般建議：實地勘查屋況及周邊環境。",
+        ]
+        suggested: list[str] = self._suggested_questions(context)
+        return ChatAnswerDraft(
+            answer="這是物件證據摘要。請參考下方的事實與數據。",
+            property_claims=claims,
+            general_guidance=guidance,
+            suggested_questions=suggested,
+        )
+
+    def _suggested_questions(self, context: ConversationContext) -> list[str]:
+        kinds = {f.kind for f in context.evidence_facts}
+        questions: list[str] = []
+        if "asking_price" in kinds:
+            questions.append("這個物件的開價合理嗎？")
+        if "model_interval" in kinds:
+            questions.append("模型估值與開價的差距如何？")
+        if "station_distance" in kinds:
+            questions.append("附近的交通與生活機能如何？")
+        if "nearby_transactions_summary" in kinds:
+            questions.append("附近成交行情如何？")
+        if not questions:
+            questions = ["這個物件的總體評價如何？", "有什麼需要注意的風險？", "議價空間大概多少？"]
+        return questions[:4]
+
+
+class OllamaConversationProvider:
+    def __init__(
+        self,
+        base_url: str,
+        timeout_seconds: int = 30,
+        session: requests.Session | None = None,
+    ) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._timeout = timeout_seconds
+        self._session = session or requests.Session()
+
+    def _request_ollama(
+        self, *, model: str, messages: list[dict[str, Any]]
+    ) -> str:
+        body: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "format": "json",
+            "stream": False,
+        }
+        try:
+            resp = self._session.post(
+                f"{self._base_url}/api/chat",
+                json=body,
+                timeout=self._timeout,
+            )
+        except requests.exceptions.Timeout:
+            raise ProviderError("ollama_timeout") from None
+        except requests.exceptions.ConnectionError:
+            raise ProviderError("ollama_connection_error") from None
+
+        if resp.status_code >= 400:
+            raise ProviderError("ollama_http_error")
+
+        try:
+            data = resp.json()
+        except (json.JSONDecodeError, requests.exceptions.JSONDecodeError):
+            raise ProviderError("ollama_non_json_response") from None
+
+        try:
+            return data["message"]["content"]
+        except (KeyError, TypeError):
+            raise ProviderError("ollama_non_json_response") from None
+
+    def reply(
+        self, *, model: str, question: str, context: ConversationContext,
+        repair_hint: str | None = None,
+    ) -> ChatAnswerDraft:
+        start = time.perf_counter()
+        schema = ChatAnswerDraft.model_json_schema()
+        fact_list = "\n".join(
+            f"  - ID: {f.fact_id}, {f.label}: {f.value} ({f.unit})"
+            for f in context.evidence_facts
+        )
+        system_content = _SYSTEM_PROMPT.format(
+            schema=json.dumps(schema, ensure_ascii=False),
+            fact_list=fact_list,
+        )
+        prompt = _build_prompt(question, context)
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": prompt},
+        ]
+        if repair_hint:
+            messages.append({"role": "user", "content": repair_hint})
+
+        try:
+            content_raw = self._request_ollama(model=model, messages=messages)
+            try:
+                draft = ChatAnswerDraft.model_validate_json(content_raw)
+            except Exception as first_error:
+                messages.append({
+                    "role": "user",
+                    "content": f"The previous response failed validation. Error: {first_error}",
+                })
+                content_raw = self._request_ollama(model=model, messages=messages)
+                try:
+                    draft = ChatAnswerDraft.model_validate_json(content_raw)
+                except Exception:
+                    raise ProviderError("ollama_validation_error") from None
+        except ProviderError:
+            duration_ms = int((time.perf_counter() - start) * 1000)
+            logger.info("ollama %s duration=%dms result=error", model, duration_ms)
+            raise
+
+        duration_ms = int((time.perf_counter() - start) * 1000)
+        logger.info("ollama %s duration=%dms result=success", model, duration_ms)
+        return draft
+
+
+_GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+_CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*([\s\S]*?)\s*```$", re.MULTILINE)
+
+
+class GeminiConversationProvider:
+    def __init__(
+        self,
+        api_key: str,
+        timeout_seconds: int = 30,
+        session: requests.Session | None = None,
+    ) -> None:
+        self._api_key = api_key
+        self._timeout = timeout_seconds
+        self._session = session or requests.Session()
+
+    def _request_gemini(
+        self, *, model: str, messages: list[dict[str, Any]]
+    ) -> str:
+        url = f"{_GEMINI_BASE}/{model}:generateContent"
+        body: dict[str, Any] = {
+            "system_instruction": {
+                "parts": [{"text": messages[0]["content"]}],
+            },
+            "contents": [
+                {
+                    "parts": [{"text": msg["content"]}],
+                }
+                for msg in messages[1:]
+            ],
+        }
+        try:
+            headers = {
+                "Content-Type": "application/json",
+                "x-goog-api-key": self._api_key,
+            }
+            resp = self._session.post(
+                url,
+                headers=headers,
+                json=body,
+                timeout=self._timeout,
+            )
+        except requests.exceptions.Timeout:
+            raise ProviderError("gemini_timeout") from None
+        except requests.exceptions.ConnectionError:
+            raise ProviderError("gemini_connection_error") from None
+
+        if resp.status_code >= 400:
+            raise ProviderError("gemini_http_error")
+
+        try:
+            data = resp.json()
+        except (json.JSONDecodeError, requests.exceptions.JSONDecodeError):
+            raise ProviderError("gemini_non_json_response") from None
+
+        try:
+            content_raw = data["candidates"][0]["content"]["parts"][0]["text"]
+        except (KeyError, TypeError, IndexError):
+            raise ProviderError("gemini_non_json_response") from None
+
+        content_raw = self._strip_code_fence(content_raw)
+        return content_raw
+
+    def reply(
+        self, *, model: str, question: str, context: ConversationContext,
+        repair_hint: str | None = None,
+    ) -> ChatAnswerDraft:
+        start = time.perf_counter()
+        schema = ChatAnswerDraft.model_json_schema()
+        fact_list = "\n".join(
+            f"  - ID: {f.fact_id}, {f.label}: {f.value} ({f.unit})"
+            for f in context.evidence_facts
+        )
+        system_content = _SYSTEM_PROMPT.format(
+            schema=json.dumps(schema, ensure_ascii=False),
+            fact_list=fact_list,
+        )
+        prompt = _build_prompt(question, context)
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": prompt},
+        ]
+        if repair_hint:
+            messages.append({"role": "user", "content": repair_hint})
+
+        try:
+            content_raw = self._request_gemini(model=model, messages=messages)
+            try:
+                draft = ChatAnswerDraft.model_validate_json(content_raw)
+            except Exception as first_error:
+                messages.append({
+                    "role": "user",
+                    "content": f"The previous response failed validation. Error: {first_error}",
+                })
+                content_raw = self._request_gemini(model=model, messages=messages)
+                try:
+                    draft = ChatAnswerDraft.model_validate_json(content_raw)
+                except Exception:
+                    raise ProviderError("gemini_validation_error") from None
+        except ProviderError:
+            duration_ms = int((time.perf_counter() - start) * 1000)
+            logger.info("gemini %s duration=%dms result=error", model, duration_ms)
+            raise
+
+        duration_ms = int((time.perf_counter() - start) * 1000)
+        logger.info("gemini %s duration=%dms result=success", model, duration_ms)
+        return draft
+
+    @staticmethod
+    def _strip_code_fence(text: str) -> str:
+        m = _CODE_FENCE_RE.search(text)
+        return m.group(1) if m else text
