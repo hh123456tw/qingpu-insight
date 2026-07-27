@@ -23,6 +23,8 @@ from werkzeug.exceptions import HTTPException
 
 from qingpu_insight.admin_dashboard import AdminDashboardService, ReadinessItem
 from qingpu_insight.admin_web import ADMIN_JOB_TYPES, AdminRuntime, create_admin_blueprint
+from qingpu_insight.llm_model_catalog import LlmModelCatalog
+from qingpu_insight.web_benchmark_runner import ConfiguredWebBenchmarkRunner
 from qingpu_insight.backup_repository import MySQLBackupRepository
 from qingpu_insight.config import get_settings
 from qingpu_insight.evidence import UnknownCandidateError
@@ -999,6 +1001,34 @@ def create_app(
             env=resolved_env,
         )
 
+    def get_runtime_env(name: str, default: str = "") -> str:
+        current = (
+            secrets_store.merged_env(os.environ)
+            if secrets_store is not None
+            else dict(os.environ)
+        )
+        return current.get(name, default)
+
+    llm_model_catalog = LlmModelCatalog(
+        ollama_base_url_getter=lambda: get_runtime_env(
+            "QINGPU_OLLAMA_BASE_URL",
+            "http://127.0.0.1:11434",
+        ),
+        gemini_configured_getter=lambda: bool(
+            get_runtime_env("QINGPU_GEMINI_API_KEY")
+        ),
+    )
+    if provider_ops_service is not None:
+        provider_ops_service.set_benchmark_runner(ConfiguredWebBenchmarkRunner(
+            ollama_base_url_getter=lambda: get_runtime_env(
+                "QINGPU_OLLAMA_BASE_URL",
+                "http://127.0.0.1:11434",
+            ),
+            gemini_api_key_getter=lambda: get_runtime_env(
+                "QINGPU_GEMINI_API_KEY"
+            ),
+        ))
+
     def get_gemini_api_key() -> str | None:
         if secrets_store is None:
             return os.environ.get("QINGPU_GEMINI_API_KEY")
@@ -1018,6 +1048,7 @@ def create_app(
             backup_service=admin_services.backup_job_service,
             provider_ops_service=provider_ops_service,
             secrets_store=secrets_store,
+            llm_model_catalog=llm_model_catalog,
             root=root,
         )
     else:
@@ -1026,6 +1057,7 @@ def create_app(
             executor=None,
             provider_ops_service=provider_ops_service,
             secrets_store=secrets_store,
+            llm_model_catalog=llm_model_catalog,
             root=root,
         )
     app.register_blueprint(create_admin_blueprint(admin_runtime))
