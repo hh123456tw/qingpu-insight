@@ -1,10 +1,11 @@
 (function (root, factory) {
   "use strict";
-  var api = factory();
+  var api = factory(root);
   if (typeof module === "object" && module.exports) module.exports = api;
   if (typeof document !== "undefined") root.QingpuAssistant = api;
-})(typeof globalThis !== "undefined" ? globalThis : this, function () {
+})(typeof globalThis !== "undefined" ? globalThis : this, function (root) {
   "use strict";
+  var display = root && root.QingpuDisplayFormat;
 
   function formatTaipeiDatetime(value) {
     if (!value) return "\u2014";
@@ -52,6 +53,65 @@
     return new Intl.NumberFormat("zh-TW", {
       style: "currency", currency: "TWD", maximumFractionDigits: 0,
     }).format(value);
+  }
+
+  function stripLegacyInlineCitations(content) {
+    if (content == null) return "";
+    return content.replace(/（依據：[^）]+）/g, "");
+  }
+
+  function renderCitationDetails(citations) {
+    if (typeof document === "undefined") return null;
+    if (!Array.isArray(citations) || !citations.length) return null;
+    var details = el("details", { "class": "message-citations" });
+    details.appendChild(el("summary", {}, ["\u67e5\u770b\u8cc7\u6599\u4f9d\u64da\uff08" + citations.length + "\uff09"]));
+    var ul = document.createElement("ul");
+    citations.forEach(function (c) {
+      var li = document.createElement("li");
+      li.textContent = c;
+      ul.appendChild(li);
+    });
+    details.appendChild(ul);
+    return details;
+  }
+
+  function renderPricePosition(low, point, high, asking) {
+    if (typeof document === "undefined") return null;
+    if (!display) return null;
+    var state = display.pricePositionState(low, point, high, asking);
+    if (!state) return null;
+    var posLabel = "";
+    if (state.askingPosition === "inside") posLabel = "\u5167";
+    else if (state.askingPosition === "below") posLabel = "\u4e0b";
+    else if (state.askingPosition === "above") posLabel = "\u4e0a";
+    else posLabel = "\u5916";
+    var ariaLabel = "\u4f30\u503c\u5340\u9593\uff1a\u4f4e\u6a19 " + display.formatTotalWan(low)
+      + " \u81f3 \u9ad8\u6a19 " + display.formatTotalWan(high)
+      + "\uff0c\u4f30\u503c\u9ede " + display.formatTotalWan(point);
+    if (asking != null) {
+      ariaLabel += "\uff0c\u958b\u50f9 " + display.formatTotalWan(asking)
+        + "\uff08\u4f4d\u65bc\u5340\u9593" + posLabel + "\uff09";
+    }
+    var wrapper = el("div", { "class": "price-position", "role": "img", "aria-label": ariaLabel });
+    var track = el("div", { "class": "price-range-track" });
+    track.appendChild(el("span", {
+      "class": "price-marker price-marker-point",
+      "style": "left: " + state.pointPercent + "%",
+    }));
+    if (state.askingPosition !== "missing") {
+      track.appendChild(el("span", {
+        "class": "price-marker price-marker-asking",
+        "style": "left: " + state.askingPercent + "%",
+      }));
+    }
+    wrapper.appendChild(track);
+    wrapper.appendChild(el("div", { "class": "price-labels" }, [
+      el("span", {}, ["\u4f4e\u6a19 " + display.formatTotalWan(low)]),
+      el("span", {}, ["\u4f30\u503c " + display.formatTotalWan(point)]),
+      el("span", {}, ["\u958b\u50f9 " + (asking != null ? display.formatTotalWan(asking) : "\u2014")]),
+      el("span", {}, ["\u9ad8\u6a19 " + display.formatTotalWan(high)]),
+    ]));
+    return wrapper;
   }
 
   var STAGE_LABELS = {
@@ -144,8 +204,8 @@
       });
     } else {
       if (facts.title) factItems.push({ k: "\u6a19\u984c", v: facts.title });
-      if (facts.total_price_twd) factItems.push({ k: "\u7e3d\u50f9", v: formatMoney(facts.total_price_twd) });
-      if (facts.unit_price_twd_per_ping) factItems.push({ k: "\u55ae\u50f9", v: formatMoney(facts.unit_price_twd_per_ping) + "/\u576a" });
+      if (facts.total_price_twd) factItems.push({ k: "\u7e3d\u50f9", v: display ? display.formatTotalWan(facts.total_price_twd) : formatMoney(facts.total_price_twd) });
+      if (facts.unit_price_twd_per_ping) factItems.push({ k: "\u55ae\u50f9", v: display ? display.formatUnitWan(facts.unit_price_twd_per_ping) : formatMoney(facts.unit_price_twd_per_ping) + "/\u576a" });
       if (facts.area_ping) factItems.push({ k: "\u576a\u6578", v: facts.area_ping + " \u576a" });
       if (facts.layout) factItems.push({ k: "\u683c\u5c40", v: facts.layout });
       if (facts.address) factItems.push({ k: "\u5730\u5740", v: facts.address });
@@ -167,12 +227,12 @@
       var valChildren = [el("h3", {}, ["\u4f30\u50f9"])];
       var pointEstimate = valuation.point_estimate_twd || valuation.estimated_total_price_twd;
       if (pointEstimate) {
-        valChildren.push(el("p", { "class": "val-price" }, [formatMoney(pointEstimate)]));
+        valChildren.push(el("p", { "class": "val-price" }, [display ? display.formatTotalWan(pointEstimate) : formatMoney(pointEstimate)]));
       }
       if (valuation.interval_total_price_twd) {
         valChildren.push(el("p", { "class": "val-range" }, [
-          "\u5408\u7406\u5340\u9593\uff1a" + formatMoney(valuation.interval_total_price_twd[0]) +
-          " ~ " + formatMoney(valuation.interval_total_price_twd[1]),
+          "\u5408\u7406\u5340\u9593\uff1a" + (display ? display.formatTotalWan(valuation.interval_total_price_twd[0]) : formatMoney(valuation.interval_total_price_twd[0])) +
+          " ~ " + (display ? display.formatTotalWan(valuation.interval_total_price_twd[1]) : formatMoney(valuation.interval_total_price_twd[1])),
         ]));
       }
       panel.appendChild(el("section", { "class": "evidence-valuation" }, valChildren));
@@ -191,9 +251,9 @@
         el("tbody", {}, comparables.slice(0, 5).map(function (c) {
           return el("tr", {}, [
             el("td", {}, [c.transaction_date || "\u2014"]),
-            el("td", {}, [formatMoney(c.price_twd || c.total_price_twd)]),
+            el("td", {}, [display ? display.formatTotalWan(c.price_twd || c.total_price_twd) : formatMoney(c.price_twd || c.total_price_twd)]),
             el("td", {}, [c.distance_m != null ? c.distance_m + "m" : "\u2014"]),
-            el("td", {}, [formatMoney(c.unit_price_per_ping_twd || c.unit_price_twd_per_ping)]),
+            el("td", {}, [display ? display.formatUnitWan(c.unit_price_per_ping_twd || c.unit_price_twd_per_ping) : formatMoney(c.unit_price_per_ping_twd || c.unit_price_twd_per_ping)]),
           ]);
         })),
       ]);
@@ -235,9 +295,24 @@
       header.appendChild(el("span", { "class": "revision-badge" }, [badge]));
     }
     div.appendChild(header);
-    var content = el("div", { "class": "message-content" });
-    content.textContent = msg.content;
-    div.appendChild(content);
+    var rawContent = msg.content || "";
+    var cleaned = rawContent;
+    if (display) {
+      cleaned = display.normalizeLegacyMoneyText(stripLegacyInlineCitations(rawContent));
+    } else {
+      cleaned = stripLegacyInlineCitations(rawContent);
+    }
+    var contentDiv = el("div", { "class": "message-content" });
+    contentDiv.textContent = cleaned;
+    div.appendChild(contentDiv);
+    if (Array.isArray(msg.citations) && msg.citations.length) {
+      var citationEl = renderCitationDetails(msg.citations);
+      if (citationEl) div.appendChild(citationEl);
+    }
+    if (display && msg.price_low != null && msg.price_point != null) {
+      var ppEl = renderPricePosition(msg.price_low, msg.price_point, msg.price_high, msg.price_asking);
+      if (ppEl) div.appendChild(ppEl);
+    }
     if (msg.role === "assistant" && msg.fallback_reason) {
       div.appendChild(el("p", {
         "class": "fallback-notice",
@@ -683,6 +758,8 @@
     buildReplyPayload: buildReplyPayload,
     actualModelLabel: actualModelLabel,
     fallbackLabel: fallbackLabel,
+    stripLegacyInlineCitations: stripLegacyInlineCitations,
+    renderCitationDetails: renderCitationDetails,
     renderEvidencePanel: renderEvidencePanel,
     renderMessage: renderMessage,
     renderSuggestedQuestions: renderSuggestedQuestions,

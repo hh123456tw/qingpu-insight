@@ -53,6 +53,7 @@ if (typeof document === "undefined") {
   };
 }
 
+const display = require("../../src/qingpu_insight/static/display_format.js");
 const asst = require("../../src/qingpu_insight/static/assistant.js");
 
 // --- stageLabel ---
@@ -215,5 +216,84 @@ assert.equal(payload.content, "HELLO");
 assert.equal(payload.provider, undefined);
 assert.equal(payload.model, undefined);
 assert.equal(payload.evidence_revision, 3);
+
+// --- stripLegacyInlineCitations ---
+
+assert.equal(
+  asst.stripLegacyInlineCitations("開價 2,298 萬（依據：listing.price）"),
+  "開價 2,298 萬"
+);
+assert.equal(
+  asst.stripLegacyInlineCitations("（依據：listing.price、listing.area）"),
+  ""
+);
+assert.equal(
+  asst.stripLegacyInlineCitations("沒有標註"),
+  "沒有標註"
+);
+assert.equal(asst.stripLegacyInlineCitations(null), "");
+assert.equal(asst.stripLegacyInlineCitations(undefined), "");
+
+// --- renderCitationDetails ---
+
+var details = asst.renderCitationDetails(["listing.price", "listing.area"]);
+assert.equal(details.tagName, "DETAILS");
+assert.equal(details.className, "message-citations");
+assert.equal(details._children[0].tagName, "SUMMARY");
+// summary has a text child node
+assert.equal(details._children[0]._children[0].textContent, "查看資料依據（2）");
+assert.equal(details._children[1].tagName, "UL");
+assert.equal(details._children[1]._children.length, 2);
+assert.equal(details._children[1]._children[0].textContent, "listing.price");
+assert.equal(details._children[1]._children[1].textContent, "listing.area");
+
+assert.equal(asst.renderCitationDetails([]), null);
+assert.equal(asst.renderCitationDetails(null), null);
+
+// --- renderMessage with citations accordion ---
+
+var msgWithCitations = {
+  role: "assistant",
+  content: "開價 22,980,000 元（依據：listing.price）",
+  citations: ["listing.price", "listing.area"],
+};
+var msgEl2 = asst.renderMessage(msgWithCitations, null);
+var contentDiv2 = msgEl2._children[1];
+assert.equal(contentDiv2.className, "message-content");
+assert.ok(contentDiv2.textContent.indexOf("listing.price") === -1,
+  "message-content should not contain inline citation");
+assert.ok(contentDiv2.textContent.indexOf("2,298 萬") !== -1,
+  "message-content should show 萬-formatted price");
+var detailsEl = msgEl2._children[2];
+assert.equal(detailsEl.tagName, "DETAILS");
+assert.equal(detailsEl.className, "message-citations");
+assert.equal(detailsEl._children[0]._children[0].textContent, "查看資料依據（2）");
+assert.equal(detailsEl.getAttribute("open"), null,
+  "details should not be open by default");
+
+// Message without citations should not add details
+var msgNoCitations = { role: "user", content: "hello" };
+var msgEl3 = asst.renderMessage(msgNoCitations, null);
+assert.equal(msgEl3._children.length, 2); // header + content only
+
+// --- renderMessage with price-position ---
+
+var msgWithPrice = {
+  role: "assistant",
+  content: "此物件在合理價格區間內",
+  price_low: 15380000,
+  price_point: 19890000,
+  price_high: 24410000,
+  price_asking: 22980000,
+};
+var msgEl4 = asst.renderMessage(msgWithPrice, null);
+var ppDiv = msgEl4._children[2];
+assert.equal(ppDiv.className, "price-position");
+assert.ok(ppDiv.getAttribute("role") === "img");
+// Should have price-range-track child
+var track = ppDiv._children[0];
+assert.equal(track.className, "price-range-track");
+// Should have price-marker children
+assert.ok(track._children.length >= 2);
 
 process.stdout.write("assistant contract passed\n");

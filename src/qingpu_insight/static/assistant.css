@@ -450,6 +450,76 @@ body {
   opacity: 0.9;
 }
 
+/* --- Price Position --- */
+
+.price-position {
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  background: var(--paper);
+  border-radius: 4px;
+  font-size: 0.75rem;
+}
+
+.price-range-track {
+  position: relative;
+  height: 6px;
+  background: var(--line);
+  border-radius: 3px;
+  margin-bottom: 0.25rem;
+}
+
+.price-marker {
+  position: absolute;
+  top: -3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  transform: translateX(-50%);
+}
+
+.price-marker-point {
+  background: var(--accent);
+  border: 2px solid var(--card);
+  z-index: 1;
+}
+
+.price-marker-asking {
+  background: var(--accent-warm);
+  border: 2px solid var(--card);
+}
+
+.price-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: var(--muted);
+  margin-top: 0.15rem;
+}
+
+/* --- Citations --- */
+
+.message-citations {
+  margin-top: 0.4rem;
+  font-size: 0.8rem;
+}
+
+.message-citations summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.message-citations ul {
+  margin: 0.25rem 0 0;
+  padding-left: 1.2rem;
+}
+
+.message-citations li {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-bottom: 0.15rem;
+}
+
 /* Responsive */
 
 @media (max-width: 960px) {
@@ -487,6 +557,11 @@ body {
 
   .message {
     max-width: 90%;
+  }
+
+  .price-labels {
+    flex-wrap: wrap;
+    gap: 0.15rem;
   }
 
   .header-actions {
