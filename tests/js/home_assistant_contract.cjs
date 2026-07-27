@@ -58,13 +58,26 @@ assert.equal(
 
 // --- Payload construction ---
 
-assert.deepEqual(ha.buildCreatePayload("ollama", "gemma3:4b"), {
-  provider: "ollama", model: "gemma3:4b",
+assert.deepEqual(ha.buildCreatePayload("gemini-3.5-flash-lite"), {
+  model: "gemini-3.5-flash-lite",
 });
 
-assert.deepEqual(ha.buildCreatePayload("rule", ""), {
-  provider: "rule",
-});
+assert.deepEqual(ha.buildCreatePayload(""), { model: "" });
+
+assert.equal(
+  ha.modelStatusText(
+    { cloud: true, description: "快速、穩定" },
+    false
+  ),
+  "快速、穩定；尚未設定 Gemini API Key，失敗時會自動切換本機或 Rule"
+);
+assert.equal(
+  ha.modelStatusText(
+    { cloud: false, description: "完全離線備援" },
+    false
+  ),
+  "完全離線備援"
+);
 
 assert.deepEqual(ha.buildListingPayload("https://sale.591.com.tw/abc"), {
   url: "https://sale.591.com.tw/abc",

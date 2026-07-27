@@ -38,10 +38,57 @@
     return "cmd-" + Date.now() + "-" + Math.random().toString(16).slice(2);
   }
 
-  function buildCreatePayload(provider, model) {
-    var payload = { provider: provider };
-    if (model) payload.model = model;
-    return payload;
+  function buildCreatePayload(model) {
+    return { model: model };
+  }
+
+  function modelStatusText(item, geminiConfigured) {
+    if (!item) return "";
+    var description = item.description || "";
+    if (item.cloud && !geminiConfigured) {
+      return description
+        + "；尚未設定 Gemini API Key，失敗時會自動切換本機或 Rule";
+    }
+    return description;
+  }
+
+  function renderModelCatalog(catalog) {
+    var select = document.getElementById("assistant-model");
+    var status = document.getElementById("assistant-model-status");
+    if (!select) return;
+    select.innerHTML = "";
+    (catalog.items || []).forEach(function (item) {
+      var option = document.createElement("option");
+      option.value = item.id;
+      option.textContent = item.label;
+      select.appendChild(option);
+    });
+    select.value = catalog.default_model || "";
+
+    function updateStatus() {
+      if (!status) return;
+      var selected = (catalog.items || []).find(function (item) {
+        return item.id === select.value;
+      });
+      status.textContent = modelStatusText(
+        selected,
+        Boolean(catalog.gemini_configured)
+      );
+    }
+    select.addEventListener("change", updateStatus);
+    updateStatus();
+  }
+
+  function loadModelCatalog() {
+    return fetch("/api/conversation-models")
+      .then(function (response) {
+        if (!response.ok) throw new Error("模型清單載入失敗");
+        return response.json();
+      })
+      .then(renderModelCatalog)
+      .catch(function (error) {
+        renderStatus(error.message, true);
+      });
   }
 
   function buildListingPayload(url) {
@@ -117,11 +164,9 @@
     form.addEventListener("submit", function (e) {
       e.preventDefault();
       var urlInput = document.getElementById("assistant-url");
-      var providerSelect = document.getElementById("assistant-provider");
-      var modelInput = document.getElementById("assistant-model");
+      var modelSelect = document.getElementById("assistant-model");
       var url = urlInput.value.trim();
-      var provider = providerSelect.value;
-      var model = modelInput.value.trim();
+      var model = modelSelect.value;
 
       if (!validateUrl(url)) {
         renderStatus("不支援的網址，僅接受 591 售屋、新建案詳細頁或 591.to 短網址", true);
@@ -139,7 +184,7 @@
           "Content-Type": "application/json",
           "X-Qingpu-CSRF": csrf,
         },
-        body: JSON.stringify(buildCreatePayload(provider, model)),
+        body: JSON.stringify(buildCreatePayload(model)),
       })
         .then(function (r) {
           return r.json().then(function (d) { return { ok: r.ok, status: r.status, data: d }; });
@@ -204,10 +249,12 @@
     if (document.readyState === "loading") {
       document.addEventListener("DOMContentLoaded", function () {
         setupForm();
+        loadModelCatalog();
         loadRecentConversations();
       });
     } else {
       setupForm();
+      loadModelCatalog();
       loadRecentConversations();
     }
   }
@@ -215,6 +262,9 @@
   return {
     validateUrl: validateUrl,
     buildCreatePayload: buildCreatePayload,
+    modelStatusText: modelStatusText,
+    renderModelCatalog: renderModelCatalog,
+    loadModelCatalog: loadModelCatalog,
     buildListingPayload: buildListingPayload,
     getCsrfToken: getCsrfToken,
     renderStatus: renderStatus,

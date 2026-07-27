@@ -269,6 +269,25 @@ section > h2 {
   color: var(--ink);
 }
 
+#assistant-form .assistant-model-field {
+  display: grid;
+  gap: 0.2rem;
+  flex: 1 1 260px;
+  text-align: left;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+#assistant-form .assistant-model-field select {
+  width: 100%;
+}
+
+#assistant-form .model-status {
+  min-height: 1.1rem;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
 #assistant-form button {
   min-height: 44px;
   font-size: 1rem;

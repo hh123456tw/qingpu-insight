@@ -14,12 +14,12 @@
   <p class="supported-urls">支援 sale.591.com.tw 與 newhouse.591.com.tw 的詳細頁</p>
   <form id="assistant-form">
     <input type="url" id="assistant-url" placeholder="https://sale.591.com.tw/home/house/detail/..." required>
-    <select id="assistant-provider">
-      <option value="ollama">Ollama</option>
-      <option value="gemini">Gemini</option>
-      <option value="rule">Rule（摘要模式）</option>
-    </select>
-    <input type="text" id="assistant-model" placeholder="模型名稱（如 gemma4:e2b）" value="gemma4:e2b">
+    <label class="assistant-model-field">回答模型
+      <select id="assistant-model" required>
+        <option value="">載入模型中…</option>
+      </select>
+      <small id="assistant-model-status" class="model-status" aria-live="polite"></small>
+    </label>
     <button type="submit" id="assistant-start">分析這個物件</button>
   </form>
   <div id="assistant-status" class="status" hidden></div>
