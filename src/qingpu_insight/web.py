@@ -558,7 +558,10 @@ def _parse_listing_update_request() -> ListingUpdateRequest:
     )
 
 
-def _parse_model_training_request() -> tuple[str, ...]:
+def _parse_model_training_request() -> object:
+    from qingpu_insight.model_training_service import ModelTrainingRequest
+    from qingpu_insight.model_tuning import TuningValidationError, parse_tuning_plan
+
     if request.mimetype != "application/json":
         raise ApiInputError("Request body must be JSON.", {"body": "application_json"})
     payload = request.get_json(silent=True)
@@ -567,7 +570,7 @@ def _parse_model_training_request() -> tuple[str, ...]:
 
     fields: dict[str, str] = {}
 
-    extra = set(payload.keys()) - {"markets"}
+    extra = set(payload.keys()) - {"markets", "tuning"}
     for k in sorted(extra):
         fields[k] = "not_allowed"
 
@@ -585,11 +588,24 @@ def _parse_model_training_request() -> tuple[str, ...]:
     elif any(m not in {"resale", "presale"} for m in raw_markets):
         fields["markets"] = "supported_values"
 
+    ordered = [m for m in ("resale", "presale") if m in raw_markets] if isinstance(raw_markets, list) else []
+
+    try:
+        tuning_plan = parse_tuning_plan(
+            tuple(ordered),
+            payload.get("tuning"),
+        )
+    except TuningValidationError as exc:
+        for key, value in exc.fields.items():
+            fields[f"tuning.{key}"] = value
+
     if fields:
         raise ApiInputError("Request validation failed.", fields)
 
-    ordered = [m for m in ("resale", "presale") if m in raw_markets]
-    return tuple(ordered)
+    return ModelTrainingRequest(
+        markets=tuple(ordered),
+        tuning_plan=tuning_plan,
+    )
 
 
 def _public_job(run: JobRun) -> dict[str, object]:
@@ -1058,13 +1074,9 @@ def create_app(
             error = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
             return jsonify({"error": error}), 503
         try:
-            markets = _parse_model_training_request()
+            request_obj = _parse_model_training_request()
         except ApiInputError:
             raise
-
-        from qingpu_insight.model_training_service import ModelTrainingRequest
-
-        request_obj = ModelTrainingRequest(markets=markets)
 
         try:
             submission = admin_services.model_training_service.submit(request_obj)

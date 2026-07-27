@@ -2028,8 +2028,10 @@ class StubModelTrainingService:
     def __init__(self, job_service) -> None:
         self.job_service = job_service
         self.handoffs: list[str] = []
+        self.requests: list = []
 
     def submit(self, request):
+        self.requests.append(request)
         return self.job_service.create(
             "model_training", "model_training:active", "web",
         )
@@ -2144,6 +2146,7 @@ def model_admin_client(market_frame: pd.DataFrame) -> FlaskClient:
         app.extensions["qingpu_admin_runtime"],
         dashboard_service=StubDashboardService(),
     )
+    app.extensions["test_model_training_service"] = mts
     with app.test_client() as client:
         with client.session_transaction() as sess:
             sess["_csrf_token"] = "test-token"
@@ -2322,6 +2325,87 @@ class TestModelAdminApi:
         )
         data = response.get_json()
         assert data.get("created") is True
+
+    def test_model_training_post_accepts_four_profile_plan(
+        self, model_admin_client: FlaskClient,
+    ) -> None:
+        response = model_admin_client.post(
+            "/api/admin/model-training-runs",
+            json={
+                "markets": ["resale", "presale"],
+                "tuning": {
+                    "mode": "preset_comparison",
+                    "include_custom": True,
+                    "custom": {
+                        "hgb_learning_rate": 0.05,
+                        "hgb_max_iter": 420,
+                        "rf_n_estimators": 520,
+                        "recency_half_life_months": 36,
+                    },
+                },
+            },
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 202
+        service = model_admin_client.application.extensions[
+            "test_model_training_service"
+        ]
+        assert [p.name for p in service.requests[-1].tuning_plan.profiles] == [
+            "quick", "balanced", "thorough", "custom",
+        ]
+
+    def test_model_training_post_defaults_to_three_profiles(
+        self, model_admin_client: FlaskClient,
+    ) -> None:
+        response = model_admin_client.post(
+            "/api/admin/model-training-runs",
+            json={"markets": ["resale"]},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 202
+        service = model_admin_client.application.extensions[
+            "test_model_training_service"
+        ]
+        assert [p.name for p in service.requests[-1].tuning_plan.profiles] == [
+            "quick", "balanced", "thorough",
+        ]
+
+    def test_model_training_post_rejects_invalid_tuning_field(
+        self, model_admin_client: FlaskClient,
+    ) -> None:
+        response = model_admin_client.post(
+            "/api/admin/model-training-runs",
+            json={
+                "markets": ["resale"],
+                "tuning": {"mode": "unknown_mode"},
+            },
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+        assert response.get_json()["error"]["fields"]["tuning.mode"]
+
+    def test_model_training_post_rejects_invalid_custom(
+        self, model_admin_client: FlaskClient,
+    ) -> None:
+        response = model_admin_client.post(
+            "/api/admin/model-training-runs",
+            json={
+                "markets": ["resale"],
+                "tuning": {
+                    "mode": "preset_comparison",
+                    "include_custom": True,
+                    "custom": {
+                        "hgb_learning_rate": 999,
+                        "hgb_max_iter": 420,
+                        "rf_n_estimators": 520,
+                        "recency_half_life_months": 36,
+                    },
+                },
+            },
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+        assert response.get_json()["error"]["fields"]["tuning.custom.hgb_learning_rate"]
 
     def test_model_admin_report_download_success(
         self, monkeypatch, model_admin_client: FlaskClient, tmp_path: Path,
