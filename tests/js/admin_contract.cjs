@@ -52,6 +52,22 @@ assert.equal(admin.canConfirmDangerousAction("abc", "def"), false);
 
 assert.deepEqual(admin.DEFAULT_LISTING_TYPES, ["sale", "newhouse"]);
 
+assert.deepEqual(
+  admin.buildBenchmarkPayload("ollama:gemma4:e2b"),
+  { model_id: "ollama:gemma4:e2b" }
+);
+assert.equal(
+  admin.benchmarkModelHelp({
+    provider: "ollama",
+    ready: true,
+    note: "本機已安裝",
+  }),
+  "本機已安裝"
+);
+assert.equal(admin.canRunBenchmark({ ready: true }), true);
+assert.equal(admin.canRunBenchmark({ ready: false }), false);
+assert.equal(admin.canRunBenchmark(null), false);
+
 async function testListingSequenceUsesOnlyWebListingTypes() {
   var submitted = [];
   var result = await admin.runListingSequence({
