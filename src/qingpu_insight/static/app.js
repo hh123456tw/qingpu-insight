@@ -175,6 +175,18 @@ document.addEventListener("DOMContentLoaded", async function () {
     initMap();
     initChart();
 
+    loadMap(params, currentMapView());
+    if (map !== null && !mapMoveHandlerRegistered) {
+      var mapMoveTimer = null;
+      map.on("moveend", function () {
+        if (mapMoveTimer !== null) clearTimeout(mapMoveTimer);
+        mapMoveTimer = setTimeout(function () {
+          loadMap(buildParams(), currentMapView());
+        }, 200);
+      });
+      mapMoveHandlerRegistered = true;
+    }
+
     var recentParams = marketMapUi.withRecentLimit(params);
     Promise.all([
       fetch("/api/market/summary?" + params.toString(), { signal }).then(
@@ -219,17 +231,6 @@ document.addEventListener("DOMContentLoaded", async function () {
         transactionsDiv.replaceChildren(
           buildTable(transactions.items || [])
         );
-        loadMap(params, currentMapView());
-        if (map !== null && !mapMoveHandlerRegistered) {
-          var mapMoveTimer = null;
-          map.on("moveend", function () {
-            if (mapMoveTimer !== null) clearTimeout(mapMoveTimer);
-            mapMoveTimer = setTimeout(function () {
-              loadMap(buildParams(), currentMapView());
-            }, 200);
-          });
-          mapMoveHandlerRegistered = true;
-        }
       })
       .catch(function (err) {
         if (err.name === "AbortError") return;
