@@ -1,4 +1,4 @@
-document.addEventListener("DOMContentLoaded", function () {
+document.addEventListener("DOMContentLoaded", async function () {
   const typeSelect = document.getElementById("transaction-type");
   const stationFilter = document.getElementById("station-filter");
   const controls = document.querySelector(".controls");
@@ -17,6 +17,13 @@ document.addEventListener("DOMContentLoaded", function () {
   const canvas = document.getElementById("price-trend");
   const transactionsDiv = document.getElementById("recent-transactions");
 
+  const marketMapUi = await import("/static/market_map.mjs");
+  const mapStatus = document.createElement("p");
+  mapStatus.id = "map-data-status";
+  mapStatus.setAttribute("role", "status");
+  mapStatus.setAttribute("aria-live", "polite");
+  mapDiv.parentNode.insertBefore(mapStatus, mapDiv);
+
   const money = new Intl.NumberFormat("zh-TW", {
     style: "currency",
     currency: "TWD",
@@ -34,8 +41,6 @@ document.addEventListener("DOMContentLoaded", function () {
   var map = null;
   var markerLayer = null;
   var chart = null;
-  var lastController = null;
-
   function buildParams() {
     var params = new URLSearchParams();
     params.set("transaction_type", typeSelect.value);
@@ -63,37 +68,17 @@ document.addEventListener("DOMContentLoaded", function () {
         maxZoom: 19,
       }).addTo(map);
       markerLayer = L.layerGroup().addTo(map);
+      var mapMoveTimer = null;
+      map.on("moveend", function () {
+        if (mapMoveTimer !== null) clearTimeout(mapMoveTimer);
+        mapMoveTimer = setTimeout(function () {
+          loadMap(buildParams(), currentMapView());
+        }, 200);
+      });
     }
   }
 
-  function updateMap(items) {
-    markerLayer.clearLayers();
-    var hasCoords = false;
-    items.forEach(function (item) {
-      if (item.latitude && item.longitude) {
-        hasCoords = true;
-        var popup = L.popup();
-        var text = (item.record_id || "") + "\n" +
-          money.format(item.total_price_twd) + " | " +
-          (item.building_area_ping ? item.building_area_ping.toFixed(1) + " 坪" : "");
-        popup.setContent(text);
-        L.circleMarker([item.latitude, item.longitude], {
-          radius: 6,
-          color: "#0b5f55",
-          weight: 2,
-          fillColor: "#22a896",
-          fillOpacity: 0.82,
-        })
-          .bindPopup(popup)
-          .addTo(markerLayer);
-      }
-    });
-    if (hasCoords && map !== null) {
-      setTimeout(function () {
-        map.invalidateSize();
-      }, 200);
-    }
-  }
+
 
   function initChart() {
     if (chart === null) {
@@ -187,16 +172,13 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   function fetchData() {
-    if (lastController !== null) {
-      lastController.abort();
-    }
-    lastController = new AbortController();
     var params = buildParams();
-    var signal = lastController.signal;
+    var signal = new AbortController().signal;
 
     initMap();
     initChart();
 
+    var recentParams = marketMapUi.withRecentLimit(params);
     Promise.all([
       fetch("/api/market/summary?" + params.toString(), { signal }).then(
         function (r) {
@@ -210,7 +192,7 @@ document.addEventListener("DOMContentLoaded", function () {
           return r.json();
         }
       ),
-      fetch("/api/transactions?" + params.toString(), { signal }).then(
+      fetch("/api/transactions?" + recentParams.toString(), { signal }).then(
         function (r) {
           if (!r.ok) throw new Error("transactions " + r.status);
           return r.json();
@@ -236,17 +218,60 @@ document.addEventListener("DOMContentLoaded", function () {
 
         statusEl.textContent = "";
 
-        updateMap(transactions.items || []);
         updateChart(trends.items || []);
         transactionsDiv.replaceChildren(
           buildTable(transactions.items || [])
         );
+        loadMap(params, currentMapView());
       })
       .catch(function (err) {
         if (err.name === "AbortError") return;
         statusEl.textContent = "資料載入失敗：" + err.message;
       });
   }
+
+  function renderMap(payload) {
+    markerLayer.clearLayers();
+    if (!payload.items || !payload.items.length) {
+      mapStatus.textContent = marketMapUi.mapStatusText(payload);
+      return;
+    }
+    payload.items.forEach(function (item) {
+      L.circleMarker([item.latitude, item.longitude], {
+        radius: marketMapUi.markerRadius(item.record_count),
+        color: "#0b5f55",
+        weight: 2,
+        fillColor: "#22a896",
+        fillOpacity: 0.82,
+      })
+        .bindPopup(
+          "成交 " + item.record_count + " 筆<br>" +
+          "中位單價 " + formatWan(item.median_unit_price_per_ping_twd) + "<br>" +
+          "最近成交 " + (item.latest_transaction_date || "—")
+        )
+        .addTo(markerLayer);
+    });
+    mapStatus.textContent = marketMapUi.mapStatusText(payload);
+  }
+
+  function currentMapView() {
+    var bounds = map.getBounds();
+    return {
+      zoom: map.getZoom(),
+      south: Number(bounds.getSouth().toFixed(6)),
+      west: Number(bounds.getWest().toFixed(6)),
+      north: Number(bounds.getNorth().toFixed(6)),
+      east: Number(bounds.getEast().toFixed(6)),
+    };
+  }
+
+  const loadMap = marketMapUi.createMapLoader({
+    fetchImpl: fetch,
+    render: renderMap,
+    showError: function (message) {
+      mapStatus.textContent = message;
+    },
+  });
 
   fetchData();
 
