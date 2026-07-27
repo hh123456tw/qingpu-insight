@@ -26,11 +26,27 @@
     return meta ? meta.getAttribute("content") : "";
   }
 
-  function buildTrainingPayload(value) {
+  function buildTrainingPayload(value, includeCustom, custom) {
     if (!MARKET_PAYLOADS.hasOwnProperty(value)) {
       throw new Error("unknown market selection: " + value);
     }
-    return { markets: MARKET_PAYLOADS[value] };
+    var payload = { markets: MARKET_PAYLOADS[value] };
+    if (typeof includeCustom === "boolean") {
+      var tuning = {
+        mode: "preset_comparison",
+        include_custom: includeCustom,
+      };
+      if (includeCustom && custom) {
+        tuning.custom = {
+          hgb_learning_rate: parseFloat(custom.hgb_learning_rate),
+          hgb_max_iter: parseInt(custom.hgb_max_iter, 10),
+          rf_n_estimators: parseInt(custom.rf_n_estimators, 10),
+          recency_half_life_months: parseInt(custom.recency_half_life_months, 10),
+        };
+      }
+      payload.tuning = tuning;
+    }
+    return payload;
   }
 
   function derivePageState(statusPayload, activeRun) {
@@ -149,6 +165,59 @@
     });
   }
 
+  function validateCustomTuning(market, custom) {
+    var errors = {};
+    var lr = parseFloat(custom.hgb_learning_rate);
+    if (isNaN(lr) || lr < 0.01 || lr > 0.20) {
+      errors.hgb_learning_rate = true;
+    }
+    var maxIter = parseInt(custom.hgb_max_iter, 10);
+    if (isNaN(maxIter) || maxIter < 100 || maxIter > 1000) {
+      errors.hgb_max_iter = true;
+    }
+    var nEst = parseInt(custom.rf_n_estimators, 10);
+    if (isNaN(nEst) || nEst < 100 || nEst > 1000) {
+      errors.rf_n_estimators = true;
+    }
+    if (market === "presale") {
+      errors.recency_half_life_months = "not_applicable";
+    } else {
+      var halfLife = parseInt(custom.recency_half_life_months, 10);
+      if (isNaN(halfLife) || halfLife < 12 || halfLife > 84) {
+        errors.recency_half_life_months = true;
+      }
+    }
+    return errors;
+  }
+
+  function trainingSubmitSummary(market, includeCustom) {
+    var marketCount = market === "all" ? 2 : 1;
+    var configCount = includeCustom ? 4 : 3;
+    return marketCount + " 個市場 × " + configCount + " 組設定";
+  }
+
+  function metricCards(result) {
+    var fmetrics = result.final_test_metrics;
+    var locked = fmetrics.locked_winner;
+    var profile = fmetrics.profiles[locked];
+    return [
+      { key: "mape", label: "MAPE", value: profile.mape + "%" },
+      { key: "mae", label: "MAE", value: (profile.mae / 10000).toFixed(2) + " 萬元／坪" },
+      { key: "coverage", label: "測試覆蓋率", value: (result.test_coverage * 100).toFixed(1) + "%" },
+    ];
+  }
+
+  function profileComparisonRows(result) {
+    return result.profile_results;
+  }
+
+  function trainingRecordState(manifest) {
+    if (manifest.schema_version < 3) {
+      return { legacy: true, notice: "舊版未保存調參快照" };
+    }
+    return { legacy: false, notice: null };
+  }
+
   return {
     MARKET_PAYLOADS: MARKET_PAYLOADS,
     STAGE_LABELS: STAGE_LABELS,
@@ -163,5 +232,10 @@
     canConfirmDangerousAction: canConfirmDangerousAction,
     submitTraining: submitTraining,
     csrfToken: csrfToken,
+    validateCustomTuning: validateCustomTuning,
+    trainingSubmitSummary: trainingSubmitSummary,
+    metricCards: metricCards,
+    profileComparisonRows: profileComparisonRows,
+    trainingRecordState: trainingRecordState,
   };
 });
