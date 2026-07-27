@@ -791,6 +791,12 @@ def create_app(
         )
     app.register_blueprint(create_admin_blueprint(admin_runtime))
 
+    from qingpu_insight.conversation_web import create_conversation_blueprint
+
+    # Conversation blueprint — wiring deferred to Task 12 integration.
+    # The None/None placeholders are replaced during final integration wiring.
+    app.register_blueprint(create_conversation_blueprint(None, None))
+
     @app.before_request
     def ensure_session():
         if "_csrf_token" not in session:
