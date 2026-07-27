@@ -54,9 +54,14 @@ def resolve_conversation_model(model_id: str) -> ModelDefinition:
         raise ValueError(f"unknown conversation model: {model_id}") from None
 
 
-def public_model_catalog(*, gemini_configured: bool) -> dict[str, object]:
+def public_model_catalog(
+    *,
+    gemini_configured: bool,
+    ollama_ready: bool,
+) -> dict[str, object]:
     return {
         "default_model": DEFAULT_CONVERSATION_MODEL,
         "gemini_configured": gemini_configured,
+        "ollama_ready": ollama_ready,
         "items": [asdict(model) for model in PUBLIC_CONVERSATION_MODELS],
     }

@@ -1202,7 +1202,8 @@ def create_app(
             conv_service,
             conv_repo,
             catalog_getter=lambda: public_model_catalog(
-                gemini_configured=bool(get_gemini_api_key())
+                gemini_configured=bool(get_runtime_env("QINGPU_GEMINI_API_KEY")),
+                ollama_ready=llm_model_catalog.ollama_model_ready("gemma4:e2b"),
             ),
         )
     )

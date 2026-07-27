@@ -67,14 +67,21 @@ assert.deepEqual(ha.buildCreatePayload(""), { model: "" });
 assert.equal(
   ha.modelStatusText(
     { provider: "gemini", cloud: true },
-    false
+    { geminiConfigured: false, ollamaReady: true }
   ),
   "尚未設定 Gemini API Key；送出後將自動使用本機模型"
 );
 assert.equal(
   ha.modelStatusText(
     { provider: "ollama", cloud: false },
-    true
+    { geminiConfigured: true, ollamaReady: false }
+  ),
+  "本機 Gemma 4 尚未安裝；送出後可能改用 Rule 摘要"
+);
+assert.equal(
+  ha.modelStatusText(
+    { provider: "ollama", cloud: false },
+    { geminiConfigured: true, ollamaReady: true }
   ),
   "本機模式，不使用 Google API"
 );

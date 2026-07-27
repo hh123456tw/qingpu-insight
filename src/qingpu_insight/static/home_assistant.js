@@ -42,10 +42,14 @@
     return { model: model };
   }
 
-  function modelStatusText(item, geminiConfigured) {
+  function modelStatusText(item, readiness) {
     if (!item) return "";
-    if (item.cloud && !geminiConfigured) {
+    var state = readiness || {};
+    if (item.cloud && !state.geminiConfigured) {
       return "尚未設定 Gemini API Key；送出後將自動使用本機模型";
+    }
+    if (item.provider === "ollama" && !state.ollamaReady) {
+      return "本機 Gemma 4 尚未安裝；送出後可能改用 Rule 摘要";
     }
     if (item.provider === "ollama") {
       return "本機模式，不使用 Google API";
@@ -79,7 +83,10 @@
       });
       status.textContent = modelStatusText(
         selected,
-        Boolean(catalog.gemini_configured)
+        {
+          geminiConfigured: Boolean(catalog.gemini_configured),
+          ollamaReady: Boolean(catalog.ollama_ready),
+        }
       );
     }
     select.addEventListener("change", updateStatus);

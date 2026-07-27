@@ -36,6 +36,7 @@ def catalog_getter():
     return lambda: {
         "default_model": "gemini-3.5-flash-lite",
         "gemini_configured": True,
+        "ollama_ready": True,
         "items": [
             {
                 "id": "gemini-3.5-flash-lite",
@@ -197,6 +198,7 @@ class TestCreateConversation:
                 catalog_getter=lambda: {
                     "default_model": "gemini-3.5-flash-lite",
                     "gemini_configured": False,
+                    "ollama_ready": False,
                     "items": [],
                 },
             )
@@ -220,6 +222,7 @@ class TestConversationModels:
         payload = response.get_json()
         assert payload["default_model"] == "gemini-3.5-flash-lite"
         assert payload["gemini_configured"] is True
+        assert payload["ollama_ready"] is True
         assert "api_key" not in response.get_data(as_text=True).lower()
 
 

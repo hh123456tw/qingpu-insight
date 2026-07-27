@@ -10,7 +10,10 @@ from qingpu_insight.conversation_models import (
 
 
 def test_catalog_has_exact_public_models_in_display_order():
-    catalog = public_model_catalog(gemini_configured=True)
+    catalog = public_model_catalog(
+        gemini_configured=True,
+        ollama_ready=False,
+    )
 
     assert catalog["default_model"] == "gemini-3.5-flash-lite"
     assert [item["id"] for item in catalog["items"]] == [
@@ -20,6 +23,7 @@ def test_catalog_has_exact_public_models_in_display_order():
         "rule",
     ]
     assert catalog["gemini_configured"] is True
+    assert catalog["ollama_ready"] is False
 
 
 def test_catalog_resolves_provider_server_side():
