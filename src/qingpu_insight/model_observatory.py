@@ -267,15 +267,20 @@ class ModelObservatory:
                             publishable = False
 
                 current_version_id: str | None = None
+                is_current_official = False
                 if self._official_store is not None:
                     current = self._official_store.current(m)
                     if current is not None:
                         current_version_id = current.version_id
+                        is_current_official = (
+                            current.source_run_id == str(manifest.run_id)
+                        )
 
                 markets_info[m] = {
                     "publishable": publishable,
                     "release_blockers": blockers,
                     "current_official_version_id": current_version_id,
+                    "is_current_official": is_current_official,
                 }
 
             result["markets"] = markets_info

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -363,6 +364,38 @@ class TestModelObservatoryStatus:
         assert result is not None
         assert result["run_id"] == str(manifest.run_id)
         assert "manifest" in result
+
+    def test_get_run_marks_candidate_that_is_current_official(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        manifest = manifest_fixture(markets=["resale"])
+        observatory = observatory_fixture(tmp_path, candidate_runs=[manifest])
+        current_path = (
+            tmp_path / "artifacts" / "official" / "resale" / "current.json"
+        )
+        current_path.parent.mkdir(parents=True, exist_ok=True)
+        current_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "market": "resale",
+                    "version_id": "current1",
+                    "source_run_id": str(manifest.run_id),
+                    "artifact_file": (
+                        "official/resale/versions/current1/model.joblib"
+                    ),
+                    "artifact_sha256": "b" * 64,
+                    "activated_at": datetime.now(UTC).isoformat(),
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = observatory.get_run(str(manifest.run_id))
+
+        assert result is not None
+        assert result["markets"]["resale"]["is_current_official"] is True
         assert result["manifest"]["markets"] == manifest.markets
 
     def test_get_run_returns_none_for_missing(self, tmp_path: Path) -> None:

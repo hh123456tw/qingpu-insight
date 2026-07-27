@@ -388,6 +388,9 @@ assert.deepEqual(admin.ablationRows({}), []);
 // Candidate cards must expose the evidence needed before publishing.
 var candidateRun = {
   run_id: "f61915ba-a08a-4f18-a284-64e2d4efa6eb",
+  markets: {
+    resale: { is_current_official: true },
+  },
   manifest: {
     schema_version: 2,
     results: [{
@@ -421,6 +424,7 @@ assert.equal(candidateSummary.mape, "18.3%");
 assert.equal(candidateSummary.coverage, "—");
 assert.equal(candidateSummary.backtests, "2 / 3 通過");
 assert.equal(candidateSummary.baselineComparison, "改善 25.3%");
+assert.equal(candidateSummary.isCurrentOfficial, true);
 assert.deepEqual(candidateSummary.stationWarnings, ["A18"]);
 
 process.stdout.write("model admin contract passed\n");

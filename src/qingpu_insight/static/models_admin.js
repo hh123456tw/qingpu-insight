@@ -465,6 +465,11 @@
       mape: overview.mape,
       coverage: overview.coverage,
       baselineComparison: baselineComparison,
+      isCurrentOfficial: Boolean(
+        run.markets
+        && run.markets[market]
+        && run.markets[market].is_current_official
+      ),
       backtests:
         backtests.length > 0
           ? passedBacktests + " / " + backtests.length + " 通過"

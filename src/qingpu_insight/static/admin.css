@@ -317,6 +317,16 @@ details summary {
   border: 1px solid #9aa7b2;
 }
 
+.mr-current-official {
+  border: 1px solid #98d19b;
+  border-radius: 4px;
+  background: #edf9ee;
+  color: #205d25;
+  font-size: 0.86rem;
+  font-weight: 600;
+  padding: 0.42rem 0.65rem;
+}
+
 @media (max-width: 760px) {
   .mr-candidate {
     align-items: stretch;

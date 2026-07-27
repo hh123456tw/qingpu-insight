@@ -286,6 +286,8 @@
             var market = markets[j];
             var marketInfo = run.markets && run.markets[market];
             var publishable = marketInfo && marketInfo.publishable;
+            var isCurrentOfficial =
+              marketInfo && marketInfo.is_current_official;
             var blockers = (marketInfo && marketInfo.release_blockers) || [];
             var summary = ma.candidateDecisionSummary(run, market);
             var el = document.createElement("div");
@@ -346,7 +348,12 @@
               }
             });
             actions.appendChild(detailBtn);
-            if (publishable) {
+            if (isCurrentOfficial) {
+              var currentBadge = document.createElement("span");
+              currentBadge.className = "mr-current-official";
+              currentBadge.textContent = "目前正式版本";
+              actions.appendChild(currentBadge);
+            } else if (publishable) {
               var btn = document.createElement("button");
               btn.className = "mutation-btn admin-btn mr-publish-btn";
               btn.textContent = "發布";
