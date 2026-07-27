@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -103,6 +104,100 @@ def market_trends(frame: pd.DataFrame, filters: MarketFilters) -> list[dict[str,
         .reset_index()
     )
     return grouped.to_dict(orient="records")
+
+
+@dataclass(frozen=True)
+class MapBounds:
+    south: float
+    west: float
+    north: float
+    east: float
+
+    def __post_init__(self) -> None:
+        values = (self.south, self.west, self.north, self.east)
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("map bounds must be finite")
+        if self.south >= self.north or self.west >= self.east:
+            raise ValueError("map bounds must be ordered")
+
+
+def _grid_size(zoom: int) -> float:
+    return 0.01 / (2 ** max(zoom - 12, 0))
+
+
+def _aggregate_map_rows(rows: pd.DataFrame, grid_size: float) -> list[dict[str, Any]]:
+    if rows.empty:
+        return []
+    working = rows.copy()
+    working["_lat_cell"] = (working["latitude"] / grid_size).apply(math.floor)
+    working["_lon_cell"] = (working["longitude"] / grid_size).apply(math.floor)
+    grouped = (
+        working.groupby(["_lat_cell", "_lon_cell"], sort=True)
+        .agg(
+            latitude=("latitude", "mean"),
+            longitude=("longitude", "mean"),
+            record_count=("transaction_type", "size"),
+            median_unit_price_per_ping_twd=("unit_price_per_ping_twd", "median"),
+            latest_transaction_date=("transaction_date", "max"),
+        )
+        .reset_index(drop=True)
+    )
+    items: list[dict[str, Any]] = []
+    for row in grouped.to_dict(orient="records"):
+        items.append(
+            {
+                "latitude": round(float(row["latitude"]), 4),
+                "longitude": round(float(row["longitude"]), 4),
+                "record_count": int(row["record_count"]),
+                "median_unit_price_per_ping_twd": float(
+                    row["median_unit_price_per_ping_twd"]
+                ),
+                "latest_transaction_date": str(
+                    pd.Timestamp(row["latest_transaction_date"]).date()
+                ),
+            }
+        )
+    return items
+
+
+def market_map_points(
+    frame: pd.DataFrame,
+    filters: MarketFilters,
+    zoom: int,
+    bounds: MapBounds | None = None,
+    max_groups: int = 500,
+) -> dict[str, Any]:
+    filtered = filter_market(frame, filters)
+    latitude = pd.to_numeric(filtered["latitude"], errors="coerce")
+    longitude = pd.to_numeric(filtered["longitude"], errors="coerce")
+    valid = (
+        latitude.between(-90, 90)
+        & longitude.between(-180, 180)
+        & latitude.map(math.isfinite)
+        & longitude.map(math.isfinite)
+    )
+    located = filtered.loc[valid].copy()
+    located["latitude"] = latitude.loc[valid]
+    located["longitude"] = longitude.loc[valid]
+    total_records = len(filtered)
+    located_records = len(located)
+    if bounds is not None:
+        located = located.loc[
+            located["latitude"].between(bounds.south, bounds.north)
+            & located["longitude"].between(bounds.west, bounds.east)
+        ]
+    grid_size = _grid_size(zoom)
+    items = _aggregate_map_rows(located, grid_size)
+    while len(items) > max_groups:
+        grid_size *= 2
+        items = _aggregate_map_rows(located, grid_size)
+    return {
+        "total_records": int(total_records),
+        "located_records": int(located_records),
+        "unlocated_records": int(total_records - located_records),
+        "group_count": len(items),
+        "items": items,
+    }
 
 
 def recent_transactions(
