@@ -11,11 +11,14 @@ import pytest
 
 from qingpu_insight.jobs import ACTIVE_STATUSES, JobRun, JobService, JobStatus
 from qingpu_insight.model_artifacts import CandidateArtifactStore, sha256_file
+from qingpu_insight.model_training import ProfileEvaluationError
 from qingpu_insight.model_training_service import (
+    ModelTrainingError,
     ModelTrainingRequest,
     ModelTrainingService,
     SourceVersionProvider,
 )
+from qingpu_insight.model_tuning import parse_tuning_plan
 
 
 class FakeJobRepository:
@@ -260,16 +263,16 @@ def test_execute_fails_atomically_when_a_market_raises(
     import qingpu_insight.model_training_service as mts
 
     call_count = 0
-    original_run = mts.run_model_experiment
+    original_run = mts.run_tuned_model_experiment
 
-    def failing_run(split, estimators=None):
+    def failing_run(split, **kwargs):
         nonlocal call_count
         call_count += 1
         if call_count > 1:
             raise RuntimeError("presale experiment failed")
-        return original_run(split, estimators)
+        return original_run(split, **kwargs)
 
-    monkeypatch.setattr(mts, "run_model_experiment", failing_run)
+    monkeypatch.setattr(mts, "run_tuned_model_experiment", failing_run)
 
     run = service.submit(ModelTrainingRequest(("resale", "presale"))).run
     jobs.start(run.run_id)
@@ -282,3 +285,109 @@ def test_execute_fails_atomically_when_a_market_raises(
     assert not (candidate_root / run.run_id).exists()
     assert sha256_file(official_resale) == before_resale
     assert sha256_file(official_presale) == before_presale
+
+
+def test_training_request_keeps_tuning_plan() -> None:
+    plan = parse_tuning_plan(("resale",), None)
+    request = ModelTrainingRequest(("resale",), tuning_plan=plan)
+    assert request.tuning_plan == plan
+    assert request.tuning_plan.profiles[1].name == "balanced"
+
+
+def test_training_request_defaults_to_three_profiles() -> None:
+    request = ModelTrainingRequest(("resale",))
+    assert len(request.tuning_plan.profiles) == 3
+    for profile in request.tuning_plan.profiles:
+        assert profile.source == "preset"
+
+
+def test_training_request_custom_four_profiles() -> None:
+    custom_plan = parse_tuning_plan(
+        ("resale",),
+        {
+            "mode": "preset_comparison",
+            "include_custom": True,
+            "custom": {
+                "hgb_learning_rate": 0.10,
+                "hgb_max_iter": 200,
+                "rf_n_estimators": 300,
+                "recency_half_life_months": 24,
+            },
+        },
+    )
+    request = ModelTrainingRequest(("resale",), tuning_plan=custom_plan)
+    assert len(request.tuning_plan.profiles) == 4
+    assert request.tuning_plan.profiles[-1].name == "custom"
+
+
+def test_profile_failure_discards_candidate_and_fails_job(
+    tmp_path: Path,
+    market_parquet: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import qingpu_insight.model_training_service as mts
+
+    service, jobs = service_fixture(tmp_path, input_path=market_parquet)
+    plan = parse_tuning_plan(("resale",), None)
+    request = ModelTrainingRequest(("resale",), tuning_plan=plan)
+    run = service.submit(request).run
+    jobs.start(run.run_id)
+
+    monkeypatch.setattr(
+        mts,
+        "run_tuned_model_experiment",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            ProfileEvaluationError("thorough")
+        ),
+    )
+    with pytest.raises(ModelTrainingError) as caught:
+        service.execute(run.run_id, request)
+    assert caught.value.error_code == "profile_failed"
+    assert jobs.get(run.run_id).status == "failed"
+    assert not (tmp_path / "candidates" / run.run_id).exists()
+
+
+def test_execute_runs_tuned_model_experiment_with_profiles_and_recency_weighting(
+    tmp_path, market_parquet, monkeypatch
+):
+    import qingpu_insight.model_training_service as mts
+    captured = []
+
+    def spy(split, *, profiles, feature_columns, use_recency_weights, baseline_months, on_profile_start=None):
+        captured.append({
+            "profile_count": len(profiles),
+            "use_recency_weights": use_recency_weights,
+            "profile_names": [p.name for p in profiles],
+        })
+        from qingpu_insight.model_training import run_model_experiment as orig
+        result = orig(split)
+        from qingpu_insight.model_training import TunedModelExperiment, ProfileEvaluation
+        profiles_tuple = tuple(
+            ProfileEvaluation(profile=p, candidates=(), candidate_errors={})
+            for p in profiles
+        )
+        return TunedModelExperiment(
+            profile_results=profiles_tuple,
+            selected_profile="balanced",
+            selected_model="ridge",
+            selected_evaluation=result.final_test_results.get("ridge", result.final_test_results.get("baseline")),
+            selected_estimator=result.selected_estimator,
+            final_test_results=result.final_test_results,
+            recommended=result.recommended,
+            reason_codes=result.reason_codes,
+        )
+
+    monkeypatch.setattr(mts, "run_tuned_model_experiment", spy)
+
+    service, jobs = service_fixture(tmp_path, input_path=market_parquet)
+    run = service.submit(ModelTrainingRequest(("resale", "presale"))).run
+    jobs.start(run.run_id)
+    manifest = service.execute(run.run_id, ModelTrainingRequest(("resale", "presale")))
+
+    assert len(captured) == 2
+    assert captured[0]["use_recency_weights"] is True
+    assert captured[1]["use_recency_weights"] is False
+    for cap in captured:
+        assert cap["profile_count"] == 3
+        assert cap["profile_names"] == ["quick", "balanced", "thorough"]
+    assert manifest.results[0].selected_profile == "balanced"

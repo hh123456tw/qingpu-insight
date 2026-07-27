@@ -34,8 +34,15 @@ def write_evaluation(
     policy_counts = split.train["target_policy"].value_counts().to_dict()
 
     selection_metrics: dict[str, dict[str, object]] = {}
-    for c in experiment.selection_results:
-        selection_metrics[c.name] = c.metrics.to_dict(orient="index")
+    if hasattr(experiment, "selection_results"):
+        for c in experiment.selection_results:
+            selection_metrics[c.name] = c.metrics.to_dict(orient="index")
+    else:
+        for profile_eval in experiment.profile_results:
+            for candidate in profile_eval.candidates:
+                selection_metrics[candidate.evaluation.name] = (
+                    candidate.evaluation.metrics.to_dict(orient="index")
+                )
 
     final_test_metrics: dict[str, dict[str, object]] = {}
     for name, c in experiment.final_test_results.items():
@@ -116,7 +123,15 @@ def write_model_card(
         "## 候選模型",
     ]
 
-    for c in experiment.selection_results:
+    if hasattr(experiment, "selection_results"):
+        candidates = experiment.selection_results
+    else:
+        candidates = [
+            c.evaluation
+            for pe in experiment.profile_results
+            for c in pe.candidates
+        ]
+    for c in candidates:
         marker = " ✓" if c.name == bundle.model_name else ""
         lines.append(f"- {c.name}：MAE = {c.overall_mae:,.0f}{marker}")
 

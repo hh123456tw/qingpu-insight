@@ -16,17 +16,21 @@ from qingpu_insight.model_artifacts import (
     CandidateArtifactStore,
     DataSnapshot,
     MarketTrainingResult,
+    ProfileTrainingResult,
     TrainingManifest,
+    TrainingProfileSnapshot,
     sha256_file,
 )
-from qingpu_insight.model_features import build_model_frame
+from qingpu_insight.model_features import FEATURE_COLUMNS, build_model_frame
 from qingpu_insight.model_training import (
     BaselineEvaluationError,
-    ModelExperiment,
+    ProfileEvaluationError,
+    TunedModelExperiment,
     leakage_audit,
-    run_model_experiment,
+    run_tuned_model_experiment,
     split_by_time,
 )
+from qingpu_insight.model_tuning import TrainingTuningPlan, parse_tuning_plan
 from qingpu_insight.valuation import ValuationBundle, train_artifact
 from qingpu_insight.valuation_reporting import write_evaluation, write_model_card
 
@@ -102,15 +106,20 @@ def build_data_snapshot(input_path: Path, frame: pd.DataFrame) -> DataSnapshot:
 def market_result_from_files(
     market: Literal["resale", "presale"],
     bundle: ValuationBundle,
-    experiment: ModelExperiment,
+    experiment: TunedModelExperiment,
     artifact_path: Path,
     evaluation_path: Path,
     card_path: Path,
     stage: Path,
+    selected_profile: str | None = None,
+    profile_results: list[ProfileTrainingResult] | None = None,
 ) -> MarketTrainingResult:
     selection_metrics: dict[str, dict[str, object]] = {}
-    for c in experiment.selection_results:
-        selection_metrics[c.name] = c.metrics.to_dict(orient="index")
+    for profile_eval in experiment.profile_results:
+        for candidate in profile_eval.candidates:
+            selection_metrics[candidate.evaluation.name] = (
+                candidate.evaluation.metrics.to_dict(orient="index")
+            )
 
     final_test_metrics: dict[str, dict[str, object]] = {}
     for name, c in experiment.final_test_results.items():
@@ -127,7 +136,7 @@ def market_result_from_files(
 
     return MarketTrainingResult(
         market=market,
-        selected_model=experiment.selected_name,
+        selected_model=experiment.selected_model,
         recommended=experiment.recommended,
         reason_codes=list(experiment.reason_codes),
         selection_metrics=selection_metrics,
@@ -136,6 +145,8 @@ def market_result_from_files(
         artifact_sha256=sha256_file(artifact_path),
         report_files=report_files,
         report_sha256=report_sha256,
+        selected_profile=selected_profile,
+        profile_results=profile_results or [],
     )
 
 
@@ -153,6 +164,7 @@ def public_training_summary(manifest: TrainingManifest) -> dict[str, object]:
                 "selected_model": r.selected_model,
                 "recommended": r.recommended,
                 "reason_codes": r.reason_codes,
+                "selected_profile": r.selected_profile,
             }
             for r in manifest.results
         ],
@@ -166,6 +178,7 @@ class ModelTrainingRequest:
         self,
         markets: tuple[Literal["resale", "presale"], ...],
         trigger: str = "web",
+        tuning_plan: TrainingTuningPlan | None = None,
     ) -> None:
         if not markets:
             raise ValueError("markets must not be empty")
@@ -180,6 +193,7 @@ class ModelTrainingRequest:
         ordered = [m for m in ("resale", "presale") if m in seen]
         self._markets = tuple(ordered)
         self.trigger = trigger
+        self.tuning_plan = tuning_plan or parse_tuning_plan(self._markets, None)
 
     @property
     def markets(self) -> tuple[Literal["resale", "presale"], ...]:
@@ -188,10 +202,14 @@ class ModelTrainingRequest:
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, ModelTrainingRequest):
             return NotImplemented
-        return self.markets == other.markets and self.trigger == other.trigger
+        return (
+            self.markets == other.markets
+            and self.trigger == other.trigger
+            and self.tuning_plan == other.tuning_plan
+        )
 
     def __repr__(self) -> str:
-        return f"ModelTrainingRequest(markets={self.markets}, trigger={self.trigger!r})"
+        return f"ModelTrainingRequest(markets={self.markets}, trigger={self.trigger!r}, tuning_plan={self.tuning_plan})"
 
 
 class ModelTrainingService:
@@ -264,6 +282,7 @@ class ModelTrainingService:
         try:
             results: list[MarketTrainingResult] = []
             for market in markets:
+                is_resale = market == "resale"
                 self._jobs.progress(
                     run_id,
                     {
@@ -274,10 +293,29 @@ class ModelTrainingService:
                 model_frame = build_model_frame(frame, market)
                 split = split_by_time(model_frame)
                 try:
-                    experiment = run_model_experiment(split)
+                    experiment = run_tuned_model_experiment(
+                        split,
+                        profiles=request.tuning_plan.profiles,
+                        feature_columns=FEATURE_COLUMNS,
+                        use_recency_weights=is_resale,
+                        baseline_months=12 if is_resale else 24,
+                        on_profile_start=lambda profile_name: self._jobs.progress(
+                            run_id,
+                            {
+                                "stage": f"training_{market}",
+                                "profile": profile_name,
+                                "completed_markets": list(completed),
+                            },
+                        ),
+                    )
+                except ProfileEvaluationError as exc:
+                    raise ModelTrainingError(
+                        "profile_failed",
+                        f"{market} 設定檔 {exc.profile_name} 訓練完成",
+                    ) from exc
                 except BaselineEvaluationError as exc:
                     raise ModelTrainingError("baseline_failed", str(exc)) from exc
-                locked = experiment.final_test_results[experiment.selected_name]
+                locked = experiment.selected_evaluation
                 seed_bundle = ValuationBundle(
                     transaction_type=market,
                     model_name="",
@@ -296,8 +334,13 @@ class ModelTrainingService:
                     metrics={},
                 )
                 try:
+                    winning_profile = next(
+                        p for p in request.tuning_plan.profiles if p.name == experiment.selected_profile
+                    )
                     artifact_path = train_artifact(
-                        market, locked, split, seed_bundle, stage
+                        market, locked, split, seed_bundle, stage,
+                        use_recency_weights=is_resale,
+                        recency_half_life_months=winning_profile.recency_half_life_months or 48,
                     )
                     bundle: ValuationBundle = joblib.load(artifact_path)
                 except Exception as exc:
@@ -311,13 +354,49 @@ class ModelTrainingService:
                         "completed_markets": list(completed),
                     },
                 )
+
                 try:
                     report_dir = stage / "reports"
+                    selected_profile = next(
+                        (
+                            p
+                            for p in request.tuning_plan.profiles
+                            if p.name == experiment.selected_profile
+                        ),
+                        None,
+                    )
+
+                    profile_results = [
+                        ProfileTrainingResult(
+                            profile_name=pe.profile.name,
+                            parameters={
+                                "hgb_learning_rate": pe.profile.hgb_learning_rate,
+                                "hgb_max_iter": pe.profile.hgb_max_iter,
+                                "rf_n_estimators": pe.profile.rf_n_estimators,
+                                "recency_half_life_months": pe.profile.recency_half_life_months,
+                            },
+                            selection_metrics={
+                                c.model_name: c.evaluation.metrics.to_dict(orient="index")
+                                for c in pe.candidates
+                            },
+                            candidate_errors=pe.candidate_errors,
+                        )
+                        for pe in experiment.profile_results
+                    ]
+
                     evaluation_path = write_evaluation(
-                        bundle, experiment, split, report_dir
+                        bundle,
+                        experiment,
+                        split,
+                        report_dir,
+                        selected_profile=selected_profile,
                     )
                     card_path = write_model_card(
-                        bundle, experiment, leakage_audit(split), report_dir
+                        bundle,
+                        experiment,
+                        leakage_audit(split),
+                        report_dir,
+                        selected_profile=selected_profile,
                     )
                 except Exception as exc:
                     raise ModelTrainingError(
@@ -334,6 +413,8 @@ class ModelTrainingService:
                             evaluation_path=evaluation_path,
                             card_path=card_path,
                             stage=stage,
+                            selected_profile=experiment.selected_profile,
+                            profile_results=profile_results,
                         )
                     )
                 except Exception as exc:
@@ -347,6 +428,12 @@ class ModelTrainingService:
                 {"stage": "writing_artifacts", "completed_markets": list(completed)},
             )
             manifest = TrainingManifest(
+                schema_version=3,
+                tuning_plan_version=request.tuning_plan.version,
+                profiles=[
+                    TrainingProfileSnapshot.model_validate(profile.snapshot())
+                    for profile in request.tuning_plan.profiles
+                ],
                 run_id=UUID(run_id),
                 created_at=self._clock(),
                 markets=list(markets),
