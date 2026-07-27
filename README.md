@@ -66,7 +66,7 @@ python -m qingpu_insight.web
 Web 一鍵更新固定依序執行 591 中古屋出售與預售新建案（sale → newhouse）。租屋不在本專題的 Web 操作主線；既有租屋資料與明確 CLI 相容入口不會被刪除。
 
 **模型訓練**  
-選擇 `resale`／`presale` 啟動訓練。結果寫入 `artifacts/candidates/<run_id>/`，**不會自動發布**。需透過發布預覽流程（輸入確認文字）手動發布，或選擇版本回滾。
+選擇 `resale`／`presale` 啟動訓練。可選擇加入自訂調參設定，系統會比較三組預設 profile（快速／平衡／精細）與選用的自訂 profile。結果寫入 `artifacts/candidates/<run_id>/`，**不會自動發布**。需透過發布預覽流程（輸入確認文字）手動發布，或選擇版本回滾。
 
 **備份與還原**  
 - 建立備份：建立 MySQL dump 至 `outputs/backups/`
@@ -307,6 +307,11 @@ Remove-Item Env:MYSQL_PWD
 | `outputs/reports/presale-evaluation.json` | model-train | 預售屋候選模型評估報告 |
 | `outputs/reports/resale-model-card.md` | model-train | 中古屋模型卡 |
 | `outputs/reports/presale-model-card.md` | model-train | 預售屋模型卡 |
+
+Web 操作頁支援三組固定調參設定（快速／平衡／精細）及選用自訂設定，
+自動在校準集比較各 profile 結果、鎖定最佳候選，並在測試集隔離驗證。
+訓練結果以摘要卡片（MAE、MAPE、覆蓋率、baseline delta）優先呈現，
+完整指標與模型比較收合在可展開的進階區塊。
 
 ### 啟用估價產品
 

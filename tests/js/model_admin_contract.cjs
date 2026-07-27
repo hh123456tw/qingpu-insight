@@ -223,4 +223,89 @@ assert.match(admin.trainingRecordState({ schema_version: 2 }).notice, /舊版未
 assert.equal(admin.trainingRecordState({ schema_version: 3 }).legacy, false);
 assert.equal(admin.trainingRecordState({ schema_version: 3 }).notice, null);
 
+// v3 market result fixture for trainingOverview
+var v3MarketResult = {
+  market: "resale",
+  selected_model: "hist_gradient_boosting",
+  selected_profile: "quick",
+  recommended: true,
+  test_coverage: 0.85,
+  final_test_metrics: {
+    hist_gradient_boosting: {
+      overall: { mape: 8.5, mae: 45000.0, rmse: 61000.0, r2: 0.72, count: 320 },
+    },
+    ridge: {
+      overall: { mape: 10.2, mae: 52000.0, rmse: 68000.0, r2: 0.65, count: 320 },
+    },
+    random_forest: {
+      overall: { mape: 9.1, mae: 48000.0, rmse: 64000.0, r2: 0.69, count: 320 },
+    },
+    baseline: {
+      overall: { mape: 12.3, mae: 55000.0, rmse: 72000.0, r2: 0.58, count: 320 },
+    },
+  },
+  profile_results: [
+    { name: "quick", params: { hgb_learning_rate: 0.08, hgb_max_iter: 180 }, metrics: { mape: 8.5, mae: 45000.0, coverage: 0.85 } },
+    { name: "balanced", params: { hgb_learning_rate: 0.06, hgb_max_iter: 350 }, metrics: { mape: 9.1, mae: 48000.0, coverage: 0.82 } },
+    { name: "thorough", params: { hgb_learning_rate: 0.04, hgb_max_iter: 600 }, metrics: { mape: 9.8, mae: 50000.0, coverage: 0.80 } },
+  ],
+  schema_version: 3,
+};
+
+// trainingOverview tests
+var overview = admin.trainingOverview(v3MarketResult);
+assert.equal(overview.publishable, true);
+assert.equal(overview.selectedProfileLabel, "快速");
+assert.equal(overview.selectedModelLabel, "HistGradientBoosting");
+assert.deepEqual(overview.readingOrder, [
+  "先看是否通過發布門檻",
+  "再看 MAPE 與 MAE",
+  "最後確認各站與年度回測沒有明顯退步",
+]);
+assert.ok(overview.baselineMaeDelta < 0);
+assert.equal(overview.mape, "8.5%");
+assert.equal(overview.mae, "4.50 萬元／坪");
+assert.equal(overview.coverage, "85.0%");
+assert.equal(overview.state.legacy, false);
+
+// Regression fixture: A18 candidate exceeds baseline
+var regressionResult = {
+  market: "resale",
+  selected_model: "random_forest",
+  selected_profile: "balanced",
+  recommended: false,
+  test_coverage: 0.80,
+  final_test_metrics: {
+    random_forest: {
+      overall: { mape: 11.5, mae: 56000.0 },
+      stations: {
+        A17: { mape: 10.2, mae: 50000.0 },
+        A18: { mape: 13.8, mae: 62000.0 },
+        A19: { mape: 10.5, mae: 51000.0 },
+      },
+    },
+    ridge: {
+      overall: { mape: 12.0, mae: 57000.0 },
+    },
+    baseline: {
+      overall: { mape: 11.0, mae: 53000.0 },
+      stations: {
+        A17: { mape: 10.5, mae: 50000.0 },
+        A18: { mape: 11.2, mae: 54000.0 },
+        A19: { mape: 11.3, mae: 55000.0 },
+      },
+    },
+  },
+  schema_version: 3,
+};
+var regOverview = admin.trainingOverview(regressionResult);
+assert.equal(regOverview.publishable, false);
+assert.equal(regOverview.baselineMaeDelta, 3000);
+assert.equal(regOverview.selectedModelLabel, "Random Forest");
+
+assert.equal(admin.PROFILE_LABELS.quick, "快速");
+assert.equal(admin.PROFILE_LABELS.balanced, "平衡");
+assert.equal(admin.PROFILE_LABELS.thorough, "精細");
+assert.equal(admin.PROFILE_LABELS.custom, "自訂");
+
 process.stdout.write("model admin contract passed\n");

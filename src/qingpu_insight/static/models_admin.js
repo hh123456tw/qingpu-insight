@@ -12,6 +12,13 @@
     all: ["resale", "presale"],
   };
 
+  var PROFILE_LABELS = {
+    quick: "快速",
+    balanced: "平衡",
+    thorough: "精細",
+    custom: "自訂",
+  };
+
   var STAGE_LABELS = {
     validating_data: "驗證訓練資料",
     training_resale: "正在訓練中古屋模型",
@@ -218,8 +225,41 @@
     return { legacy: false, notice: null };
   }
 
+  function trainingOverview(result) {
+    var fm = result && result.final_test_metrics;
+    var winnerName = result && result.selected_model;
+    var winnerLabel = winnerName;
+    if (winnerName === "ridge") winnerLabel = "Ridge";
+    else if (winnerName === "random_forest") winnerLabel = "Random Forest";
+    else if (winnerName === "hist_gradient_boosting") winnerLabel = "HistGradientBoosting";
+
+    var mape = fm && fm[winnerName] && fm[winnerName].overall && fm[winnerName].overall.mape;
+    var mae = fm && fm[winnerName] && fm[winnerName].overall && fm[winnerName].overall.mae;
+    var baselineMae = fm && fm.baseline && fm.baseline.overall && fm.baseline.overall.mae;
+
+    var coverage = result && result.test_coverage;
+    var publishable = result && result.recommended;
+
+    return {
+      publishable: publishable,
+      selectedProfileLabel: PROFILE_LABELS[result && result.selected_profile] || "—",
+      selectedModelLabel: winnerLabel,
+      mape: mape != null ? mape.toFixed(1) + "%" : "—",
+      mae: mae != null ? (mae / 10000).toFixed(2) + " 萬元／坪" : "—",
+      coverage: coverage != null ? (coverage * 100).toFixed(1) + "%" : "—",
+      baselineMaeDelta: baselineMae != null && mae != null ? mae - baselineMae : null,
+      readingOrder: [
+        "先看是否通過發布門檻",
+        "再看 MAPE 與 MAE",
+        "最後確認各站與年度回測沒有明顯退步",
+      ],
+      state: trainingRecordState(result || {}),
+    };
+  }
+
   return {
     MARKET_PAYLOADS: MARKET_PAYLOADS,
+    PROFILE_LABELS: PROFILE_LABELS,
     STAGE_LABELS: STAGE_LABELS,
     REASON_LABELS: REASON_LABELS,
     reasonLabel: reasonLabel,
@@ -237,5 +277,6 @@
     metricCards: metricCards,
     profileComparisonRows: profileComparisonRows,
     trainingRecordState: trainingRecordState,
+    trainingOverview: trainingOverview,
   };
 });

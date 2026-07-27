@@ -313,9 +313,84 @@
         container.appendChild(mktEl);
       }
 
-      if (manifest.results) {
-        for (var ri = 0; ri < manifest.results.length; ri++) {
-          var r = manifest.results[ri];
+      var results = (detail.manifest && detail.manifest.results) || [];
+      var first = results && results[0];
+
+      // Overview section
+      if (first) {
+        var st = ma.trainingRecordState(first);
+        if (st.legacy) {
+          var legacyNotice = document.createElement("div");
+          legacyNotice.className = "ma-legacy-notice";
+          legacyNotice.textContent = st.notice;
+          container.appendChild(legacyNotice);
+        } else {
+          var overview = ma.trainingOverview(first);
+          var ovSection = document.createElement("div");
+          ovSection.className = "ma-overview";
+
+          var badge = document.createElement("span");
+          badge.className = overview.publishable ? "ma-badge ma-badge-pass" : "ma-badge ma-badge-fail";
+          badge.textContent = overview.publishable ? "通過發布門檻" : "未通過發布門檻";
+          ovSection.appendChild(badge);
+
+          var selInfo = document.createElement("p");
+          selInfo.textContent = "調參設定：" + overview.selectedProfileLabel + "｜選定模型：" + overview.selectedModelLabel;
+          ovSection.appendChild(selInfo);
+
+          var cards = document.createElement("div");
+          cards.className = "ma-overview-cards";
+          var metrics = [
+            { label: "MAPE", value: overview.mape },
+            { label: "MAE", value: overview.mae },
+            { label: "測試覆蓋率", value: overview.coverage },
+          ];
+          for (var mi = 0; mi < metrics.length; mi++) {
+            var card = document.createElement("div");
+            card.className = "ma-stat";
+            var val = document.createElement("div");
+            val.className = "ma-val";
+            val.textContent = metrics[mi].value;
+            var lab = document.createElement("div");
+            lab.className = "ma-label";
+            lab.textContent = metrics[mi].label;
+            card.appendChild(val);
+            card.appendChild(lab);
+            cards.appendChild(card);
+          }
+          ovSection.appendChild(cards);
+
+          if (overview.baselineMaeDelta != null) {
+            var delta = document.createElement("p");
+            delta.className = overview.baselineMaeDelta < 0 ? "ma-improvement" : "ma-regression";
+            var direction = overview.baselineMaeDelta < 0 ? "改善" : "退步";
+            delta.textContent = "與基準模型相比 MAE " + direction + " " + Math.abs(overview.baselineMaeDelta / 10000).toFixed(2) + " 萬元／坪";
+            ovSection.appendChild(delta);
+          }
+
+          var note = document.createElement("p");
+          note.className = "ma-reading-order";
+          note.textContent = "閱讀順序：" + overview.readingOrder.join(" → ");
+          ovSection.appendChild(note);
+
+          var flow = document.createElement("p");
+          flow.className = "ma-flow";
+          flow.textContent = "訓練流程：資料 → 訓練 → 校正 → 測試 → 等待人工發布";
+          ovSection.appendChild(flow);
+
+          container.appendChild(ovSection);
+        }
+      }
+
+      // Advanced details in <details>
+      var detailsWrapper = document.createElement("details");
+      var detailsSummary = document.createElement("summary");
+      detailsSummary.textContent = "完整指標與模型比較";
+      detailsWrapper.appendChild(detailsSummary);
+
+      if (results.length > 0) {
+        for (var ri = 0; ri < results.length; ri++) {
+          var r = results[ri];
           var section = document.createElement("div");
           section.className = "ma-detail-section";
           var sectionTitle = document.createElement("h4");
@@ -339,9 +414,14 @@
           renderModelMetricsTable(section, "校正評估", r.selection_metrics);
           renderModelMetricsTable(section, "最終測試", r.final_test_metrics);
 
-          container.appendChild(section);
+          detailsWrapper.appendChild(section);
         }
+      } else {
+        var noDetail = document.createElement("p");
+        noDetail.textContent = "無詳細結果";
+        detailsWrapper.appendChild(noDetail);
       }
+      container.appendChild(detailsWrapper);
 
       var reportTypes = [];
       if (manifest.results) {
