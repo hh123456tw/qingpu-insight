@@ -203,6 +203,21 @@ python -m venv .venv
 
 詳細操作說明請見 `docs/operations/listing-conversation-assistant.md`
 
+### LLM 模型與 Benchmark
+
+- 首頁物件助理固定提供兩個 Gemini 模型、本機 `gemma4:e2b` 與 Rule。
+- 管理中心的 Benchmark 模型清單會即時讀取 Ollama `/api/tags`，並固定列出
+  `gemini-3.5-flash-lite`、`gemma-4-31b-it`；不接受任意模型名稱。
+- 安裝或刪除 Ollama 模型後，按「重新整理模型清單」即可，不必重啟 Web。
+- Gemini API Key 由管理中心儲存；不得把 Key 寫進 README、命令列或 Git。
+
+### 地圖相容模式
+
+正式地圖使用 `/api/market/map-points` 顯示完整聚合資料。若頁面顯示
+「相容模式」，表示瀏覽器已讀到新版 JavaScript，但執行中的 Flask process
+仍是舊版；此時只顯示最近 100 筆有效座標。停止舊 process 並重新啟動
+`qingpu-web` 後，即可恢復完整群組地圖。
+
 ## 資料來源
 
 - 內政部不動產交易實價登錄：https://data.gov.tw/dataset/77051

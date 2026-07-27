@@ -23,8 +23,6 @@ from werkzeug.exceptions import HTTPException
 
 from qingpu_insight.admin_dashboard import AdminDashboardService, ReadinessItem
 from qingpu_insight.admin_web import ADMIN_JOB_TYPES, AdminRuntime, create_admin_blueprint
-from qingpu_insight.llm_model_catalog import LlmModelCatalog
-from qingpu_insight.web_benchmark_runner import ConfiguredWebBenchmarkRunner
 from qingpu_insight.backup_repository import MySQLBackupRepository
 from qingpu_insight.config import get_settings
 from qingpu_insight.evidence import UnknownCandidateError
@@ -44,6 +42,7 @@ from qingpu_insight.listing_update import (
     ListingUpdateRequest,
     ListingUpdateService,
 )
+from qingpu_insight.llm_model_catalog import LlmModelCatalog
 from qingpu_insight.local_secrets import LocalSecretsStore
 from qingpu_insight.market_metrics import (
     MapBounds,
@@ -64,6 +63,7 @@ from qingpu_insight.report_composition import create_report_runtime
 from qingpu_insight.report_repository import CorruptReportError
 from qingpu_insight.valuation import ModelRegistry, valuate
 from qingpu_insight.valuation_store import FileValuationStore
+from qingpu_insight.web_benchmark_runner import ConfiguredWebBenchmarkRunner
 
 
 def _parse_mysql_url_to_config() -> SimpleNamespace:

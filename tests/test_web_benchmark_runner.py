@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 
 from qingpu_insight.web_benchmark_runner import ConfiguredWebBenchmarkRunner

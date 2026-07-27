@@ -169,7 +169,7 @@ class ProviderOpsService:
             result["model"] = request.model
             result["status"] = "succeeded"
             return result
-        except Exception as e:
+        except Exception:
             return {
                 "run_id": run_id, "provider": request.provider,
                 "model": request.model, "status": "failed",
