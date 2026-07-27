@@ -18,7 +18,7 @@
 |------|------------------|
 | 市場分析 | A17～A19 成交摘要、價格趨勢、交易量、近期成交與互動地圖 |
 | AI 條件估價 | 中古屋／預售屋估計總價、合理區間、可信度、影響因素與相似成交 |
-| 刊登情報 | 591 中古屋與預售屋最新刊登、價格異動及開價比較 |
+| 591 物件助理 | 貼入中古屋／新建案詳細頁，擷取物件證據、估價並持續對話 |
 | 智慧購屋報告 | 以 Evidence Pack 與 fact ID 約束 Rule／Ollama／Gemini 的單一物件報告 |
 | 管理中心 | 查看模型指標，並在前端操作資料更新、模型訓練、發布、回滾、LLM Benchmark 與診斷 |
 
@@ -80,7 +80,7 @@ flowchart LR
 
 - Windows 10／11
 - **Python 3.11**
-- Chrome；只有更新 591 刊登時需要
+- Chrome；更新 591 刊登或分析 591 詳細頁時需要
 - MySQL 8；只有管理工作、版本發布、備份與完整報告流程需要
 
 公開儲存庫不包含資料集、模型、備份、密鑰、Cookie 或 591 原始 HTML。新 clone 可以檢查程式與執行測試，但必須先建立本機資料與模型，才能看到完整產品內容。
@@ -157,7 +157,8 @@ python -m venv .venv
 
 ### 快速開始
 
-1. 打開首頁，在「貼上 591 物件，開始分析」輸入框貼上 591 詳細頁網址
+1. 打開首頁；可先由 A17～A19 的「591 中古屋」或「591 新建案」連結挑選
+   物件，再將單一物件的詳細頁網址貼入「貼上 591 物件，開始分析」
 2. 從固定清單選擇回答模型：Google Gemini 3.5 Flash-Lite、Google Gemma 4
    31B、本機 Ollama Gemma 4 或 Rule
 3. 點擊「分析這個物件」
@@ -177,6 +178,10 @@ python -m venv .venv
 - **Ollama**：預設連線 `http://127.0.0.1:11434`，可用
   `QINGPU_OLLAMA_BASE_URL` 覆寫；模型目錄、Benchmark 與首頁對話共用此設定
 - **Rule 模式**：完全離線，使用證據資料產生固定摘要與建議
+- **詳細頁擷取**：中古屋支援目前 591 DOM（即使沒有 JSON-LD），新建案會保留
+  單價與坪數區間；若 591 顯示驗證頁，系統會要求人工處理，不繞過驗證
+- **Gemini 回覆**：只採用正式文字 part，略過 API 回傳中的思考 part，再執行
+  schema 與 fact ID 驗證
 
 ### 技術說明
 
@@ -570,7 +575,7 @@ candidate listing ID。這是刻意的產品限制，用來避免多物件的事
 
 ```powershell
 # 更新刊登資料（最少 1 頁）
-.\.venv\Scripts\qingpu-data.exe listing-update --types sale newhouse rental --max-pages 1
+.\.venv\Scripts\qingpu-data.exe listing-update --types sale newhouse --max-pages 1
 
 # 執行健康檢查
 .\.venv\Scripts\qingpu-data.exe health-run

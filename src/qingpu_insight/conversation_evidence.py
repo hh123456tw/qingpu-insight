@@ -192,6 +192,35 @@ class ConversationEvidenceBuilder:
                     )
                 )
 
+        unit_price_low = payload.get("unit_price_low_twd_per_ping")
+        unit_price_high = payload.get("unit_price_high_twd_per_ping")
+        if unit_price_low is not None and unit_price_high is not None:
+            facts.append(
+                EvidenceFact(
+                    id="listing.unit_price_range",
+                    label="單價區間",
+                    value=(
+                        f"{int(unit_price_low):,} 至 "
+                        f"{int(unit_price_high):,} 元/坪"
+                    ),
+                    source="591 詳細頁",
+                    observed_at=observed_at,
+                )
+            )
+
+        area_low = payload.get("area_low_ping")
+        area_high = payload.get("area_high_ping")
+        if area_low is not None and area_high is not None:
+            facts.append(
+                EvidenceFact(
+                    id="listing.area_range",
+                    label="坪數區間",
+                    value=f"{area_low} 至 {area_high} 坪",
+                    source="591 詳細頁",
+                    observed_at=observed_at,
+                )
+            )
+
         lat = payload.get("latitude")
         lng = payload.get("longitude")
         if lat is not None and lng is not None:

@@ -14,6 +14,7 @@ import requests
 from qingpu_insight.conversation_listing_parser import (
     ListingPageVerificationRequired,
     ParsedListingDetail,
+    has_listing_detail_content,
     parse_listing_detail,
 )
 from qingpu_insight.conversation_urls import (
@@ -102,7 +103,12 @@ class DetailPageBrowser:
             redirect_resolver or Safe591RedirectResolver().resolve
         )
 
-    def _wait_for_page(self, driver: Any) -> None:
+    def _wait_for_page(
+        self,
+        driver: Any,
+        *,
+        listing_type: str,
+    ) -> None:
         start = self._clock.now()
         while True:
             elapsed = (self._clock.now() - start).total_seconds()
@@ -111,7 +117,13 @@ class DetailPageBrowser:
                     f"Page did not load content within {self._config.page_timeout_seconds}s"
                 )
             html = driver.page_source
-            if "application/ld+json" in html or is_verification_page(html):
+            if (
+                has_listing_detail_content(
+                    html,
+                    listing_type=listing_type,
+                )
+                or is_verification_page(html)
+            ):
                 return
             time.sleep(0.5)
 
@@ -121,7 +133,10 @@ class DetailPageBrowser:
         try:
             # Chrome only receives the already validated final detail URL.
             driver.get(validated.canonical_url)
-            self._wait_for_page(driver)
+            self._wait_for_page(
+                driver,
+                listing_type=validated.listing_type,
+            )
 
             html = driver.page_source
 

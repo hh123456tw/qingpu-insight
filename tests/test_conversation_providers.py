@@ -134,6 +134,47 @@ class TestRuleConversationProvider:
         for claim in draft.property_claims:
             assert len(claim.fact_ids) >= 1
 
+    def test_rule_provider_caps_claims_and_keeps_summary_facts(self) -> None:
+        comparable_facts = tuple(
+            EvidenceFact(
+                id=f"comparable.{index}.price",
+                label=f"案例 {index}",
+                value=str(index),
+                source="實價登錄",
+                observed_at=_NOW,
+            )
+            for index in range(40)
+        )
+        market_summary = EvidenceFact(
+            id="market.sample_size",
+            label="相似成交筆數",
+            value="10",
+            source="實價登錄",
+            observed_at=_NOW,
+        )
+        ctx = ConversationContext(
+            rolling_summary=None,
+            recent_messages=(),
+            evidence_revision=1,
+            evidence_facts=comparable_facts + (_FACT_1, market_summary),
+            limitations=(),
+        )
+
+        draft = RuleConversationProvider().reply(
+            model="rule",
+            question="test",
+            context=ctx,
+        )
+
+        cited_ids = {
+            fact_id
+            for claim in draft.property_claims
+            for fact_id in claim.fact_ids
+        }
+        assert len(draft.property_claims) == 30
+        assert "f001" in cited_ids
+        assert "market.sample_size" in cited_ids
+
     def test_rule_provider_accepts_shared_repair_hint_contract(self) -> None:
         provider = RuleConversationProvider()
 

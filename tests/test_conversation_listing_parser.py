@@ -8,6 +8,7 @@ import pytest
 from qingpu_insight.conversation_listing_parser import (
     ListingDetailParseError,
     ListingPageVerificationRequired,
+    has_listing_detail_content,
     parse_listing_detail,
 )
 
@@ -51,6 +52,83 @@ class TestParseSaleDetail:
         with pytest.raises(AttributeError):
             result.title = "changed"  # type: ignore[misc]
 
+    def test_current_sale_dom_without_jsonld(self) -> None:
+        html = """<html><head>
+<title>青埔測試中古屋 - 591售屋網</title>
+<meta name="description"
+ content="桃園市中壢區住宅出售：總價2298萬，面積39.169坪，位於測試社區，更多出售詳情">
+</head><body>
+<span class="info-price-num-2">2,298</span>
+<span class="per-price-text">58.67萬/坪</span>
+<div class="info-floor-left-2">
+  <div class="info-floor-key-2">2房2廳2衛1陽台</div>
+  <div class="info-floor-value">格局</div>
+</div>
+<div class="info-floor-left-2">
+  <div class="info-floor-key-2">9個月</div>
+  <div class="info-floor-value">屋齡</div>
+</div>
+<div class="info-addr-content">
+  <span class="info-addr-key">樓層</span>
+  <span class="info-addr-value-text">13F/17F</span>
+</div>
+<div class="info-addr-content">
+  <span class="info-addr-key">地址</span>
+  <span class="info-addr-value-text">桃園市中壢區高鐵站前路</span>
+</div>
+<a class="community-info-a">測試社區</a>
+<div class="type-menu">房屋介紹</div>
+<script id="payMap" type="text/html">
+  <iframe src="/map?lat=25.0094795&amp;lng=121.2187076"></iframe>
+</script>
+</body></html>"""
+        assert has_listing_detail_content(html, listing_type="sale") is True
+        result = parse_listing_detail(
+            html,
+            canonical_url=SALE_URL,
+            listing_type="sale",
+        )
+        assert result.total_price_twd == 22980000
+        assert result.unit_price_twd_per_ping == 586700
+        assert result.area_ping == Decimal("39.169")
+        assert result.layout == "2房2廳2衛1陽台"
+        assert result.floor == "13F/17F"
+        assert result.total_floors == 17
+        assert result.age_years == Decimal("0.75")
+        assert result.address == "桃園市中壢區高鐵站前路"
+        assert result.community_name == "測試社區"
+        assert result.building_type is None
+        assert result.latitude == Decimal("25.0094795")
+        assert result.longitude == Decimal("121.2187076")
+
+    def test_current_sale_dom_layout_wins_over_community_jsonld(self) -> None:
+        html = """<html><head>
+<title>青埔測試中古屋 - 591售屋網</title>
+<script type="application/ld+json">
+{"@type":"Product","name":"青埔測試中古屋",
+ "description":"一房61房2廳3衛 二房14房3廳1衛 三房22房9廳3衛 四房2房6廳6衛",
+ "url":"https://sale.591.com.tw/home/house/detail/137/1586.html"}
+</script>
+</head><body>
+<span class="info-price-num-2">2,298</span>
+<div class="info-floor-left-2">
+  <div class="info-floor-key-2">2房2廳2衛1陽台</div>
+  <div class="info-floor-value">格局</div>
+</div>
+<div class="info-addr-content">
+  <span class="info-addr-key">地址</span>
+  <span class="info-addr-value-text">桃園市中壢區高鐵站前路</span>
+</div>
+</body></html>"""
+
+        result = parse_listing_detail(
+            html,
+            canonical_url=SALE_URL,
+            listing_type="sale",
+        )
+
+        assert result.layout == "2房2廳2衛1陽台"
+
 
 class TestParseNewhouseDetail:
     def test_full_parse(self) -> None:
@@ -74,6 +152,38 @@ class TestParseNewhouseDetail:
         assert result.latitude == Decimal("25.0")
         assert result.longitude == Decimal("121.2")
         assert result.source_updated_text == "3天前更新"
+
+    def test_current_newhouse_dom_uses_meta_instead_of_large_layout(self) -> None:
+        html = """<html><head>
+<title>【力璞翔-豐禾】開價70~75萬/坪 - 591新建案</title>
+<meta name="description"
+ content="591為您提供:「力璞翔-豐禾」位於桃園市大園區，格局規劃2~3房、坪數規劃20~52坪。">
+</head><body>
+<p class="build-price info-item">70~75 萬/坪</p>
+<div class="info-item address">基地地址 桃園市大園區致善路二段</div>
+<div class="layout-module">
+  主推格局以及大量不應寫入欄位的說明文字
+</div>
+<div class="layout-info main-layout"><span class="layout-text">二房</span></div>
+<div class="update-package">24分鐘前更新 · 日更新48次</div>
+</body></html>"""
+        assert has_listing_detail_content(html, listing_type="newhouse") is True
+        result = parse_listing_detail(
+            html,
+            canonical_url=NEWHOUSE_URL,
+            listing_type="newhouse",
+        )
+        assert result.title == "力璞翔-豐禾"
+        assert result.total_price_twd is None
+        assert result.unit_price_twd_per_ping is None
+        assert result.unit_price_low_twd_per_ping == 700000
+        assert result.unit_price_high_twd_per_ping == 750000
+        assert result.area_low_ping == Decimal("20")
+        assert result.area_high_ping == Decimal("52")
+        assert result.layout == "2~3房"
+        assert result.address == "桃園市大園區致善路二段"
+        assert result.community_name == "力璞翔-豐禾"
+        assert result.source_updated_text == "24分鐘前更新 · 日更新48次"
 
 
 class TestVerification:

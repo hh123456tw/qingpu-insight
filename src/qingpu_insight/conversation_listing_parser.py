@@ -67,6 +67,10 @@ class ParsedListingDetail:
     latitude: Decimal | None
     longitude: Decimal | None
     source_updated_text: str | None
+    unit_price_low_twd_per_ping: int | None = None
+    unit_price_high_twd_per_ping: int | None = None
+    area_low_ping: Decimal | None = None
+    area_high_ping: Decimal | None = None
 
 
 _PING_RE = re.compile(r"(-?[\d,.]+)\s*坪")
@@ -74,7 +78,16 @@ _WAN_PRICE_RE = re.compile(r"(-?[\d,.]+)\s*萬")
 _UNIT_PRICE_RE = re.compile(r"(-?[\d,.]+)\s*萬/坪")
 _FLOOR_RE = re.compile(r"(\d+)\s*[Ff]\s*/\s*(\d+)\s*[Ff]")
 _AGE_RE = re.compile(r"(-?[\d.]+)\s*年")
+_AGE_MONTH_RE = re.compile(r"(\d+)\s*個月")
 _LAYOUT_SEGMENT_RE = re.compile(r"\d+\s*[房廳衛]")
+_RANGE_RE = re.compile(r"([\d,.]+)\s*[~～﹣—]\s*([\d,.]+)")
+_SALE_META_PRICE_RE = re.compile(r"總價([\d,.]+)萬")
+_SALE_META_AREA_RE = re.compile(r"面積([\d,.]+)坪")
+_SALE_META_COMMUNITY_RE = re.compile(r"位於(.+?)，")
+_NEWHOUSE_META_LAYOUT_RE = re.compile(
+    r"格局規劃(.+?)(?:、坪數規劃|[，。])"
+)
+_NEWHOUSE_META_NAME_RE = re.compile(r"「(.+?)」")
 
 
 def _extract_ping(text: str) -> Decimal | None:
@@ -97,6 +110,8 @@ def _extract_price_wan(text: str) -> int | None:
 
 
 def _extract_unit_price(text: str) -> int | None:
+    if any(separator in text for separator in ("~", "～", "﹣", "—")):
+        return None
     m = _UNIT_PRICE_RE.search(text.replace(",", ""))
     if m:
         try:
@@ -106,6 +121,28 @@ def _extract_unit_price(text: str) -> int | None:
     return None
 
 
+def _extract_unit_price_range(
+    text: str,
+) -> tuple[int | None, int | None]:
+    match = _RANGE_RE.search(text)
+    if match is None or "萬/坪" not in text.replace(" ", ""):
+        return None, None
+    low = int(Decimal(match.group(1).replace(",", "")) * 10000)
+    high = int(Decimal(match.group(2).replace(",", "")) * 10000)
+    return (low, high) if low <= high else (high, low)
+
+
+def _extract_ping_range(
+    text: str,
+) -> tuple[Decimal | None, Decimal | None]:
+    match = _RANGE_RE.search(text)
+    if match is None or "坪" not in text:
+        return None, None
+    low = Decimal(match.group(1).replace(",", ""))
+    high = Decimal(match.group(2).replace(",", ""))
+    return (low, high) if low <= high else (high, low)
+
+
 def _element_text(soup: BeautifulSoup, *selectors: str) -> str | None:
     for selector in selectors:
         el = soup.select_one(selector)
@@ -113,6 +150,42 @@ def _element_text(soup: BeautifulSoup, *selectors: str) -> str | None:
             text = el.get_text(" ", strip=True)
             if text:
                 return text
+    return None
+
+
+def _meta_content(
+    soup: BeautifulSoup,
+    *,
+    name: str | None = None,
+    property_name: str | None = None,
+) -> str | None:
+    attrs = {"name": name} if name is not None else {"property": property_name}
+    element = soup.find("meta", attrs=attrs)
+    if element is None:
+        return None
+    content = element.get("content")
+    return content.strip() if isinstance(content, str) and content.strip() else None
+
+
+def _labeled_value(
+    soup: BeautifulSoup,
+    *,
+    row_selector: str,
+    label_selector: str,
+    value_selector: str,
+    label: str,
+) -> str | None:
+    for row in soup.select(row_selector):
+        label_element = row.select_one(label_selector)
+        if label_element is None:
+            continue
+        if label_element.get_text(" ", strip=True) != label:
+            continue
+        value_element = row.select_one(value_selector)
+        if value_element is not None:
+            value = value_element.get_text(" ", strip=True)
+            if value:
+                return value
     return None
 
 
@@ -156,7 +229,47 @@ def _extract_age_years(text: str | None) -> Decimal | None:
     m = _AGE_RE.search(text)
     if m:
         return Decimal(m.group(1))
+    month_match = _AGE_MONTH_RE.search(text)
+    if month_match:
+        return Decimal(month_match.group(1)) / Decimal("12")
     return None
+
+
+def _extract_map_coordinates(
+    soup: BeautifulSoup,
+) -> tuple[Decimal | None, Decimal | None]:
+    map_template = soup.select_one("#payMap")
+    if map_template is None:
+        return None, None
+    text = map_template.get_text(" ", strip=True) or map_template.decode_contents()
+    match = re.search(
+        r"[?&]lat=(-?[\d.]+)&(?:amp;)?lng=(-?[\d.]+)",
+        text,
+    )
+    if match is None:
+        return None, None
+    return Decimal(match.group(1)), Decimal(match.group(2))
+
+
+def has_listing_detail_content(
+    html: str,
+    *,
+    listing_type: Literal["sale", "newhouse"],
+) -> bool:
+    """Return whether the current 591 detail page has rendered its core data."""
+    if "application/ld+json" in html:
+        return True
+    soup = BeautifulSoup(html, "html.parser")
+    if listing_type == "sale":
+        return (
+            soup.select_one(".info-price-num-2") is not None
+            and soup.select_one(".info-floor-key-2") is not None
+            and soup.select_one(".info-addr-content") is not None
+        )
+    return (
+        soup.select_one(".build-price") is not None
+        and soup.select_one(".info-item.address") is not None
+    )
 
 
 def _validate_positive_int(value: int | None, name: str) -> int | None:
@@ -234,6 +347,7 @@ def parse_listing_detail(
 
     source_listing_id = _extract_listing_id_from_url(canonical_url)
     soup = BeautifulSoup(html, "html.parser")
+    meta_description = _meta_content(soup, name="description")
 
     jsonld_fields: dict = {}
     for script in soup.select('script[type="application/ld+json"]'):
@@ -262,6 +376,13 @@ def parse_listing_detail(
             )
 
     title = jsonld_fields.get("title")
+    newhouse_project_name = None
+    if listing_type == "newhouse" and meta_description:
+        project_name_match = _NEWHOUSE_META_NAME_RE.search(meta_description)
+        if project_name_match:
+            newhouse_project_name = project_name_match.group(1)
+    if title is None and newhouse_project_name is not None:
+        title = newhouse_project_name
     if not title:
         title_tag = soup.title
         if title_tag:
@@ -270,37 +391,109 @@ def parse_listing_detail(
         raise ListingDetailParseError("missing required field: title")
 
     total_price_twd = jsonld_fields.get("total_price_twd")
-    if total_price_twd is None:
+    if total_price_twd is None and listing_type == "sale" and meta_description:
+        meta_price = _SALE_META_PRICE_RE.search(meta_description)
+        if meta_price:
+            total_price_twd = int(
+                Decimal(meta_price.group(1).replace(",", "")) * 10000
+            )
+    if total_price_twd is None and listing_type == "sale":
         price_text = _price_text(soup)
         if price_text:
             total_price_twd = _extract_price_wan(price_text)
 
     unit_price_text = _element_text(
-        soup, ".info-unit-price", "[class*='unit-price']", "[class*='unitPrice']"
+        soup,
+        ".per-price-text",
+        ".build-price.info-item",
+        ".info-unit-price",
+        "[class*='unit-price']",
+        "[class*='unitPrice']",
     )
     unit_price_twd_per_ping = (
         _extract_unit_price(unit_price_text) if unit_price_text else None
     )
+    unit_price_low_twd_per_ping, unit_price_high_twd_per_ping = (
+        _extract_unit_price_range(unit_price_text)
+        if unit_price_text
+        else (None, None)
+    )
 
     area_ping = jsonld_fields.get("area_ping")
+    area_low_ping = None
+    area_high_ping = None
+    if area_ping is None and listing_type == "sale" and meta_description:
+        meta_area = _SALE_META_AREA_RE.search(meta_description)
+        if meta_area:
+            area_ping = Decimal(meta_area.group(1).replace(",", ""))
     if area_ping is None:
         area_text = _element_text(soup, ".info-area", "[class*='area']")
         if area_text:
             area_ping = _extract_ping(area_text)
+    if listing_type == "newhouse" and meta_description:
+        area_match = re.search(
+            r"坪數規劃(.+?)(?:[，。]|$)",
+            meta_description,
+        )
+        if area_match:
+            area_low_ping, area_high_ping = _extract_ping_range(
+                area_match.group(1)
+            )
 
-    layout = jsonld_fields.get("layout")
+    layout = None
+    if listing_type == "sale":
+        layout = _labeled_value(
+            soup,
+            row_selector=".info-floor-left-2",
+            label_selector=".info-floor-value",
+            value_selector=".info-floor-key-2",
+            label="格局",
+        )
+    if layout is None:
+        layout = jsonld_fields.get("layout")
+    if layout is None and listing_type == "newhouse" and meta_description:
+        layout_match = _NEWHOUSE_META_LAYOUT_RE.search(meta_description)
+        if layout_match:
+            layout = layout_match.group(1)
     if layout is None:
         layout = _element_text(
-            soup, ".info-layout", "[class*='layout']", "[class*='room']"
+            soup,
+            ".info-layout",
+            ".layout-info.main-layout .layout-text",
+            "[class*='room']",
         )
 
     address = jsonld_fields.get("address")
+    if address is None and listing_type == "sale":
+        address = _labeled_value(
+            soup,
+            row_selector=".info-addr-content",
+            label_selector=".info-addr-key",
+            value_selector=".info-addr-value-text",
+            label="地址",
+        )
     if address is None:
-        address = _element_text(soup, ".info-address", "[class*='address']")
+        address = _element_text(
+            soup,
+            ".info-address",
+            ".info-item.address",
+            "p.address",
+            "[class*='address']",
+        )
+    if listing_type == "newhouse" and address:
+        address = re.sub(r"^基地地址\s*", "", address)
 
-    community_name = _element_text(
-        soup, ".info-community", "[class*='community']", "[class*='community']"
-    )
+    community_name = _element_text(soup, ".community-info-a", ".info-community")
+    if community_name is None and newhouse_project_name is not None:
+        community_name = newhouse_project_name
+    if (
+        community_name is None
+        and listing_type == "sale"
+        and meta_description
+    ):
+        meta_community = _SALE_META_COMMUNITY_RE.search(meta_description)
+        if meta_community:
+            community_name = meta_community.group(1)
 
     builder_name = _element_text(
         soup, ".info-builder", "[class*='builder']", "[class*='建商']"
@@ -310,14 +503,34 @@ def parse_listing_detail(
         soup,
         ".info-building-type",
         "[class*='building-type']",
-        "[class*='building']",
-        "[class*='type']",
     )
 
-    floor_str = _element_text(soup, ".info-floor", "[class*='floor']")
+    floor_str = None
+    if listing_type == "sale":
+        floor_str = _labeled_value(
+            soup,
+            row_selector=".info-addr-content",
+            label_selector=".info-addr-key",
+            value_selector=".info-addr-value-text",
+            label="樓層",
+        )
+    if floor_str is None:
+        floor_str = _element_text(soup, ".info-floor", "[class*='floor']")
     floor, total_floors = _parse_floor_info(floor_str)
 
-    age_text = _element_text(soup, ".info-age", "[class*='age']", "[class*='year']")
+    age_text = None
+    if listing_type == "sale":
+        age_text = _labeled_value(
+            soup,
+            row_selector=".info-floor-left-2",
+            label_selector=".info-floor-value",
+            value_selector=".info-floor-key-2",
+            label="屋齡",
+        )
+    if age_text is None:
+        age_text = _element_text(
+            soup, ".info-age", "[class*='age']", "[class*='year']"
+        )
     age_years = _extract_age_years(age_text)
 
     parking_type = _element_text(
@@ -326,9 +539,13 @@ def parse_listing_detail(
 
     latitude = jsonld_fields.get("latitude")
     longitude = jsonld_fields.get("longitude")
+    if latitude is None or longitude is None:
+        map_latitude, map_longitude = _extract_map_coordinates(soup)
+        latitude = latitude if latitude is not None else map_latitude
+        longitude = longitude if longitude is not None else map_longitude
 
     source_updated_text = _element_text(
-        soup, ".info-updated", "[class*='update']", "[class*='time']"
+        soup, ".update-package", ".info-updated", "[class*='update']"
     )
 
     total_price_twd = _validate_positive_int(total_price_twd, "total_price_twd")
@@ -416,4 +633,8 @@ def parse_listing_detail(
         latitude=latitude,
         longitude=longitude,
         source_updated_text=source_updated_text,
+        unit_price_low_twd_per_ping=unit_price_low_twd_per_ping,
+        unit_price_high_twd_per_ping=unit_price_high_twd_per_ping,
+        area_low_ping=area_low_ping,
+        area_high_ping=area_high_ping,
     )

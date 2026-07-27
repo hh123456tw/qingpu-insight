@@ -16,6 +16,9 @@ from qingpu_insight.ollama_report_provider import ProviderError
 
 logger = logging.getLogger(__name__)
 
+_MAX_PROPERTY_CLAIMS = 30
+
+
 @dataclass(frozen=True)
 class ConversationContext:
     rolling_summary: str | None
@@ -103,7 +106,7 @@ class RuleConversationProvider:
 
     def _build_draft(self, context: ConversationContext) -> ChatAnswerDraft:
         claims: list[PropertyClaim] = []
-        for fact in context.evidence_facts:
+        for fact in self._select_summary_facts(context.evidence_facts):
             claims.append(PropertyClaim(
                 text=f"{fact.label}: {fact.value}",
                 fact_ids=[fact.id],
@@ -120,6 +123,14 @@ class RuleConversationProvider:
             general_guidance=guidance,
             suggested_questions=suggested,
         )
+
+    @staticmethod
+    def _select_summary_facts(
+        facts: tuple[EvidenceFact, ...],
+    ) -> tuple[EvidenceFact, ...]:
+        primary = [fact for fact in facts if not fact.id.startswith("comparable.")]
+        comparables = [fact for fact in facts if fact.id.startswith("comparable.")]
+        return tuple((primary + comparables)[:_MAX_PROPERTY_CLAIMS])
 
     def _suggested_questions(self, context: ConversationContext) -> list[str]:
         kinds = {f.kind for f in context.evidence_facts}
@@ -279,8 +290,18 @@ class GeminiConversationProvider:
             raise ProviderError("gemini_validation_error") from None
 
         try:
-            content_raw = data["candidates"][0]["content"]["parts"][0]["text"]
-        except (KeyError, TypeError, IndexError):
+            parts = data["candidates"][0]["content"]["parts"]
+            content_raw = next(
+                part["text"]
+                for part in reversed(parts)
+                if (
+                    isinstance(part, dict)
+                    and not part.get("thought", False)
+                    and isinstance(part.get("text"), str)
+                    and part["text"].strip()
+                )
+            )
+        except (KeyError, TypeError, IndexError, StopIteration):
             raise ProviderError("gemini_validation_error") from None
 
         content_raw = self._strip_code_fence(content_raw)
