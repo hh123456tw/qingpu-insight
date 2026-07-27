@@ -83,6 +83,7 @@ class MessageRecord:
     model: str | None
     citations: list[str]
     created_at: datetime
+    fallback_reason: str | None = None
 
 
 class MySQLConversationRepository:
@@ -145,6 +146,7 @@ class MySQLConversationRepository:
             model=row.get("model"),
             citations=citations,
             created_at=row["created_at"],
+            fallback_reason=row.get("fallback_reason"),
         )
 
     # ------------------------------------------------------------------
@@ -588,6 +590,7 @@ class MySQLConversationRepository:
         self, *, conversation_id: str, role: str, content: str,
         evidence_revision: int | None, provider: str | None,
         model: str | None, citations: list[str],
+        fallback_reason: str | None = None,
     ) -> MessageRecord:
         msg_id = str(uuid4())
         now = datetime.now(UTC)
@@ -607,10 +610,11 @@ class MySQLConversationRepository:
                     cursor.execute(
                         """INSERT INTO conversation_messages
                            (id, conversation_id, sequence_no, role, content,
-                            evidence_revision, provider, model, citations, created_at)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                            evidence_revision, provider, model, fallback_reason,
+                            citations, created_at)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                         (msg_id, conversation_id, new_seq, role, content,
-                         evidence_revision, provider, model,
+                         evidence_revision, provider, model, fallback_reason,
                          json.dumps(citations, sort_keys=True, ensure_ascii=False),
                          now),
                     )
@@ -629,6 +633,7 @@ class MySQLConversationRepository:
             model=model,
             citations=citations,
             created_at=now,
+            fallback_reason=fallback_reason,
         )
 
     def get_messages(

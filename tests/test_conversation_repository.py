@@ -329,12 +329,16 @@ def test_append_message_increments_sequence(fake_conn: FakeConnection) -> None:
         provider="ollama",
         model="gpt-4",
         citations=["src-1"],
+        fallback_reason="cloud_timeout",
     )
     assert result.sequence_no == 43
     assert result.evidence_revision == 1
     assert result.provider == "ollama"
     assert result.model == "gpt-4"
     assert result.citations == ["src-1"]
+    assert result.fallback_reason == "cloud_timeout"
+    insert_params = fake_conn.cursor_instance.executed[1][1]
+    assert "cloud_timeout" in insert_params
 
 
 def test_two_messages_get_distinct_sequence_numbers(fake_conn: FakeConnection) -> None:
@@ -363,7 +367,7 @@ def test_get_messages_default_limit(fake_conn: FakeConnection) -> None:
     rows: list[dict[str, Any]] = [
         dict(id="m1", conversation_id="conv-1", sequence_no=1, role="user",
              content="hi", evidence_revision=None, provider=None, model=None,
-             citations="[]", created_at=_now()),
+             citations="[]", fallback_reason=None, created_at=_now()),
     ]
     fake_conn.cursor_instance.fetch_rows = rows
     repo = MySQLConversationRepository(fake_conn)
@@ -372,13 +376,15 @@ def test_get_messages_default_limit(fake_conn: FakeConnection) -> None:
     sql = " ".join(fake_conn.cursor_instance.executed[0][0].lower().split())
     assert "order by sequence_no desc" in sql or "order by" in sql
     assert "%s" in sql
+    assert result[0].fallback_reason is None
 
 
 def test_get_messages_with_before_sequence(fake_conn: FakeConnection) -> None:
     rows: list[dict[str, Any]] = [
         dict(id="m2", conversation_id="conv-1", sequence_no=2, role="assistant",
              content="there", evidence_revision=None, provider=None, model=None,
-             citations="[]", created_at=_now()),
+             citations="[]", fallback_reason="cloud_rate_limited",
+             created_at=_now()),
     ]
     fake_conn.cursor_instance.fetch_rows = rows
     repo = MySQLConversationRepository(fake_conn)
@@ -386,6 +392,7 @@ def test_get_messages_with_before_sequence(fake_conn: FakeConnection) -> None:
     assert len(result) == 1
     sql = " ".join(fake_conn.cursor_instance.executed[0][0].lower().split())
     assert "sequence_no <" in sql
+    assert result[0].fallback_reason == "cloud_rate_limited"
 
 
 # ---------------------------------------------------------------------------

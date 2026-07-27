@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
     evidence_revision INT NULL,
     provider VARCHAR(32) NULL,
     model VARCHAR(120) NULL,
+    fallback_reason VARCHAR(64) NULL,
     citations JSON NOT NULL,
     created_at DATETIME(6) NOT NULL,
     UNIQUE KEY uq_conversation_message_sequence (conversation_id, sequence_no),
