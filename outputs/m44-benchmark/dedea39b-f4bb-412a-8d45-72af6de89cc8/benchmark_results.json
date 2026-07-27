@@ -1,0 +1,86 @@
+{
+  "results": [
+    {
+      "case_id": "sale-owner-occupied-001",
+      "model": "gemma4:e2b",
+      "provider": "ollama",
+      "schema_success": true,
+      "fact_accuracy": 1.0,
+      "required_section_coverage": 1.0,
+      "fallback_used": false,
+      "latency_ms": 6899,
+      "failure_codes": [
+        "unit_mismatch",
+        "missing_numeric_fact_reference",
+        "missing_numeric_fact_reference",
+        "missing_numeric_fact_reference",
+        "missing_numeric_fact_reference"
+      ],
+      "requested_provider": "ollama",
+      "requested_model": "gemma4:e2b",
+      "success": true,
+      "error_code": null,
+      "actual_provider": "ollama",
+      "actual_model": "gemma4:e2b"
+    },
+    {
+      "case_id": "newhouse-presale-001",
+      "model": "ollama:gemma4:e2b",
+      "provider": "ollama:gemma4:e2b",
+      "schema_success": false,
+      "fact_accuracy": 0.0,
+      "required_section_coverage": 0.0,
+      "fallback_used": false,
+      "latency_ms": 7963,
+      "failure_codes": [],
+      "requested_provider": "ollama",
+      "requested_model": "gemma4:e2b",
+      "success": false,
+      "error_code": "provider_failed",
+      "actual_provider": "ollama:gemma4:e2b",
+      "actual_model": "ollama:gemma4:e2b"
+    },
+    {
+      "case_id": "rental-reference-001",
+      "model": "ollama:gemma4:e2b",
+      "provider": "ollama:gemma4:e2b",
+      "schema_success": false,
+      "fact_accuracy": 0.0,
+      "required_section_coverage": 0.0,
+      "fallback_used": false,
+      "latency_ms": 9047,
+      "failure_codes": [],
+      "requested_provider": "ollama",
+      "requested_model": "gemma4:e2b",
+      "success": false,
+      "error_code": "provider_failed",
+      "actual_provider": "ollama:gemma4:e2b",
+      "actual_model": "ollama:gemma4:e2b"
+    }
+  ],
+  "summaries": [
+    {
+      "model": "gemma4:e2b",
+      "case_count": 1,
+      "success_rate": 0.0,
+      "avg_fact_accuracy": 1.0,
+      "avg_coverage": 1.0,
+      "p50_latency": 6899,
+      "p95_latency": 6899,
+      "failure_codes": [
+        "missing_numeric_fact_reference",
+        "unit_mismatch"
+      ]
+    },
+    {
+      "model": "ollama:gemma4:e2b",
+      "case_count": 2,
+      "success_rate": 0.0,
+      "avg_fact_accuracy": 0.0,
+      "avg_coverage": 0.0,
+      "p50_latency": 8505.0,
+      "p95_latency": 8992.8,
+      "failure_codes": []
+    }
+  ]
+}

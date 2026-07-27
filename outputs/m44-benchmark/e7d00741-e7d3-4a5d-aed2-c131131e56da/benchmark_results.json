@@ -1,0 +1,67 @@
+{
+  "results": [
+    {
+      "case_id": "sale-owner-occupied-001",
+      "model": "ollama:qwen2.5:0.5b",
+      "provider": "ollama:qwen2.5:0.5b",
+      "schema_success": false,
+      "fact_accuracy": 0.0,
+      "required_section_coverage": 0.0,
+      "fallback_used": false,
+      "latency_ms": 2506,
+      "failure_codes": [],
+      "requested_provider": "ollama",
+      "requested_model": "qwen2.5:0.5b",
+      "success": false,
+      "error_code": "provider_failed",
+      "actual_provider": "ollama:qwen2.5:0.5b",
+      "actual_model": "ollama:qwen2.5:0.5b"
+    },
+    {
+      "case_id": "newhouse-presale-001",
+      "model": "ollama:qwen2.5:0.5b",
+      "provider": "ollama:qwen2.5:0.5b",
+      "schema_success": false,
+      "fact_accuracy": 0.0,
+      "required_section_coverage": 0.0,
+      "fallback_used": false,
+      "latency_ms": 514,
+      "failure_codes": [],
+      "requested_provider": "ollama",
+      "requested_model": "qwen2.5:0.5b",
+      "success": false,
+      "error_code": "provider_failed",
+      "actual_provider": "ollama:qwen2.5:0.5b",
+      "actual_model": "ollama:qwen2.5:0.5b"
+    },
+    {
+      "case_id": "rental-reference-001",
+      "model": "ollama:qwen2.5:0.5b",
+      "provider": "ollama:qwen2.5:0.5b",
+      "schema_success": false,
+      "fact_accuracy": 0.0,
+      "required_section_coverage": 0.0,
+      "fallback_used": false,
+      "latency_ms": 937,
+      "failure_codes": [],
+      "requested_provider": "ollama",
+      "requested_model": "qwen2.5:0.5b",
+      "success": false,
+      "error_code": "provider_failed",
+      "actual_provider": "ollama:qwen2.5:0.5b",
+      "actual_model": "ollama:qwen2.5:0.5b"
+    }
+  ],
+  "summaries": [
+    {
+      "model": "ollama:qwen2.5:0.5b",
+      "case_count": 3,
+      "success_rate": 0.0,
+      "avg_fact_accuracy": 0.0,
+      "avg_coverage": 0.0,
+      "p50_latency": 937.0,
+      "p95_latency": 2349.1,
+      "failure_codes": []
+    }
+  ]
+}
