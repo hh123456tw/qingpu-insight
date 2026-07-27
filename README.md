@@ -196,7 +196,8 @@ python -m venv .venv
   下一次請求立即生效，不必重啟 Web
 - **自動備援**：Google 失敗時依序嘗試本機 `gemma4:e2b` 與 Rule；本機模型失敗
   時使用 Rule。回答會標示實際模型與安全化的切換原因
-- **Ollama**：預設連線 `http://127.0.0.1:11434`，可用 `OLLAMA_BASE_URL` 覆寫
+- **Ollama**：預設連線 `http://127.0.0.1:11434`，可用
+  `QINGPU_OLLAMA_BASE_URL` 覆寫；模型目錄、Benchmark 與首頁對話共用此設定
 - **Rule 模式**：完全離線，使用證據資料產生固定摘要與建議
 
 ### 技術說明

@@ -225,6 +225,36 @@ class TestOllamaReportProvider:
                 provider.generate(PACK)
             assert exc.value.code == "ollama_validation_error"
 
+    def test_normalizes_common_local_model_claim_shape(self) -> None:
+        raw = dict(_VALID_DRAFT_DICT)
+        raw["summary"] = [dict(raw["summary"])]
+        for section in ("advantages", "risks", "negotiation", "limitations"):
+            raw[section] = [
+                {
+                    key: value
+                    for key, value in claim.items()
+                    if key != "numeric_fact_ids"
+                }
+                for claim in raw[section]
+            ]
+        response = {
+            "message": {
+                "role": "assistant",
+                "content": json.dumps(raw, ensure_ascii=False),
+            },
+        }
+        with responses.RequestsMock() as rsps:
+            rsps.post(_OLLAMA_URL, json=response, status=200)
+            provider = OllamaReportProvider(
+                base_url="http://localhost:11434",
+                model="llama3",
+            )
+
+            result = provider.generate(PACK)
+
+        assert result.draft.summary.text == _VALID_DRAFT_DICT["summary"]["text"]
+        assert result.draft.advantages[0].numeric_fact_ids == ()
+
     def test_sends_model_and_format_in_body(self) -> None:
         with responses.RequestsMock() as rsps:
             rsps.post(_OLLAMA_URL, json=_LLM_JSON, status=200)
@@ -237,6 +267,13 @@ class TestOllamaReportProvider:
             assert req_body["model"] == "llama3"
             assert req_body["format"] == "json"
             assert req_body["stream"] is False
+            assert req_body["options"] == {
+                "num_predict": 2000,
+                "temperature": 0,
+            }
+            system_prompt = req_body["messages"][0]["content"]
+            assert "summary MUST be one claim object, never an array" in system_prompt
+            assert '"advantages": [' in system_prompt
 
     def test_passes_session(self) -> None:
         session = MagicMock()

@@ -95,7 +95,7 @@ CREATE TABLE conversations (
 - **MySQL 8**：必備，負責對話、快照、證據與訊息持久化
 - **Chrome（可見模式）**：用於 591 詳細頁擷取（headless 不支援驗證頁）
 - **Ollama**（選用）：預設 `http://127.0.0.1:11434`，可設定
-  `OLLAMA_BASE_URL`
+  `QINGPU_OLLAMA_BASE_URL`
 - **Gemini**（選用）：在管理中心儲存 API Key，或設定
   `QINGPU_GEMINI_API_KEY`
 - **Rule**：不需外部服務，使用內建規則產生摘要與建議

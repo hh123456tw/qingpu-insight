@@ -73,9 +73,19 @@ class ConfiguredWebBenchmarkRunner:
             for summary in summaries
         ]
         count = len(results)
+        provider_success_count = sum(
+            bool(getattr(result, "success", False))
+            for result in results
+        )
+        if count == 0:
+            raise RuntimeError("benchmark_has_no_cases")
+        if provider_success_count == 0:
+            raise RuntimeError("benchmark_all_provider_calls_failed")
         first_summary = summary_dicts[0] if summary_dicts else {}
         return {
             "case_count": count,
+            "provider_success_count": provider_success_count,
+            "provider_failure_count": count - provider_success_count,
             "schema_success": (
                 sum(bool(result.schema_success) for result in results) / count
                 if count else 0.0

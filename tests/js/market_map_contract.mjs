@@ -47,21 +47,25 @@ assert.equal(markerRadius(10000), 16);
 
 const converted = transactionItemsToMapPayload([
   {
-    id: "valid",
+    record_id: "valid",
     latitude: 25.01,
     longitude: 121.21,
-    total_price: 1800,
+    total_price_twd: 18000000,
+    unit_price_per_ping_twd: 500000,
     transaction_date: "2026-07-01",
   },
-  {id: "nan", latitude: "not-a-number", longitude: 121.22},
-  {id: "missing", latitude: null, longitude: null},
+  {record_id: "nan", latitude: "not-a-number", longitude: 121.22},
+  {record_id: "range", latitude: 125.01, longitude: 121.22},
+  {record_id: "missing", latitude: null, longitude: null},
 ]);
 assert.equal(converted.mode, "compatibility");
-assert.equal(converted.total_records, 3);
+assert.equal(converted.total_records, 4);
 assert.equal(converted.located_records, 1);
-assert.equal(converted.unlocated_records, 2);
+assert.equal(converted.unlocated_records, 3);
 assert.equal(converted.group_count, 1);
 assert.equal(converted.items[0].record_count, 1);
+assert.equal(converted.items[0].median_unit_price_per_ping_twd, 500000);
+assert.equal(Object.hasOwn(converted.items[0], "median_total_price"), false);
 
 // --- 404 fallback compatibility path ---
 
@@ -78,10 +82,11 @@ const fallbackLoader = createMapLoader({
       status: 200,
       json: async () => ({
         items: [{
-          id: "tx-1",
+          record_id: "tx-1",
           latitude: 25.01,
           longitude: 121.21,
-          total_price: 1800,
+          total_price_twd: 18000000,
+          unit_price_per_ping_twd: 500000,
           transaction_date: "2026-07-01",
         }],
       }),

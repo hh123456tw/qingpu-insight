@@ -2,8 +2,15 @@ const COMPATIBILITY_MESSAGE =
   "相容模式：後端版本較舊，目前顯示最近 100 筆；" +
   "重新啟動 Web 後可顯示完整群組地圖";
 
-function finiteNumber(value) {
-  return typeof value === "number" && Number.isFinite(value);
+function validCoordinate(latitude, longitude) {
+  return typeof latitude === "number"
+    && Number.isFinite(latitude)
+    && latitude >= -90
+    && latitude <= 90
+    && typeof longitude === "number"
+    && Number.isFinite(longitude)
+    && longitude >= -180
+    && longitude <= 180;
 }
 
 function validateGroupedPayload(payload) {
@@ -21,13 +28,13 @@ function validateGroupedPayload(payload) {
 export function transactionItemsToMapPayload(items) {
   if (!Array.isArray(items)) throw new Error("transactions invalid response");
   const located = items.filter(function (item) {
-    return item && finiteNumber(item.latitude) && finiteNumber(item.longitude);
+    return item && validCoordinate(item.latitude, item.longitude);
   }).map(function (item) {
     return {
       latitude: item.latitude,
       longitude: item.longitude,
       record_count: 1,
-      median_total_price: item.total_price ?? null,
+      median_unit_price_per_ping_twd: item.unit_price_per_ping_twd ?? null,
       latest_transaction_date: item.transaction_date ?? null,
     };
   });

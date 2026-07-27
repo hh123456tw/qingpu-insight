@@ -1009,21 +1009,21 @@ def create_app(
         )
         return current.get(name, default)
 
-    llm_model_catalog = LlmModelCatalog(
-        ollama_base_url_getter=lambda: get_runtime_env(
+    def get_ollama_base_url() -> str:
+        return get_runtime_env(
             "QINGPU_OLLAMA_BASE_URL",
             "http://127.0.0.1:11434",
-        ),
+        )
+
+    llm_model_catalog = LlmModelCatalog(
+        ollama_base_url_getter=get_ollama_base_url,
         gemini_configured_getter=lambda: bool(
             get_runtime_env("QINGPU_GEMINI_API_KEY")
         ),
     )
     if provider_ops_service is not None:
         provider_ops_service.set_benchmark_runner(ConfiguredWebBenchmarkRunner(
-            ollama_base_url_getter=lambda: get_runtime_env(
-                "QINGPU_OLLAMA_BASE_URL",
-                "http://127.0.0.1:11434",
-            ),
+            ollama_base_url_getter=get_ollama_base_url,
             gemini_api_key_getter=lambda: get_runtime_env(
                 "QINGPU_GEMINI_API_KEY"
             ),
@@ -1161,12 +1161,7 @@ def create_app(
             providers.register("rule", RuleConversationProvider())
             providers.register(
                 "ollama",
-                OllamaConversationProvider(
-                    resolved_env.get(
-                        "OLLAMA_BASE_URL",
-                        "http://127.0.0.1:11434",
-                    )
-                ),
+                OllamaConversationProvider(get_ollama_base_url()),
             )
             providers.register(
                 "gemini",

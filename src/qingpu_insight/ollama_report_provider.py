@@ -16,13 +16,73 @@ class ProviderError(Exception):
         super().__init__(code)
 
 
-_SYSTEM_PROMPT = """You are a structured buyer report generator. \
-Generate a JSON report matching the schema below. \
-Only reference fact IDs present in the evidence pack. \
-Do not invent values. Output valid JSON only.
+_REPORT_SKELETON = {
+    "summary": {
+        "text": "",
+        "fact_ids": [],
+        "numeric_fact_ids": [],
+    },
+    "advantages": [{
+        "text": "",
+        "fact_ids": [],
+        "numeric_fact_ids": [],
+    }],
+    "risks": [{
+        "text": "",
+        "fact_ids": [],
+        "numeric_fact_ids": [],
+    }],
+    "negotiation": [{
+        "text": "",
+        "fact_ids": [],
+        "numeric_fact_ids": [],
+    }],
+    "limitations": [{
+        "text": "",
+        "fact_ids": [],
+        "numeric_fact_ids": [],
+    }],
+}
 
-Schema:
-{schema}"""
+_SYSTEM_PROMPT = """You are a structured buyer report generator.
+Return exactly one JSON object matching this skeleton and replace the empty values:
+{skeleton}
+
+The root object MUST contain all five keys shown above.
+summary MUST be one claim object, never an array.
+advantages, risks, negotiation, and limitations MUST be arrays of claim objects.
+Do not add title or any other root key.
+Only reference fact IDs present in the evidence pack.
+Do not invent values. Output valid JSON only."""
+
+
+def _normalize_draft_payload(payload: object) -> object:
+    if not isinstance(payload, dict):
+        return payload
+    normalized = dict(payload)
+    summary = normalized.get("summary")
+    if (
+        isinstance(summary, list)
+        and len(summary) == 1
+        and isinstance(summary[0], dict)
+    ):
+        summary = summary[0]
+        normalized["summary"] = summary
+    if isinstance(summary, dict) and "numeric_fact_ids" not in summary:
+        normalized["summary"] = {**summary, "numeric_fact_ids": []}
+    for section in ("advantages", "risks", "negotiation", "limitations"):
+        claims = normalized.get(section)
+        if not isinstance(claims, list):
+            continue
+        normalized[section] = [
+            (
+                {**claim, "numeric_fact_ids": []}
+                if isinstance(claim, dict) and "numeric_fact_ids" not in claim
+                else claim
+            )
+            for claim in claims
+        ]
+    return normalized
 
 
 class OllamaReportProvider:
@@ -43,19 +103,26 @@ class OllamaReportProvider:
     ) -> ProviderResult:
         start = time.perf_counter()
         prompt = self._build_prompt(pack, repair_codes)
-        schema = BuyerReportDraft.model_json_schema()
         body: dict[str, Any] = {
             "model": self._model,
             "messages": [
                 {
                     "role": "system",
-                    "content": _SYSTEM_PROMPT.format(schema=json.dumps(schema, ensure_ascii=False)),
+                    "content": _SYSTEM_PROMPT.format(
+                        skeleton=json.dumps(
+                            _REPORT_SKELETON,
+                            ensure_ascii=False,
+                        )
+                    ),
                 },
                 {"role": "user", "content": prompt},
             ],
             "format": "json",
             "stream": False,
-            "options": {"num_predict": 1200},
+            "options": {
+                "num_predict": 2000,
+                "temperature": 0,
+            },
         }
         try:
             resp = self._session.post(
@@ -87,7 +154,9 @@ class OllamaReportProvider:
             raise ProviderError("ollama_non_json_response") from None
 
         try:
-            draft = BuyerReportDraft.model_validate(parsed)
+            draft = BuyerReportDraft.model_validate(
+                _normalize_draft_payload(parsed)
+            )
         except Exception:
             raise ProviderError("ollama_validation_error") from None
 

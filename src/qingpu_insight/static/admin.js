@@ -11,6 +11,7 @@
     "llm", "backups", "jobs", "diagnostics",
   ];
   var DEFAULT_LISTING_TYPES = ["sale", "newhouse"];
+  var mutationReady = false;
 
   function normalizeSection(hash) {
     var section = hash.replace(/^#/, "");
@@ -605,8 +606,10 @@
         .then(function (r) { if (r.ok) return r.json(); })
         .then(function (data) {
           if (data) {
+            mutationReady = data.mutation_ready === true;
             renderOverview(data);
             if (!data.mutation_ready) disableMutationButtons();
+            updateBenchmarkSelection();
           }
         });
 
@@ -812,7 +815,7 @@
 
   function runBenchmark() {
     var selected = selectedBenchmarkModel();
-    if (!canRunBenchmark(selected)) return;
+    if (!canRunBenchmark(selected, mutationReady)) return;
     var payload = buildBenchmarkPayload(selected.id);
     var statusEl = document.getElementById("benchmark-result");
     statusEl.textContent = "執行中…";
@@ -870,15 +873,25 @@
     return { model_id: modelId };
   }
 
-  function benchmarkModelHelp(option) {
-    return option && typeof option.note === "string" ? option.note : "";
+  function benchmarkModelHelp(option, warning) {
+    var parts = [];
+    if (warning) parts.push(warning);
+    if (option && typeof option.note === "string" && option.note) {
+      parts.push(option.note);
+    }
+    return parts.join(" ");
   }
 
-  function canRunBenchmark(option) {
-    return Boolean(option && option.ready === true);
+  function canRunBenchmark(option, operationsReady) {
+    return Boolean(
+      option
+      && option.ready === true
+      && operationsReady === true
+    );
   }
 
   var benchmarkModels = [];
+  var benchmarkCatalogWarning = "";
 
   function selectedBenchmarkModel() {
     var select = document.getElementById("benchmark-model-select");
@@ -892,8 +905,12 @@
     var help = document.getElementById("benchmark-model-help");
     var runButton = document.getElementById("benchmark-run-btn");
     var selected = selectedBenchmarkModel();
-    if (help) help.textContent = benchmarkModelHelp(selected);
-    if (runButton) runButton.disabled = !canRunBenchmark(selected);
+    if (help) {
+      help.textContent = benchmarkModelHelp(selected, benchmarkCatalogWarning);
+    }
+    if (runButton) {
+      runButton.disabled = !canRunBenchmark(selected, mutationReady);
+    }
   }
 
   function renderBenchmarkModels(catalog) {
@@ -901,6 +918,10 @@
     var help = document.getElementById("benchmark-model-help");
     if (!select) return;
     benchmarkModels = Array.isArray(catalog.items) ? catalog.items : [];
+    benchmarkCatalogWarning = (
+      Array.isArray(catalog.warnings)
+      && catalog.warnings.includes("ollama_unavailable")
+    ) ? "無法連線本機 Ollama；Gemini 模型仍可使用。" : "";
     select.replaceChildren();
     benchmarkModels.forEach(function (item) {
       var option = document.createElement("option");
@@ -914,10 +935,6 @@
       return item.ready === true;
     });
     select.value = firstReady ? firstReady.id : "";
-    if (help && Array.isArray(catalog.warnings)
-        && catalog.warnings.includes("ollama_unavailable")) {
-      help.textContent = "無法連線本機 Ollama；Gemini 模型仍可使用。";
-    }
     updateBenchmarkSelection();
   }
 
@@ -936,6 +953,7 @@
       .then(renderBenchmarkModels)
       .catch(function () {
         benchmarkModels = [];
+        benchmarkCatalogWarning = "";
         if (select) select.replaceChildren();
         if (help) help.textContent = "模型清單暫時無法載入，請稍後重試。";
       });
