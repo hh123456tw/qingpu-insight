@@ -40,8 +40,10 @@
     return "顯示更多成交（" + total + "）";
   }
 
-  function loadSection(url, fetchImpl, onSuccess, onError) {
-    return fetchImpl(url).then(function (response) {
+  function loadSection(url, fetchImpl, onSuccess, onError, signal) {
+    var opts = {};
+    if (signal) opts.signal = signal;
+    return fetchImpl(url, opts).then(function (response) {
       if (!response.ok) {
         onError(new Error("request " + response.status));
         return;

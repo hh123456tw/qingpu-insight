@@ -6,6 +6,9 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   "use strict";
 
+  var _clickHandler = null;
+  var _keydownHandler = null;
+
   function validateUrl(url) {
     if (!url || typeof url !== "string") return false;
     try {
@@ -134,6 +137,8 @@
 
   function renderRecentConversations(items) {
     if (typeof document === "undefined") return;
+    if (_clickHandler) document.removeEventListener("click", _clickHandler, true);
+    if (_keydownHandler) document.removeEventListener("keydown", _keydownHandler);
     var container = document.getElementById("recent-conversations");
     if (!container) return;
     container.textContent = "";
@@ -189,8 +194,10 @@
         button.focus();
       }
     }
-    document.addEventListener("click", onDocumentClick, true);
-    document.addEventListener("keydown", onDocumentKeydown, true);
+    _clickHandler = onDocumentClick;
+    _keydownHandler = onDocumentKeydown;
+    document.addEventListener("click", _clickHandler, true);
+    document.addEventListener("keydown", _keydownHandler, true);
   }
 
   function pollJob(runId, onSuccess, onError) {

@@ -268,7 +268,8 @@ document.addEventListener("DOMContentLoaded", async function () {
       },
       function (err) {
         statusEl.textContent = "摘要載入失敗：" + err.message;
-      }
+      },
+      lastController.signal
     );
 
     marketResults.loadSection(
@@ -279,7 +280,8 @@ document.addEventListener("DOMContentLoaded", async function () {
       },
       function (err) {
         console.warn("trends error:", err.message);
-      }
+      },
+      lastController.signal
     );
 
     marketResults.loadSection(
@@ -294,7 +296,8 @@ document.addEventListener("DOMContentLoaded", async function () {
       function (err) {
         var container = document.getElementById("recent-transactions");
         container.textContent = "成交資料載入失敗：" + err.message;
-      }
+      },
+      lastController.signal
     );
   }
 
