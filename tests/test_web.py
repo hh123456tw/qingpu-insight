@@ -2654,8 +2654,10 @@ class TestModelAdminPage:
 
     def test_model_admin_page_contract(self, model_admin_client) -> None:
         response = model_admin_client.get("/admin/models")
-        assert response.status_code == 302
-        assert response.headers["Location"].endswith("/admin#models")
+        assert response.status_code == 200
+        standalone_html = response.get_data(as_text=True)
+        assert "<title>模型觀測台 - 青埔智價</title>" in standalone_html
+        assert 'id="ma-official"' in standalone_html
 
         response = model_admin_client.get("/admin")
         html = response.get_data(as_text=True)
