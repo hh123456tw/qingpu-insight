@@ -793,6 +793,9 @@
     if (!canRunBenchmark(selected, mutationReady)) return;
     var payload = buildBenchmarkPayload(selected.id);
     var statusEl = document.getElementById("benchmark-result");
+    var runButton = document.getElementById("benchmark-run-btn");
+    var startedAt = Date.now();
+    if (runButton) runButton.disabled = true;
     statusEl.textContent = "執行中…";
     statusEl.className = "admin-od-status";
     fetch("/api/admin/llm-benchmark-runs", {
@@ -808,8 +811,9 @@
           return;
         }
         var runId = result.body.run_id;
-        statusEl.textContent = "Benchmark 已提交 (" + runId.slice(0, 8) + ")，等待結果…";
+        statusEl.textContent = benchmarkProgressLabel(selected.label, 0);
         var retries = 0;
+        var polls = 0;
         (function poll() {
           fetch("/api/jobs/" + runId)
             .then(function (r) { return r.json(); })
@@ -828,20 +832,40 @@
                   statusEl.textContent = "Benchmark " + (job.status === "failed" ? "失敗" : "已中斷") + (job.error_message ? " (" + job.error_message + ")" : "");
                   statusEl.className = "admin-od-status admin-od-error";
                 }
+                if (runButton) runButton.disabled = false;
+              } else if (polls >= 45) {
+                statusEl.textContent = "Benchmark 已等待 90 秒，請到「工作」查看最終狀態。";
+                statusEl.className = "admin-od-status admin-od-error";
+                if (runButton) runButton.disabled = false;
               } else {
+                polls++;
+                statusEl.textContent = benchmarkProgressLabel(
+                  selected.label,
+                  Math.floor((Date.now() - startedAt) / 1000)
+                );
                 setTimeout(poll, 2000);
               }
             })
             .catch(function () {
               if (retries < 2) { retries++; setTimeout(poll, 3000); }
-              else { statusEl.textContent = "輪詢逾時"; statusEl.className = "admin-od-status admin-od-error"; }
+              else {
+                statusEl.textContent = "輪詢逾時";
+                statusEl.className = "admin-od-status admin-od-error";
+                if (runButton) runButton.disabled = false;
+              }
             });
         })();
       })
       .catch(function () {
         statusEl.textContent = "網路錯誤";
         statusEl.className = "admin-od-status admin-od-error";
+        if (runButton) runButton.disabled = false;
       });
+  }
+
+  function benchmarkProgressLabel(modelLabel, elapsedSeconds) {
+    return "正在測試 " + modelLabel + "｜已等待 " + elapsedSeconds +
+      " 秒（通常約 5～45 秒）";
   }
 
   function buildBenchmarkPayload(modelId) {
@@ -963,5 +987,6 @@
     buildBenchmarkPayload: buildBenchmarkPayload,
     benchmarkModelHelp: benchmarkModelHelp,
     canRunBenchmark: canRunBenchmark,
+    benchmarkProgressLabel: benchmarkProgressLabel,
   };
 });

@@ -134,6 +134,33 @@ class TestGeminiReportProvider:
             result = provider.generate(PACK)
         assert isinstance(result.draft, BuyerReportDraft)
 
+    def test_uses_final_text_after_gemma_thought_part(self) -> None:
+        response = {
+            "candidates": [{
+                "content": {
+                    "parts": [
+                        {"text": "", "thought": True},
+                        {
+                            "text": json.dumps(
+                                _VALID_DRAFT_DICT,
+                                ensure_ascii=False,
+                            ),
+                        },
+                    ],
+                },
+                "finishReason": "STOP",
+            }],
+        }
+        with responses.RequestsMock() as rsps:
+            rsps.post(_GEMINI_URL, json=response, status=200)
+            provider = GeminiReportProvider(
+                api_key="test-key",
+                model="gemini-pro",
+            )
+            result = provider.generate(PACK)
+
+        assert result.draft.summary.text == "總價15000000元，面積30.00坪"
+
     def test_timeout(self) -> None:
         provider = GeminiReportProvider(
             api_key="test-key", model="gemini-pro", timeout_seconds=1,
@@ -236,6 +263,28 @@ class TestGeminiReportProvider:
         )
         result = provider.generate(PACK)
         assert isinstance(result.draft, BuyerReportDraft)
+        request_body = session.post.call_args.kwargs["json"]
+        assert "thinkingConfig" not in request_body["generationConfig"]
+
+    def test_optional_minimal_thinking_level(self) -> None:
+        session = MagicMock()
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = _gemini_response(_VALID_DRAFT_DICT)
+        session.post.return_value = response
+
+        provider = GeminiReportProvider(
+            api_key="test-key",
+            model="gemma-4-31b-it",
+            thinking_level="minimal",
+            session=session,
+        )
+        provider.generate(PACK)
+
+        request_body = session.post.call_args.kwargs["json"]
+        assert request_body["generationConfig"]["thinkingConfig"] == {
+            "thinkingLevel": "minimal",
+        }
 
     def test_api_key_in_url_not_repr(self) -> None:
         provider = GeminiReportProvider(api_key="super-secret-key", model="gemini-pro")

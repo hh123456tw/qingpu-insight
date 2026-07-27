@@ -21,13 +21,17 @@ class GeminiReportProvider:
         api_key: str,
         model: str,
         timeout_seconds: int = 30,
+        thinking_level: str | None = None,
         session: requests.Session | None = None,
     ) -> None:
         if not api_key or not model:
             raise ValueError("api_key and model are required")
+        if thinking_level not in {None, "minimal", "low", "medium", "high"}:
+            raise ValueError("unsupported thinking_level")
         self._api_key = api_key
         self._model = model
         self._timeout = timeout_seconds
+        self._thinking_level = thinking_level
         self._session = session or requests.Session()
 
     def __repr__(self) -> str:
@@ -46,6 +50,8 @@ class GeminiReportProvider:
                     "You are a structured buyer report generator. "
                     "Generate a JSON report matching the provided schema. "
                     "Only reference fact IDs present in the evidence pack. "
+                    "advantages, risks, and negotiation must each contain "
+                    "1 to 3 claims; limitations may be empty. "
                     "Do not invent values. Output valid JSON only."
                 )}],
             },
@@ -64,6 +70,10 @@ class GeminiReportProvider:
                 "maxOutputTokens": 1200,
             },
         }
+        if self._thinking_level is not None:
+            body["generationConfig"]["thinkingConfig"] = {
+                "thinkingLevel": self._thinking_level,
+            }
         try:
             headers = {
                 "Content-Type": "application/json",
@@ -89,8 +99,18 @@ class GeminiReportProvider:
             raise ProviderError("gemini_non_json_response") from None
 
         try:
-            content_raw = data["candidates"][0]["content"]["parts"][0]["text"]
-        except (KeyError, TypeError, IndexError):
+            parts = data["candidates"][0]["content"]["parts"]
+            content_raw = next(
+                part["text"]
+                for part in reversed(parts)
+                if (
+                    isinstance(part, dict)
+                    and not part.get("thought", False)
+                    and isinstance(part.get("text"), str)
+                    and part["text"].strip()
+                )
+            )
+        except (KeyError, TypeError, IndexError, StopIteration):
             raise ProviderError("gemini_non_json_response") from None
 
         content_raw = self._strip_code_fence(content_raw)

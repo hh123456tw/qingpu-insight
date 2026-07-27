@@ -198,6 +198,51 @@ def test_execute_benchmark_passes_provider_and_exact_model_to_runner(
     assert calls[0][3] == Path("outputs/m44-benchmark/run-1")
 
 
+def test_execute_benchmark_excludes_rental_case(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.chdir(tmp_path)
+    Path("benchmarks").mkdir()
+
+    def case(pack_id, listing_type):
+        return {
+            "pack_id": pack_id,
+            "dataset_version": "v1",
+            "generated_at": "2026-07-24T00:00:00+00:00",
+            "candidates": [{
+                "candidate_id": f"c-{pack_id}",
+                "listing_type": listing_type,
+            }],
+            "facts": [],
+            "limitations": [],
+        }
+
+    Path("benchmarks/m44_cases.json").write_text(
+        json.dumps([
+            case("sale-case", "sale"),
+            case("rental-case", "rental"),
+        ]),
+        encoding="utf-8",
+    )
+    observed = []
+
+    class Runner:
+        def run(self, provider, model, evidence_cases, output_dir):
+            observed.extend(pack.pack_id for pack in evidence_cases)
+            return {"case_count": len(evidence_cases), "models": []}
+
+    service = ProviderOpsService(object(), lambda _name: None, {})
+    service.set_benchmark_runner(Runner())
+
+    result = service.execute_benchmark(
+        "run-filter",
+        BenchmarkRequest(provider="gemini", model="gemini-3.5-flash-lite"),
+    )
+
+    assert result["status"] == "succeeded"
+    assert observed == ["sale-case"]
+
+
 def test_execute_benchmark_does_not_expose_runner_error(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     Path("benchmarks").mkdir()

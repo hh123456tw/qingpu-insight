@@ -33,6 +33,8 @@ class ConfiguredWebBenchmarkRunner:
             lambda api_key, model: GeminiReportProvider(
                 api_key=api_key,
                 model=model,
+                timeout_seconds=20,
+                thinking_level="minimal",
             )
         )
         self._benchmark = benchmark

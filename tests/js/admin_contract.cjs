@@ -80,6 +80,10 @@ assert.equal(admin.canRunBenchmark({ ready: true }, true), true);
 assert.equal(admin.canRunBenchmark({ ready: true }, false), false);
 assert.equal(admin.canRunBenchmark({ ready: false }, true), false);
 assert.equal(admin.canRunBenchmark(null, true), false);
+assert.equal(
+  admin.benchmarkProgressLabel("Gemini｜Gemma 4 31B", 12),
+  "正在測試 Gemini｜Gemma 4 31B｜已等待 12 秒（通常約 5～45 秒）"
+);
 
 async function testListingSequenceUsesOnlyWebListingTypes() {
   var submitted = [];

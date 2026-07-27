@@ -155,7 +155,15 @@ class ProviderOpsService:
         try:
             cases_path = Path("benchmarks/m44_cases.json")
             cases_data = json.loads(cases_path.read_text(encoding="utf-8"))
-            cases = [EvidencePack(**c) for c in cases_data]
+            cases = [
+                pack
+                for c in cases_data
+                for pack in (EvidencePack(**c),)
+                if any(
+                    candidate.listing_type in {"sale", "newhouse"}
+                    for candidate in pack.candidates
+                )
+            ]
             output_dir = Path("outputs") / "m44-benchmark" / run_id
             output_dir.mkdir(parents=True, exist_ok=True)
             result = runner.run(
