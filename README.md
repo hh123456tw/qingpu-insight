@@ -462,7 +462,18 @@ Web 主流程只處理：
 
 租屋資料不屬於本專題的市場估價與前端維運主線。舊版相容程式可能仍保留 rental 的底層契約，但管理介面不會抓取、發布或展示租屋流程。
 
-系統使用可見 Chrome，不繞過驗證，也不刻意收集帳號、密碼、Cookie 或聯絡欄位。原始 HTML 只保留在本機忽略路徑。
+系統使用可見 Chrome，不繞過驗證，也不刻意收集帳號、密碼、Cookie 或聯絡欄位。結構化 schema 沒有專用聯絡欄位；但標題等 free text 與本機 raw HTML 仍可能含無法完全辨識的 contact-shaped text，因此發布前會執行偵測／清理 gate，原始 HTML 只保留在本機忽略路徑。
+
+`listing-build` 的離線、門牌定位及詳情補強模式，都需要完整的 raw batch 與官方門牌檔 `data/raw/doorplates.csv`。門牌檔可先由既有 `qingpu-data acquire` 流程取得。要刻意驗證不連 MySQL 的離線路徑時，可在不改動目前 shell 的 child PowerShell 中執行：
+
+```powershell
+$batchDir = "data/raw/listings/591/<YYYY-MM-DD>/<complete-batch-id>"
+pwsh -NoProfile -Command {
+  param($inputBatch)
+  $env:QINGPU_DATABASE_URL = $null
+  & .\.venv\Scripts\qingpu-data.exe listing-build --batch-dir $inputBatch
+} -args $batchDir
+```
 
 ## 地圖與近期成交不是同一個上限
 
