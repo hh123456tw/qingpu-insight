@@ -48,6 +48,14 @@ class TestParseInitial591Url:
         with pytest.raises(Unsupported591Url):
             parse_initial_591_url(url)
 
+    def test_query_is_preserved_for_initial_request_but_fragment_is_not(self) -> None:
+        result = parse_initial_591_url(
+            "https://sale.591.com.tw/home/house/detail/123/456.html"
+            "?from=search#gallery"
+        )
+
+        assert result.request_url.endswith("456.html?from=search")
+
 
 class TestValidateRedirectTarget:
     @pytest.mark.parametrize(

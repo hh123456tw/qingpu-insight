@@ -74,6 +74,18 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
         FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-ALTER TABLE conversations
-    ADD CONSTRAINT fk_conversation_active_listing
-    FOREIGN KEY (active_listing_id) REFERENCES conversation_listings(id) ON DELETE SET NULL;
+SET @conversation_fk_exists = (
+    SELECT COUNT(*)
+    FROM information_schema.TABLE_CONSTRAINTS
+    WHERE CONSTRAINT_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'conversations'
+      AND CONSTRAINT_NAME = 'fk_conversation_active_listing'
+);
+SET @conversation_fk_sql = IF(
+    @conversation_fk_exists = 0,
+    'ALTER TABLE conversations ADD CONSTRAINT fk_conversation_active_listing FOREIGN KEY (active_listing_id) REFERENCES conversation_listings(id) ON DELETE SET NULL',
+    'SELECT 1'
+);
+PREPARE conversation_fk_statement FROM @conversation_fk_sql;
+EXECUTE conversation_fk_statement;
+DEALLOCATE PREPARE conversation_fk_statement;

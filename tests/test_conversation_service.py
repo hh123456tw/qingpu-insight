@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, call, sentinel
+from unittest.mock import ANY, MagicMock, call, sentinel
 
 import pytest
 
@@ -133,6 +133,7 @@ class TestStartImport:
             job_type=CONVERSATION_IMPORT,
             idempotency_key="ik-1",
             trigger="manual",
+            input_version="conv-1",
         )
         deps["executor"].submit.assert_called_once()
         assert deps["executor"].submit.call_args[0][0] == "run-1"
@@ -150,13 +151,16 @@ class TestStartImport:
 
         service._run_import("run-1", "conv-1", "https://example.com")
 
-        deps["job_service"].start.assert_called_once_with("run-1")
+        deps["job_service"].start.assert_not_called()
         deps["import_service"].import_initial_listing.assert_called_once_with(
-            conversation_id="conv-1", raw_url="https://example.com"
+            conversation_id="conv-1",
+            raw_url="https://example.com",
+            stage_callback=ANY,
         )
         deps["job_service"].succeed.assert_called_once_with(
             "run-1", "rev3", {}
         )
+        deps["provider_registry"].get.assert_called_once_with("rule")
 
     def test_import_worker_needs_attention(
         self, service: ConversationService, deps: dict
@@ -167,7 +171,7 @@ class TestStartImport:
 
         service._run_import("run-1", "conv-1", "https://example.com")
 
-        deps["job_service"].start.assert_called_once_with("run-1")
+        deps["job_service"].start.assert_not_called()
         deps["job_service"].fail.assert_called_once_with(
             "run-1", "verification_required", "verification required"
         )
@@ -184,7 +188,7 @@ class TestStartImport:
         with pytest.raises(RuntimeError, match="boom"):
             service._run_import("run-1", "conv-1", "https://example.com")
 
-        deps["job_service"].start.assert_called_once_with("run-1")
+        deps["job_service"].start.assert_not_called()
         deps["job_service"].fail.assert_called_once_with(
             "run-1", "import_failed", "boom"
         )
@@ -210,6 +214,7 @@ class TestStartRefresh:
             job_type=CONVERSATION_REFRESH,
             idempotency_key="ik-2",
             trigger="manual",
+            input_version="conv-1",
         )
         deps["executor"].submit.assert_called_once()
         assert deps["executor"].submit.call_args[0][0] == "run-2"
@@ -227,9 +232,10 @@ class TestStartRefresh:
 
         service._run_refresh("run-2", "conv-1")
 
-        deps["job_service"].start.assert_called_once_with("run-2")
+        deps["job_service"].start.assert_not_called()
         deps["import_service"].refresh_listing.assert_called_once_with(
-            conversation_id="conv-1"
+            conversation_id="conv-1",
+            stage_callback=ANY,
         )
         deps["job_service"].succeed.assert_called_once_with(
             "run-2", "rev2", {}
@@ -244,7 +250,7 @@ class TestStartRefresh:
 
         service._run_refresh("run-2", "conv-1")
 
-        deps["job_service"].start.assert_called_once_with("run-2")
+        deps["job_service"].start.assert_not_called()
         deps["job_service"].fail.assert_called_once_with(
             "run-2", "verification_required", "verification required"
         )
@@ -260,7 +266,7 @@ class TestStartRefresh:
         with pytest.raises(RuntimeError, match="refresh fail"):
             service._run_refresh("run-2", "conv-1")
 
-        deps["job_service"].start.assert_called_once_with("run-2")
+        deps["job_service"].start.assert_not_called()
         deps["job_service"].fail.assert_called_once_with(
             "run-2", "refresh_failed", "refresh fail"
         )
@@ -291,9 +297,11 @@ class TestStartReply:
         )
 
         deps["repository"].get_conversation.assert_called_once_with("conv-1")
-        deps["job_service"].list_active.assert_called_once_with(
-            CONVERSATION_REPLY
-        )
+        assert deps["job_service"].list_active.call_args_list == [
+            call(CONVERSATION_REPLY),
+            call(CONVERSATION_IMPORT),
+            call(CONVERSATION_REFRESH),
+        ]
         deps["job_service"].create.assert_called_once_with(
             job_type=CONVERSATION_REPLY,
             idempotency_key="ik-3",
@@ -427,7 +435,7 @@ class TestReplyWorker:
             "run-3", "conv-1", "hello", "ollama", "gpt-4", 1
         )
 
-        deps["job_service"].start.assert_called_once_with("run-3")
+        deps["job_service"].start.assert_not_called()
         deps["repository"].append_message.assert_has_calls([
             call(
                 conversation_id="conv-1",
@@ -510,7 +518,7 @@ class TestReplyWorker:
             "run-3", "conv-1", "hello", "ollama", "gpt-4", 1
         )
 
-        deps["job_service"].start.assert_called_once_with("run-3")
+        deps["job_service"].start.assert_not_called()
         deps["job_service"].succeed.assert_called_once_with(
             "run-3", "rev1", {}
         )
@@ -537,7 +545,7 @@ class TestReplyWorker:
             "run-3", "conv-1", "hello", "ollama", "gpt-4", 1
         )
 
-        deps["job_service"].start.assert_called_once_with("run-3")
+        deps["job_service"].start.assert_not_called()
         deps["job_service"].fail.assert_called_once_with(
             "run-3", "validation_failed", "answer validation failed"
         )
@@ -560,7 +568,7 @@ class TestReplyWorker:
                 "run-3", "conv-1", "hello", "bad", "gpt-4", 1
             )
 
-        deps["job_service"].start.assert_called_once_with("run-3")
+        deps["job_service"].start.assert_not_called()
         deps["job_service"].fail.assert_called_once_with(
             "run-3", "reply_failed", "unknown provider: bad"
         )
@@ -581,7 +589,7 @@ class TestReplyWorker:
                 "run-3", "conv-1", "hello", "ollama", "gpt-4", 1
             )
 
-        deps["job_service"].start.assert_called_once_with("run-3")
+        deps["job_service"].start.assert_not_called()
         assert deps["repository"].append_message.call_count == 1
         assert deps["repository"].append_message.call_args[1]["role"] == "user"
         deps["repository"].set_rolling_summary.assert_not_called()
@@ -596,7 +604,7 @@ class TestReplyWorker:
             "run-3", "conv-1", "hello", "ollama", "gpt-4", 1
         )
 
-        deps["job_service"].start.assert_called_once_with("run-3")
+        deps["job_service"].start.assert_not_called()
         deps["repository"].get_messages.assert_any_call(
             conversation_id="conv-1", limit=12
         )
@@ -628,7 +636,7 @@ class TestReplyWorker:
             "run-3", "conv-1", "hello", "ollama", "gpt-4", 1
         )
 
-        deps["job_service"].start.assert_called_once_with("run-3")
+        deps["job_service"].start.assert_not_called()
         assistant_call = deps["repository"].append_message.call_args_list[1]
         assert assistant_call.kwargs["citations"] == ["fact-1", "fact-2"]
 

@@ -166,6 +166,30 @@ class FakeRepository:
             return None
         return ConversationListingRecord(**listing)
 
+    def get_initial_listing(
+        self, conversation_id: str
+    ) -> ConversationListingRecord | None:
+        for listing in self.listings.values():
+            if (
+                listing["conversation_id"] == conversation_id
+                and listing["position"] == 1
+            ):
+                return ConversationListingRecord(**listing)
+        return None
+
+    def update_listing(
+        self,
+        listing_id: str,
+        *,
+        listing_type: str | None,
+        source_listing_id: str | None,
+        canonical_url: str | None,
+    ) -> None:
+        listing = self.listings[listing_id]
+        listing["listing_type"] = listing_type
+        listing["source_listing_id"] = source_listing_id
+        listing["canonical_url"] = canonical_url
+
     # -- snapshots --
 
     def append_snapshot(
@@ -283,6 +307,16 @@ class FakeRepository:
         self, *, conversation_id: str, listing_id: str, revision: int
     ) -> None:
         self.activated.append((conversation_id, listing_id, revision))
+        conversation = self.conversations[conversation_id]
+        conversation["active_listing_id"] = listing_id
+        conversation["active_evidence_revision"] = revision
+        conversation["status"] = "ready"
+
+    def set_status(self, *, conversation_id: str, status: str) -> None:
+        self.conversations[conversation_id]["status"] = status
+
+    def set_title(self, *, conversation_id: str, title: str) -> None:
+        self.conversations[conversation_id]["title"] = title
 
 
 class FakeBrowser:
@@ -429,6 +463,7 @@ class TestInitialImport:
             raw_url="https://sale.591.com.tw/home/house/detail/2/12345.html",
         )
         assert result.outcome == "needs_attention"
+        assert repo.conversations["conv-1"]["status"] == "needs_attention"
 
     def test_parse_failure(
         self,
@@ -443,11 +478,11 @@ class TestInitialImport:
             repository=repo,  # type: ignore[arg-type]
             browser=err_browser,  # type: ignore[arg-type]
         )
-        result = svc.import_initial_listing(
-            conversation_id="conv-1",
-            raw_url="https://sale.591.com.tw/home/house/detail/2/12345.html",
-        )
-        assert result.outcome == "needs_attention"
+        with pytest.raises(ListingDetailParseError):
+            svc.import_initial_listing(
+                conversation_id="conv-1",
+                raw_url="https://sale.591.com.tw/home/house/detail/2/12345.html",
+            )
 
     def test_stage_callback(
         self,

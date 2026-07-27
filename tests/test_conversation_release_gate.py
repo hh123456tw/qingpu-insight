@@ -626,6 +626,7 @@ class TestConversationReleaseGate:
         submission = job_service.create(
             "conversation_import", "ik-verify", "manual",
         )
+        job_service.start(submission.run.run_id)
         service._run_import(
             submission.run.run_id, conv.id,
             "https://sale.591.com.tw/home/house/detail/2/123.html",
@@ -695,6 +696,7 @@ class TestConversationReleaseGate:
             CONVERSATION_REPLY, "ik-invalid", "manual",
             input_version=conv.id,
         )
+        job_service.start(submission.run.run_id)
         service._run_reply(
             submission.run.run_id, conv.id, "價格合理嗎？",
             "ollama", "gemma3", 1,

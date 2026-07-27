@@ -13,6 +13,13 @@ from bs4 import BeautifulSoup
 
 from qingpu_insight.listing_capture import is_verification_page
 
+_PHONE_RE = re.compile(
+    r"(?<!\d)(?:09\d{8}|0[2-8][-\s]?\d{7,8})(?!\d)"
+)
+_EMAIL_RE = re.compile(
+    r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
+)
+
 
 class ListingPageVerificationRequired(RuntimeError):
     pass
@@ -20,6 +27,24 @@ class ListingPageVerificationRequired(RuntimeError):
 
 class ListingDetailParseError(ValueError):
     pass
+
+
+def _safe_persisted_text(
+    value: str | None,
+    *,
+    field: str,
+    max_length: int,
+) -> str | None:
+    if value is None:
+        return None
+    cleaned = " ".join(value.split())
+    cleaned = _PHONE_RE.sub("[已移除電話]", cleaned)
+    cleaned = _EMAIL_RE.sub("[已移除信箱]", cleaned)
+    if len(cleaned) > max_length:
+        raise ListingDetailParseError(
+            f"{field} exceeds {max_length} characters"
+        )
+    return cleaned or None
 
 
 @dataclass(frozen=True)
@@ -323,6 +348,54 @@ def parse_listing_detail(
         longitude < Decimal("-180") or longitude > Decimal("180")
     ):
         raise ListingDetailParseError(f"longitude out of range: {longitude}")
+
+    title = _safe_persisted_text(
+        title,
+        field="title",
+        max_length=160,
+    )
+    if title is None:
+        raise ListingDetailParseError("listing title is required")
+    layout = _safe_persisted_text(
+        layout,
+        field="layout",
+        max_length=80,
+    )
+    address = _safe_persisted_text(
+        address,
+        field="address",
+        max_length=300,
+    )
+    community_name = _safe_persisted_text(
+        community_name,
+        field="community_name",
+        max_length=160,
+    )
+    builder_name = _safe_persisted_text(
+        builder_name,
+        field="builder_name",
+        max_length=160,
+    )
+    building_type = _safe_persisted_text(
+        building_type,
+        field="building_type",
+        max_length=80,
+    )
+    floor = _safe_persisted_text(
+        floor,
+        field="floor",
+        max_length=40,
+    )
+    parking_type = _safe_persisted_text(
+        parking_type,
+        field="parking_type",
+        max_length=80,
+    )
+    source_updated_text = _safe_persisted_text(
+        source_updated_text,
+        field="source_updated_text",
+        max_length=120,
+    )
 
     return ParsedListingDetail(
         listing_type=listing_type,

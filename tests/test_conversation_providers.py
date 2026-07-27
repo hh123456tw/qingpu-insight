@@ -7,6 +7,7 @@ import pytest
 import requests
 import responses
 
+from qingpu_insight.conversation_evidence import EvidenceFact
 from qingpu_insight.conversation_providers import (
     ConversationContext,
     ConversationProviderRegistry,
@@ -17,40 +18,33 @@ from qingpu_insight.conversation_providers import (
 )
 from qingpu_insight.conversation_validation import ChatAnswerDraft
 from qingpu_insight.ollama_report_provider import ProviderError
-from qingpu_insight.report_contracts import EvidenceFact
 
 _NOW = "2025-01-15T10:00:00Z"
 
 _FACT_1 = EvidenceFact(
-    fact_id="f001",
-    kind="asking_price",
+    id="f001",
     label="開價總價",
     value="15000000",
-    unit="twd",
-    source_type="listing",
-    source_version="v1",
+    source="591",
+    kind="asking_price",
     observed_at=_NOW,
 )
 
 _FACT_2 = EvidenceFact(
-    fact_id="f002",
-    kind="area",
+    id="f002",
     label="建物面積",
     value="30.00",
-    unit="ping",
-    source_type="listing",
-    source_version="v1",
+    source="591",
+    kind="area",
     observed_at=_NOW,
 )
 
 _FACT_3 = EvidenceFact(
-    fact_id="f003",
-    kind="station_distance",
+    id="f003",
     label="車站距離",
     value="A18 300m",
-    unit="m",
-    source_type="listing",
-    source_version="v1",
+    source="591",
+    kind="station_distance",
     observed_at=_NOW,
 )
 
@@ -387,7 +381,8 @@ class TestConversationContext:
         )
         prompt = _build_prompt("問題", ctx)
         assert "摘要內容" in prompt
-        assert "[Rolling Summary]" in prompt
+        assert "<UNTRUSTED_USER_DATA>" in prompt
+        assert '"rolling_summary"' in prompt
 
     def test_context_includes_recent_messages(self) -> None:
         msgs = tuple(
@@ -402,9 +397,10 @@ class TestConversationContext:
             limitations=(),
         )
         prompt = _build_prompt("問題", ctx)
-        assert "[Recent Messages]" in prompt
+        assert '"recent_messages"' in prompt
         assert "訊息3" in prompt
-        assert "User: 訊息14" in prompt
+        assert '"role": "user"' in prompt
+        assert "訊息14" in prompt
         assert "[Rolling Summary]" not in prompt
 
     def test_context_includes_evidence_facts(self) -> None:
@@ -416,7 +412,7 @@ class TestConversationContext:
             limitations=(),
         )
         prompt = _build_prompt("問題", ctx)
-        assert "[Evidence Facts]" in prompt
+        assert '"evidence_facts"' in prompt
         assert "f001" in prompt
         assert "開價總價" in prompt
         assert "f002" in prompt
@@ -430,7 +426,7 @@ class TestConversationContext:
             limitations=("缺少車站距離", "缺少座標"),
         )
         prompt = _build_prompt("問題", ctx)
-        assert "[Limitations]" in prompt
+        assert '"limitations"' in prompt
         assert "缺少車站距離" in prompt
         assert "缺少座標" in prompt
 
@@ -443,7 +439,7 @@ class TestConversationContext:
             limitations=(),
         )
         prompt = _build_prompt("這個物件怎麼樣？", ctx)
-        assert "[User Question]" in prompt
+        assert '"question"' in prompt
         assert "這個物件怎麼樣？" in prompt
 
     def test_context_only_latest_12_messages(self) -> None:

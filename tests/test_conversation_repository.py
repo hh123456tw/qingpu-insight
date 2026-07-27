@@ -282,11 +282,13 @@ def test_append_evidence_pack_increments_revision(fake_conn: FakeConnection) -> 
 def test_activate_evidence_updates_conversation(fake_conn: FakeConnection) -> None:
     repo = MySQLConversationRepository(fake_conn)
     fake_conn.cursor_instance.rowcount = 1
+    fake_conn.cursor_instance.fetch_rows = [{"id": "evidence-1"}]
     repo.activate_evidence(conversation_id="conv-1", listing_id="listing-1", revision=3)
-    sql = " ".join(fake_conn.cursor_instance.executed[0][0].lower().split())
+    sql = " ".join(fake_conn.cursor_instance.executed[1][0].lower().split())
     assert "update conversations" in sql
     assert "active_listing_id" in sql
     assert "active_evidence_revision" in sql
+    assert "status = 'ready'" in sql
     assert "where id = %s" in sql
     assert fake_conn.commits == 1
 

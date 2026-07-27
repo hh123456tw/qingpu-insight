@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import Literal
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 ListingType = Literal["sale", "newhouse"]
 
@@ -56,6 +56,10 @@ def _check_unsafe_components(url: str) -> None:
         raise Unsupported591Url("non-default ports are not allowed")
     if _is_ip_literal(parts.hostname):
         raise Unsupported591Url("IP literals are not allowed")
+    for _, value in parse_qsl(parts.query, keep_blank_values=True):
+        nested = urlsplit(value)
+        if nested.scheme or nested.netloc:
+            raise Unsupported591Url("nested URLs are not allowed")
 
 
 def _is_ip_literal(hostname: str | None) -> bool:
@@ -72,7 +76,14 @@ def _is_ip_literal(hostname: str | None) -> bool:
 
 def _canonicalize(url: str) -> str:
     parts = urlsplit(url)
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, None, None))
+    hostname = (parts.hostname or "").lower()
+    return urlunsplit(("https", hostname, parts.path, "", ""))
+
+
+def _request_url(url: str) -> str:
+    parts = urlsplit(url)
+    hostname = (parts.hostname or "").lower()
+    return urlunsplit(("https", hostname, parts.path, parts.query, ""))
 
 
 def _is_sale_path(path: str) -> bool:
@@ -104,13 +115,13 @@ def parse_initial_591_url(raw_url: str) -> Initial591Url:
         token = path.lstrip("/")
         if not _SHORT_TOKEN_PATTERN.fullmatch(token):
             raise Unsupported591Url("invalid short token")
-        return Initial591Url(request_url=raw_url, kind="short")
+        return Initial591Url(request_url=_request_url(raw_url), kind="short")
     if hostname in _ACCEPTED_DIRECT_HOSTS:
         if hostname == "sale.591.com.tw" and not _is_sale_path(path):
             raise Unsupported591Url("invalid sale path")
         if hostname == "newhouse.591.com.tw" and not _is_newhouse_path(path):
             raise Unsupported591Url("invalid newhouse path")
-        return Initial591Url(request_url=raw_url, kind="direct")
+        return Initial591Url(request_url=_request_url(raw_url), kind="direct")
     raise Unsupported591Url("unsupported host")
 
 

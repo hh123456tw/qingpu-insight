@@ -683,7 +683,7 @@ Ollama 與 Gemini 為可選的 LLM report provider。未設定時 Web UI 與 CLI
 不會以 Rule 結果冒充指定模型成功。設定方式：
 
 ```powershell
-$env:QINGPU_OLLAMA_MODEL = "gemma3:4b"
+$env:QINGPU_OLLAMA_MODEL = "gemma4:e2b"
 $env:QINGPU_GEMINI_API_KEY = "<your-key>"
 $env:QINGPU_GEMINI_MODEL = "<available-model-id>"
 ```

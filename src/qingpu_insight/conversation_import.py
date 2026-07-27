@@ -6,13 +6,18 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Literal
 
+from qingpu_insight.conversation_evidence import (
+    ConversationEvidence,
+    ConversationEvidenceBuilder,
+)
 from qingpu_insight.conversation_listing_capture import DetailPageBrowser
 from qingpu_insight.conversation_listing_parser import (
-    ListingDetailParseError,
     ListingPageVerificationRequired,
-    ParsedListingDetail,
 )
-from qingpu_insight.conversation_repository import MySQLConversationRepository
+from qingpu_insight.conversation_repository import (
+    ConversationAlreadyHasListing,
+    MySQLConversationRepository,
+)
 from qingpu_insight.conversation_urls import parse_initial_591_url
 
 ImportStage = Literal[
@@ -37,32 +42,12 @@ def _serialize_for_json(value: Any) -> Any:
     return value
 
 
-def _build_evidence_pack(detail: ParsedListingDetail) -> dict:
-    facts: dict[str, Any] = {
-        "listing_type": detail.listing_type,
-        "source_listing_id": detail.source_listing_id,
-        "title": detail.title,
-        "total_price_twd": detail.total_price_twd,
-        "unit_price_twd_per_ping": detail.unit_price_twd_per_ping,
-        "area_ping": str(detail.area_ping) if detail.area_ping is not None else None,
-        "layout": detail.layout,
-        "address": detail.address,
-        "community_name": detail.community_name,
-        "builder_name": detail.builder_name,
-        "building_type": detail.building_type,
-        "floor": detail.floor,
-        "total_floors": detail.total_floors,
-        "age_years": str(detail.age_years) if detail.age_years is not None else None,
-        "parking_type": detail.parking_type,
-        "latitude": str(detail.latitude) if detail.latitude is not None else None,
-        "longitude": str(detail.longitude) if detail.longitude is not None else None,
-        "source_updated_text": detail.source_updated_text,
-    }
+def _serialize_evidence(evidence: ConversationEvidence) -> dict:
     return {
-        "facts": facts,
-        "valuation": None,
-        "comparables": [],
-        "limitations": [],
+        "facts": [dataclasses.asdict(fact) for fact in evidence.facts],
+        "valuation": evidence.valuation,
+        "comparables": list(evidence.comparables),
+        "limitations": list(evidence.limitations),
     }
 
 
@@ -72,29 +57,70 @@ class ConversationImportService:
         *,
         repository: MySQLConversationRepository,
         browser: DetailPageBrowser,
+        evidence_builder: ConversationEvidenceBuilder | None = None,
         stage_callback: Callable[[str, ImportStage], None] | None = None,
     ):
         self._repository = repository
         self._browser = browser
+        self._evidence_builder = evidence_builder or ConversationEvidenceBuilder()
         self._stage_callback = stage_callback
 
-    def _notify(self, conversation_id: str, stage: ImportStage) -> None:
-        if self._stage_callback:
-            self._stage_callback(conversation_id, stage)
+    def _notify(
+        self,
+        conversation_id: str,
+        stage: ImportStage,
+        callback: Callable[[str, ImportStage], None] | None = None,
+    ) -> None:
+        selected = callback or self._stage_callback
+        if selected:
+            selected(conversation_id, stage)
 
     def import_initial_listing(
-        self, *, conversation_id: str, raw_url: str
+        self,
+        *,
+        conversation_id: str,
+        raw_url: str,
+        stage_callback: Callable[[str, ImportStage], None] | None = None,
     ) -> ListingImportResult:
         try:
-            self._notify(conversation_id, "validating_url")
+            def notify(stage: ImportStage) -> None:
+                self._notify(
+                    conversation_id,
+                    stage,
+                    stage_callback,
+                )
+
+            notify("validating_url")
             initial = parse_initial_591_url(raw_url)
 
-            self._notify(conversation_id, "opening_browser")
+            notify("opening_browser")
             captured = self._browser.capture(initial)
 
-            self._notify(conversation_id, "capturing_listing")
-            listing = self._repository.add_initial_listing(
+            notify("capturing_listing")
+            try:
+                listing = self._repository.add_initial_listing(
+                    conversation_id=conversation_id,
+                )
+            except ConversationAlreadyHasListing:
+                listing = self._repository.get_initial_listing(conversation_id)
+                if listing is None:
+                    raise
+                if (
+                    listing.canonical_url is not None
+                    and listing.canonical_url != captured.final_url
+                ):
+                    raise ValueError(
+                        "conversation is already bound to another listing"
+                    ) from None
+            self._repository.update_listing(
+                listing.id,
+                listing_type=captured.detail.listing_type,
+                source_listing_id=captured.detail.source_listing_id,
+                canonical_url=captured.final_url,
+            )
+            self._repository.set_title(
                 conversation_id=conversation_id,
+                title=captured.detail.title,
             )
             payload = {
                 k: _serialize_for_json(v)
@@ -106,8 +132,10 @@ class ConversationImportService:
                 payload=payload,
             )
 
-            self._notify(conversation_id, "building_evidence")
-            evidence = _build_evidence_pack(captured.detail)
+            notify("building_evidence")
+            evidence = _serialize_evidence(
+                self._evidence_builder.build(snapshot=snapshot)
+            )
             ev = self._repository.append_evidence_pack(
                 conversation_id=conversation_id,
                 snapshot_id=snapshot.id,
@@ -118,8 +146,12 @@ class ConversationImportService:
                 listing_id=listing.id,
                 revision=ev.revision,
             )
+            self._repository.set_status(
+                conversation_id=conversation_id,
+                status="ready",
+            )
 
-            self._notify(conversation_id, "ready")
+            notify("ready")
             return ListingImportResult(
                 conversation_id=conversation_id,
                 listing_id=listing.id,
@@ -128,7 +160,11 @@ class ConversationImportService:
                 evidence_revision=ev.revision,
                 outcome="ready",
             )
-        except (ListingPageVerificationRequired, ListingDetailParseError):
+        except ListingPageVerificationRequired:
+            self._repository.set_status(
+                conversation_id=conversation_id,
+                status="needs_attention",
+            )
             return ListingImportResult(
                 conversation_id=conversation_id,
                 listing_id="",
@@ -138,8 +174,20 @@ class ConversationImportService:
                 outcome="needs_attention",
             )
 
-    def refresh_listing(self, *, conversation_id: str) -> ListingImportResult:
+    def refresh_listing(
+        self,
+        *,
+        conversation_id: str,
+        stage_callback: Callable[[str, ImportStage], None] | None = None,
+    ) -> ListingImportResult:
         try:
+            def notify(stage: ImportStage) -> None:
+                self._notify(
+                    conversation_id,
+                    stage,
+                    stage_callback,
+                )
+
             conversation = self._repository.get_conversation(conversation_id)
             if conversation is None:
                 raise ValueError(f"conversation not found: {conversation_id}")
@@ -157,13 +205,13 @@ class ConversationImportService:
                     f"listing {active_listing_id} has no canonical_url"
                 )
 
-            self._notify(conversation_id, "validating_url")
+            notify("validating_url")
             initial = parse_initial_591_url(listing.canonical_url)
 
-            self._notify(conversation_id, "opening_browser")
+            notify("opening_browser")
             captured = self._browser.capture(initial)
 
-            self._notify(conversation_id, "capturing_listing")
+            notify("capturing_listing")
             payload = {
                 k: _serialize_for_json(v)
                 for k, v in dataclasses.asdict(captured.detail).items()
@@ -174,8 +222,10 @@ class ConversationImportService:
                 payload=payload,
             )
 
-            self._notify(conversation_id, "building_evidence")
-            evidence = _build_evidence_pack(captured.detail)
+            notify("building_evidence")
+            evidence = _serialize_evidence(
+                self._evidence_builder.build(snapshot=snapshot)
+            )
             ev = self._repository.append_evidence_pack(
                 conversation_id=conversation_id,
                 snapshot_id=snapshot.id,
@@ -186,8 +236,12 @@ class ConversationImportService:
                 listing_id=active_listing_id,
                 revision=ev.revision,
             )
+            self._repository.set_status(
+                conversation_id=conversation_id,
+                status="ready",
+            )
 
-            self._notify(conversation_id, "ready")
+            notify("ready")
             return ListingImportResult(
                 conversation_id=conversation_id,
                 listing_id=active_listing_id,
@@ -196,7 +250,11 @@ class ConversationImportService:
                 evidence_revision=ev.revision,
                 outcome="ready",
             )
-        except (ListingPageVerificationRequired, ListingDetailParseError):
+        except ListingPageVerificationRequired:
+            self._repository.set_status(
+                conversation_id=conversation_id,
+                status="needs_attention",
+            )
             return ListingImportResult(
                 conversation_id=conversation_id,
                 listing_id="",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -7,7 +8,7 @@ import pymysql
 import pytest
 
 from qingpu_insight.job_repository import MySQLJobRepository
-from qingpu_insight.jobs import JobRun
+from qingpu_insight.jobs import CONVERSATION_REPLY, JobRun
 
 
 def pending_run() -> JobRun:
@@ -167,6 +168,32 @@ def test_create_or_get_returns_created_run(fake_conn: FakeConnection) -> None:
     run, created = repo.create_or_get(pending_run())
     assert (run, created) == (pending_run(), True)
     assert fake_conn.commits == 2
+
+
+def test_conversation_idempotency_returns_terminal_run(
+    fake_conn: FakeConnection,
+) -> None:
+    repo = MySQLJobRepository(fake_conn)
+    requested = replace(
+        pending_run(),
+        job_type=CONVERSATION_REPLY,
+        idempotency_key="conversation-key",
+    )
+    existing = replace(
+        requested,
+        run_id="existing-run",
+        status="succeeded",
+        output_version="rev1",
+    )
+    fake_conn.cursor_instance.fetch_rows = [row_for(existing)]
+
+    run, created = repo.create_or_get(requested)
+
+    assert (run, created) == (existing, False)
+    assert not any(
+        sql.lstrip().upper().startswith("INSERT")
+        for sql, _ in fake_conn.cursor_instance.executed
+    )
 
 
 def test_create_or_get_rolls_back_duplicate_then_reloads_active_run(

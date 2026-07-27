@@ -113,7 +113,8 @@ class TestValidateChatAnswer:
             evidence_revision=5,
         )
         assert isinstance(result, ValidatedChatAnswer)
-        assert result.answer == "好物件。"
+        assert "公園近（依據：f1, f2）" in result.answer
+        assert "好物件。" not in result.answer
         assert result.citations == ["f1", "f2", "f3"]
         assert result.evidence_revision == 5
 
@@ -197,16 +198,24 @@ class TestValidateChatAnswer:
         assert result.citations == ["f1", "f2", "f3", "f4"]
 
     def test_evidence_revision_preserved(self) -> None:
-        draft = ChatAnswerDraft(answer="test")
+        draft = ChatAnswerDraft(
+            answer="test",
+            general_guidance=["注意產權"],
+        )
         result = validate_chat_answer(
             draft, available_fact_ids=set(), evidence_revision=42
         )
         assert result.evidence_revision == 42
 
     def test_empty_general_guidance(self) -> None:
-        draft = ChatAnswerDraft(answer="test")
+        draft = ChatAnswerDraft(
+            answer="test",
+            property_claims=[
+                PropertyClaim(text="已驗證內容", fact_ids=["f1"])
+            ],
+        )
         result = validate_chat_answer(
-            draft, available_fact_ids=set(), evidence_revision=1
+            draft, available_fact_ids={"f1"}, evidence_revision=1
         )
         assert result.general_guidance == []
 
@@ -236,6 +245,7 @@ class TestValidateChatAnswer:
     def test_suggested_questions_preserved(self) -> None:
         draft = ChatAnswerDraft(
             answer="test",
+            general_guidance=["注意產權"],
             suggested_questions=["Q1?", "Q2?"],
         )
         result = validate_chat_answer(
@@ -243,15 +253,26 @@ class TestValidateChatAnswer:
         )
         assert result.suggested_questions == ["Q1?", "Q2?"]
 
-    def test_answer_preserved(self) -> None:
-        draft = ChatAnswerDraft(answer="這是一個非常好的物件。")
-        result = validate_chat_answer(
-            draft, available_fact_ids=set(), evidence_revision=1
+    def test_detached_answer_is_not_displayed(self) -> None:
+        draft = ChatAnswerDraft(
+            answer="這是一個沒有證據的非常好的物件。",
+            property_claims=[
+                PropertyClaim(text="開價一千萬", fact_ids=["listing.price"])
+            ],
         )
-        assert result.answer == "這是一個非常好的物件。"
+        result = validate_chat_answer(
+            draft,
+            available_fact_ids={"listing.price"},
+            evidence_revision=1,
+        )
+        assert "沒有證據" not in result.answer
+        assert "listing.price" in result.answer
 
     def test_no_extra_fields_on_validated_answer(self) -> None:
-        draft = ChatAnswerDraft(answer="test")
+        draft = ChatAnswerDraft(
+            answer="test",
+            general_guidance=["注意產權"],
+        )
         result = validate_chat_answer(
             draft, available_fact_ids=set(), evidence_revision=1
         )

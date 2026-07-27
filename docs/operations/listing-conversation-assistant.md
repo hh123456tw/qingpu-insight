@@ -68,7 +68,7 @@ Evidence Pack，再讓使用者針對同一物件持續對話。
 - `conversation_messages` — 對話訊息（role、content、evidence revision、citations）
 
 ```sql
--- 簡要結構（完整 SQL 請見 database/008_conversation_assistant.sql）
+-- 簡要結構（完整 SQL 請見 database/008_conversation_assistant_schema.sql）
 CREATE TABLE conversations (
     id CHAR(36) PRIMARY KEY,
     title VARCHAR(200) NOT NULL DEFAULT '新的物件分析',

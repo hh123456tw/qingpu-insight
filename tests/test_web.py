@@ -57,6 +57,72 @@ class FailingMarketDataSource:
         raise RuntimeError("database connection failed")
 
 
+def test_conversation_valuation_uses_official_model_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from qingpu_insight import web
+
+    market = pd.DataFrame(
+        [
+            {
+                "transaction_type": "resale",
+                "transaction_date": pd.Timestamp("2026-06-13"),
+                "latitude": 25.01,
+                "longitude": 121.21,
+                "building_area_ping": 30.0,
+                "total_price_twd": 15000000,
+                "unit_price_per_ping_twd": 500000,
+                "station_code": "A18",
+                "station_distance_m": 420.0,
+            }
+        ]
+    )
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        web,
+        "build_model_frame",
+        lambda frame, transaction_type: frame,
+    )
+
+    def fake_valuate(input_, registry, frame, latest_data_date):
+        captured["input"] = input_
+        return {
+            "estimated_total_price_twd": 16000000,
+            "interval_total_price_twd": (14500000, 17500000),
+            "confidence": "medium",
+            "confidence_reasons": ["comparable_count"],
+            "asking_price_assessment": "合理區間",
+            "data_date": "2026-06-13",
+            "model": {"version": "official-v3"},
+        }
+
+    monkeypatch.setattr(web, "valuate", fake_valuate)
+    result = web._conversation_valuation(
+        InMemoryMarketDataSource(market),
+        object(),  # type: ignore[arg-type]
+        {
+            "listing_type": "sale",
+            "area_ping": 30,
+            "layout": "3房2廳2衛",
+            "building_type": "住宅大樓",
+            "floor": "12F/15F",
+            "total_floors": 15,
+            "age_years": 5,
+            "parking_type": "無車位",
+            "total_price_twd": 15800000,
+            "latitude": 25.01,
+            "longitude": 121.21,
+        },
+    )
+
+    assert captured["input"].station_code == "A18"
+    assert captured["input"].bedrooms == 3
+    assert result["point_estimate_twd"] == 16000000
+    assert result["model_version"] == "official-v3"
+    assert result["dataset_version"] == "2026-06-13"
+
+
 @pytest.fixture
 def client(market_frame: pd.DataFrame) -> FlaskClient:
     from qingpu_insight.web import create_app

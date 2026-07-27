@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -236,7 +237,10 @@ class TestDeleteConversation:
         service.delete_conversation.return_value = True
         response = csrf_client.delete(
             "/api/conversations/conv-1",
-            headers={"X-Qingpu-CSRF": "test-token"},
+            headers={
+                "X-Qingpu-CSRF": "test-token",
+                "X-Qingpu-Confirm": "delete:conv-1",
+            },
         )
         assert response.status_code == 204
 
@@ -244,7 +248,10 @@ class TestDeleteConversation:
         service.delete_conversation.return_value = False
         response = csrf_client.delete(
             "/api/conversations/missing",
-            headers={"X-Qingpu-CSRF": "test-token"},
+            headers={
+                "X-Qingpu-CSRF": "test-token",
+                "X-Qingpu-Confirm": "delete:missing",
+            },
         )
         assert response.status_code == 404
 
@@ -262,7 +269,12 @@ class TestImportListing:
         )
         response = csrf_client.post(
             "/api/conversations/conv-1/listing",
-            json={"url": "https://example.com/listing/123"},
+            json={
+                "url": (
+                    "https://sale.591.com.tw/"
+                    "home/house/detail/2/123.html"
+                )
+            },
             headers={"X-Qingpu-CSRF": "test-token"},
         )
         assert response.status_code == 202
@@ -484,7 +496,42 @@ class TestSecurity:
 def test_create_app_wires_conversation_blueprint():
     from qingpu_insight.web import create_app
 
-    app = create_app()
+    service = MagicMock()
+    repository = MagicMock()
+    service.create_conversation.return_value = SimpleNamespace(
+        id="conv-wired",
+        title="新的物件分析",
+        status="empty",
+        default_provider="ollama",
+        default_model="gemma3:4b",
+        active_listing_id=None,
+        active_evidence_revision=None,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    app = create_app(
+        conversation_service=service,
+        conversation_repository=repository,
+    )
     rules = [rule.endpoint for rule in app.url_map.iter_rules()]
     conversation_endpoints = [e for e in rules if e.startswith("conversation.")]
     assert len(conversation_endpoints) > 0
+    assert app.extensions["qingpu_conversation_service"] is service
+
+    client = app.test_client()
+    with client.session_transaction(
+        base_url="http://127.0.0.1"
+    ) as sess:
+        sess["_csrf_token"] = "wired-token"
+    response = client.post(
+        "/api/conversations",
+        json={"provider": "ollama", "model": "gemma3:4b"},
+        headers={
+            "X-Qingpu-CSRF": "wired-token",
+            "Host": "127.0.0.1",
+        },
+        environ_base={"REMOTE_ADDR": "127.0.0.1"},
+        base_url="http://127.0.0.1",
+    )
+    assert response.status_code == 201
+    assert response.get_json()["id"] == "conv-wired"

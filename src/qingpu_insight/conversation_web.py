@@ -1,18 +1,34 @@
 from __future__ import annotations
 
+import hashlib
+import re
 import uuid
 from datetime import datetime
 from ipaddress import ip_address
 from typing import Any
 from urllib.parse import urlsplit
 
-from flask import Blueprint, jsonify, render_template, request, session
+from flask import (
+    Blueprint,
+    current_app,
+    jsonify,
+    render_template,
+    request,
+    session,
+)
+from werkzeug.exceptions import HTTPException
 
 from qingpu_insight.conversation_contracts import (
     ConversationCreateRequest,
     ListingImportRequest,
     ReplyCreateRequest,
 )
+from qingpu_insight.conversation_urls import (
+    Unsupported591Url,
+    parse_initial_591_url,
+)
+
+_IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9._:-]{8,128}$")
 
 
 def _is_trusted_local_request() -> bool:
@@ -34,6 +50,15 @@ def _require_mutation_auth() -> tuple | None:
     if request.headers.get("X-Qingpu-CSRF", "") != session.get("_csrf_token", ""):
         return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
     return None
+
+
+def _command_idempotency_key(command: str, conversation_id: str) -> str:
+    supplied = request.headers.get("Idempotency-Key")
+    token = supplied or str(uuid.uuid4())
+    if not _IDEMPOTENCY_RE.fullmatch(token):
+        raise ValueError("invalid idempotency key")
+    raw = f"conversation:{command}:{conversation_id}:{token}".encode()
+    return f"conversation:{command}:{hashlib.sha256(raw).hexdigest()}"
 
 
 def _conversation_to_json(record: Any) -> dict[str, Any]:
@@ -80,6 +105,29 @@ def _message_to_json(msg: Any) -> dict[str, Any]:
 
 def create_conversation_blueprint(service, repository):
     bp = Blueprint("conversation", __name__, url_prefix="")
+
+    @bp.errorhandler(Exception)
+    def handle_conversation_error(error):
+        if isinstance(error, HTTPException):
+            return error
+        current_app.logger.error("conversation request failed")
+        return jsonify({
+            "error": {
+                "code": "conversation_unavailable",
+                "message": "對話功能暫時無法使用。",
+            }
+        }), 503
+
+    @bp.before_request
+    def require_trusted_local_request():
+        if not _is_trusted_local_request():
+            return jsonify({
+                "error": {
+                    "code": "forbidden",
+                    "message": "僅允許本機存取。",
+                }
+            }), 403
+        return None
 
     @bp.route("/api/conversations", methods=["POST"])
     def create_conversation():
@@ -194,7 +242,27 @@ def create_conversation_blueprint(service, repository):
             return jsonify({
                 "error": {"code": "service_unavailable", "message": "對話功能未啟用。"}
             }), 503
-        deleted = service.delete_conversation(conversation_id=conversation_id)
+        expected_confirmation = f"delete:{conversation_id}"
+        if request.headers.get("X-Qingpu-Confirm") != expected_confirmation:
+            return jsonify({
+                "error": {
+                    "code": "confirmation_required",
+                    "message": "刪除確認不符。",
+                }
+            }), 400
+        try:
+            deleted = service.delete_conversation(
+                conversation_id=conversation_id
+            )
+        except ValueError as error:
+            if str(error) == "conversation busy":
+                return jsonify({
+                    "error": {
+                        "code": "conversation_busy",
+                        "message": "對話工作進行中，暫時無法刪除。",
+                    }
+                }), 409
+            raise
         if not deleted:
             return jsonify({
                 "error": {"code": "not_found", "message": "對話不存在。"}
@@ -217,11 +285,21 @@ def create_conversation_blueprint(service, repository):
             }), 400
         try:
             req = ListingImportRequest(**data)
+            parse_initial_591_url(req.url)
+            idempotency_key = _command_idempotency_key(
+                "import", conversation_id
+            )
+        except Unsupported591Url as error:
+            return jsonify({
+                "error": {
+                    "code": "unsupported_591_url",
+                    "message": str(error),
+                }
+            }), 400
         except Exception as e:
             return jsonify({
                 "error": {"code": "invalid_request", "message": str(e)}
             }), 400
-        idempotency_key = str(uuid.uuid4())
         cmd = service.start_import(
             conversation_id=conversation_id,
             raw_url=req.url,
@@ -240,7 +318,17 @@ def create_conversation_blueprint(service, repository):
             return jsonify({
                 "error": {"code": "service_unavailable", "message": "對話功能未啟用。"}
             }), 503
-        idempotency_key = str(uuid.uuid4())
+        try:
+            idempotency_key = _command_idempotency_key(
+                "refresh", conversation_id
+            )
+        except ValueError as error:
+            return jsonify({
+                "error": {
+                    "code": "invalid_request",
+                    "message": str(error),
+                }
+            }), 400
         cmd = service.start_refresh(
             conversation_id=conversation_id,
             idempotency_key=idempotency_key,
@@ -312,11 +400,13 @@ def create_conversation_blueprint(service, repository):
             }), 400
         try:
             req = ReplyCreateRequest(**data)
+            idempotency_key = _command_idempotency_key(
+                "reply", conversation_id
+            )
         except Exception as e:
             return jsonify({
                 "error": {"code": "invalid_request", "message": str(e)}
             }), 400
-        idempotency_key = str(uuid.uuid4())
         try:
             cmd = service.start_reply(
                 conversation_id=conversation_id,

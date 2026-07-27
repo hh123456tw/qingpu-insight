@@ -13,7 +13,8 @@ class EvidenceFact:
     label: str
     value: str
     source: str
-    observed_at: str | None
+    observed_at: str | None = None
+    kind: str = ""
 
 
 @dataclass(frozen=True)
@@ -59,11 +60,16 @@ class ConversationEvidenceBuilder:
                     raw = self._valuation_service(payload)
                     valuation = {
                         **raw,
-                        "model_version": self._model_version,
-                        "dataset_version": self._dataset_version,
+                        "model_version": raw.get(
+                            "model_version", self._model_version
+                        ),
+                        "dataset_version": raw.get(
+                            "dataset_version", self._dataset_version
+                        ),
                     }
-                except Exception as e:
-                    limitations.append(f"估值模型暫時無法使用: {e}")
+                    limitations.extend(raw.get("limitations", ()))
+                except Exception:
+                    limitations.append("估值模型暫時無法使用")
             else:
                 limitations.append(reason)
         else:
@@ -85,6 +91,7 @@ class ConversationEvidenceBuilder:
 
         if comparables:
             facts.extend(self._build_comparable_facts(comparables))
+            facts.extend(self._build_market_summary_facts(comparables))
 
         return ConversationEvidence(
             facts=tuple(facts),
@@ -92,6 +99,54 @@ class ConversationEvidenceBuilder:
             comparables=tuple(comparables),
             limitations=tuple(limitations),
         )
+
+    @staticmethod
+    def _build_market_summary_facts(
+        comparables: list[dict],
+    ) -> list[EvidenceFact]:
+        facts = [
+            EvidenceFact(
+                id="market.sample_size",
+                label="相似成交筆數",
+                value=str(len(comparables)),
+                source="實價登錄",
+            )
+        ]
+        unit_prices = sorted(
+            int(comp["unit_price_per_ping_twd"])
+            for comp in comparables
+            if comp.get("unit_price_per_ping_twd") is not None
+        )
+        if unit_prices:
+            middle = len(unit_prices) // 2
+            median = (
+                unit_prices[middle]
+                if len(unit_prices) % 2
+                else (unit_prices[middle - 1] + unit_prices[middle]) // 2
+            )
+            facts.append(
+                EvidenceFact(
+                    id="market.median_unit_price",
+                    label="相似成交單價中位數",
+                    value=f"{median:,} 元/坪",
+                    source="實價登錄",
+                )
+            )
+        dates = sorted(
+            str(comp["transaction_date"])
+            for comp in comparables
+            if comp.get("transaction_date")
+        )
+        if dates:
+            facts.append(
+                EvidenceFact(
+                    id="market.period",
+                    label="相似成交資料期間",
+                    value=f"{dates[0]} 至 {dates[-1]}",
+                    source="實價登錄",
+                )
+            )
+        return facts
 
     def _can_valuate(self, payload: dict) -> tuple[bool, str | None]:
         floor = payload.get("floor")

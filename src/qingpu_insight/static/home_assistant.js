@@ -10,10 +10,32 @@
     if (!url || typeof url !== "string") return false;
     try {
       var parsed = new URL(url);
-      return /^(sale|newhouse)\.591\.com\.tw$/.test(parsed.hostname);
+      if (parsed.protocol !== "https:" || parsed.username || parsed.password) return false;
+      if (parsed.port && parsed.port !== "443") return false;
+      if (parsed.hash) return false;
+      if (parsed.hostname === "591.to") {
+        return /^\/[A-Za-z0-9_-]{2,64}$/.test(parsed.pathname);
+      }
+      if (parsed.hostname === "sale.591.com.tw") {
+        return /^\/home\/house\/detail\/[1-9][0-9]*\/[1-9][0-9]*\.html$/.test(parsed.pathname);
+      }
+      if (parsed.hostname === "newhouse.591.com.tw") {
+        return /^\/[1-9][0-9]*(?:\/detail)?\/?$/.test(parsed.pathname);
+      }
+      return false;
     } catch (e) {
       return false;
     }
+  }
+
+  function commandKey() {
+    if (
+      typeof crypto !== "undefined"
+      && typeof crypto.randomUUID === "function"
+    ) {
+      return crypto.randomUUID();
+    }
+    return "cmd-" + Date.now() + "-" + Math.random().toString(16).slice(2);
   }
 
   function buildCreatePayload(provider, model) {
@@ -78,7 +100,11 @@
           if (pollCount < maxPolls) { setTimeout(check, 1000); }
           else { onError("匯入超時"); }
         })
-        .catch(function() { setTimeout(check, 1000); });
+        .catch(function() {
+          pollCount++;
+          if (pollCount < maxPolls) setTimeout(check, 1000);
+          else onError("匯入超時");
+        });
     }
     check();
   }
@@ -98,7 +124,7 @@
       var model = modelInput.value.trim();
 
       if (!validateUrl(url)) {
-        renderStatus("不支援的網址，僅接受 sale.591.com.tw 與 newhouse.591.com.tw 的詳細頁", true);
+        renderStatus("不支援的網址，僅接受 591 售屋、新建案詳細頁或 591.to 短網址", true);
         return;
       }
 
@@ -131,6 +157,7 @@
             headers: {
               "Content-Type": "application/json",
               "X-Qingpu-CSRF": csrf,
+              "Idempotency-Key": commandKey(),
             },
             body: JSON.stringify(buildListingPayload(url)),
           })

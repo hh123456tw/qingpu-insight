@@ -7,6 +7,7 @@ import pytest
 from qingpu_insight.conversation_listing_capture import (
     CapturedListing,
     DetailPageBrowser,
+    Safe591RedirectResolver,
 )
 from qingpu_insight.conversation_listing_parser import (
     ListingDetailParseError,
@@ -16,6 +17,7 @@ from qingpu_insight.conversation_listing_parser import (
 from qingpu_insight.conversation_urls import (
     Initial591Url,
     Unsupported591Url,
+    validate_final_591_url,
 )
 from qingpu_insight.listing_capture import ChromeConfig
 from tests.fake_browser import FakeBrowser
@@ -37,6 +39,43 @@ SALE_DETAIL_HTML = """\
 </body></html>"""
 
 SALE_URL = "https://sale.591.com.tw/home/house/detail/1/2.html"
+
+
+def _resolved_sale(_: Initial591Url):
+    return validate_final_591_url(SALE_URL)
+
+
+class _Response:
+    def __init__(self, status_code: int, location: str | None = None):
+        self.status_code = status_code
+        self.headers = {"Location": location} if location else {}
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _Session:
+    def __init__(self, responses: list[_Response]):
+        self.responses = list(responses)
+        self.requested: list[str] = []
+
+    def get(self, url: str, **_: object) -> _Response:
+        self.requested.append(url)
+        return self.responses.pop(0)
+
+
+def test_safe_redirect_resolver_validates_before_following() -> None:
+    session = _Session([
+        _Response(302, "https://10.0.0.1/private"),
+    ])
+    resolver = Safe591RedirectResolver(session=session)
+    initial = Initial591Url("https://591.to/abc", "short")
+
+    with pytest.raises(Unsupported591Url):
+        resolver.resolve(initial)
+
+    assert session.requested == ["https://591.to/abc"]
 
 
 class _RedirectFakeBrowser:
@@ -79,6 +118,7 @@ class TestDetailPageBrowser:
         browser = DetailPageBrowser(
             driver_factory=lambda: driver,
             parser=parse_listing_detail,
+            redirect_resolver=_resolved_sale,
         )
         initial = Initial591Url(request_url=SALE_URL, kind="direct")
         result = browser.capture(initial)
@@ -96,6 +136,7 @@ class TestDetailPageBrowser:
         browser = DetailPageBrowser(
             driver_factory=lambda: driver,
             parser=parse_listing_detail,
+            redirect_resolver=_resolved_sale,
         )
         initial = Initial591Url(
             request_url="https://591.to/abc123",
@@ -116,8 +157,12 @@ class TestDetailPageBrowser:
             ],
             page_source=SALE_DETAIL_HTML,
         )
+        def reject_redirect(_: Initial591Url):
+            raise RuntimeError("Exceeded maximum redirects (3)")
+
         browser = DetailPageBrowser(
             driver_factory=lambda: driver,
+            redirect_resolver=reject_redirect,
         )
         initial = Initial591Url(
             request_url="https://591.to/abc0",
@@ -125,15 +170,19 @@ class TestDetailPageBrowser:
         )
         with pytest.raises(RuntimeError):
             browser.capture(initial)
-        assert "quit" in driver.calls
+        assert driver.calls == []
 
     def test_redirect_to_private_ip(self) -> None:
         driver = _RedirectFakeBrowser(
             chain=["https://10.0.0.1/evil"],
             page_source=SALE_DETAIL_HTML,
         )
+        def reject_redirect(_: Initial591Url):
+            raise Unsupported591Url("IP literals are not allowed")
+
         browser = DetailPageBrowser(
             driver_factory=lambda: driver,
+            redirect_resolver=reject_redirect,
         )
         initial = Initial591Url(
             request_url="https://591.to/abc",
@@ -141,15 +190,19 @@ class TestDetailPageBrowser:
         )
         with pytest.raises(Unsupported591Url):
             browser.capture(initial)
-        assert "quit" in driver.calls
+        assert driver.calls == []
 
     def test_redirect_to_unrelated_domain(self) -> None:
         driver = _RedirectFakeBrowser(
             chain=["https://evil.com/phish"],
             page_source=SALE_DETAIL_HTML,
         )
+        def reject_redirect(_: Initial591Url):
+            raise Unsupported591Url("unsupported redirect target")
+
         browser = DetailPageBrowser(
             driver_factory=lambda: driver,
+            redirect_resolver=reject_redirect,
         )
         initial = Initial591Url(
             request_url="https://591.to/abc",
@@ -157,7 +210,7 @@ class TestDetailPageBrowser:
         )
         with pytest.raises(Unsupported591Url):
             browser.capture(initial)
-        assert "quit" in driver.calls
+        assert driver.calls == []
 
     def test_verification_page(self) -> None:
         verification_html = (
@@ -167,6 +220,7 @@ class TestDetailPageBrowser:
         driver = FakeBrowser(pages=[verification_html])
         browser = DetailPageBrowser(
             driver_factory=lambda: driver,
+            redirect_resolver=_resolved_sale,
         )
         initial = Initial591Url(request_url=SALE_URL, kind="direct")
         with pytest.raises(ListingPageVerificationRequired):
@@ -182,6 +236,7 @@ class TestDetailPageBrowser:
         browser = DetailPageBrowser(
             driver_factory=lambda: driver,
             parser=parse_listing_detail,
+            redirect_resolver=_resolved_sale,
         )
         initial = Initial591Url(request_url=SALE_URL, kind="direct")
         with pytest.raises(ListingDetailParseError):
@@ -192,6 +247,7 @@ class TestDetailPageBrowser:
         driver = FakeBrowser(pages=[SALE_DETAIL_HTML])
         browser = DetailPageBrowser(
             driver_factory=lambda: driver,
+            redirect_resolver=_resolved_sale,
         )
         initial = Initial591Url(request_url=SALE_URL, kind="direct")
         browser.capture(initial)
@@ -201,6 +257,7 @@ class TestDetailPageBrowser:
         driver = FakeBrowser(fail_on_next=True)
         browser = DetailPageBrowser(
             driver_factory=lambda: driver,
+            redirect_resolver=_resolved_sale,
         )
         initial = Initial591Url(request_url=SALE_URL, kind="direct")
         with pytest.raises(Exception, match="navigation_failed"):
@@ -216,6 +273,7 @@ class TestDetailPageBrowser:
         browser = DetailPageBrowser(
             driver_factory=lambda: driver,
             config=ChromeConfig(page_timeout_seconds=0),
+            redirect_resolver=_resolved_sale,
         )
         initial = Initial591Url(request_url=SALE_URL, kind="direct")
         with pytest.raises(TimeoutError):

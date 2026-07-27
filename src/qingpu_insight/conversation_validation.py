@@ -56,6 +56,27 @@ def _label_guidance(items: list[str]) -> list[str]:
     ]
 
 
+def _render_validated_answer(
+    claims: list[PropertyClaim],
+    guidance: list[str],
+) -> str:
+    sections: list[str] = []
+    if claims:
+        claim_lines = ["【物件證據】"]
+        claim_lines.extend(
+            f"- {claim.text}（依據：{', '.join(claim.fact_ids)}）"
+            for claim in claims
+        )
+        sections.append("\n".join(claim_lines))
+    if guidance:
+        sections.append("\n".join(guidance))
+    if not sections:
+        raise GroundingValidationError(
+            "Answer contains no validated claims or general guidance"
+        )
+    return "\n\n".join(sections)
+
+
 def _reject_unknown_fact_ids(
     draft: ChatAnswerDraft, available_fact_ids: set[str]
 ) -> None:
@@ -102,7 +123,9 @@ def validate_chat_answer(
     citations = _collect_citations(draft.property_claims)
     guidance = _label_guidance(draft.general_guidance)
     return ValidatedChatAnswer(
-        answer=draft.answer,
+        # Never display the provider's detached free-form answer. The visible
+        # response is composed only from claims whose fact IDs were validated.
+        answer=_render_validated_answer(draft.property_claims, guidance),
         citations=citations,
         evidence_revision=evidence_revision,
         general_guidance=guidance,

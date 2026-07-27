@@ -321,6 +321,34 @@ class MySQLConversationRepository:
             created_at=row["created_at"],
         )
 
+    def get_initial_listing(
+        self, conversation_id: str
+    ) -> ConversationListingRecord | None:
+        with self._connection() as connection:
+            try:
+                with connection.cursor(pymysql.cursors.DictCursor) as cursor:
+                    cursor.execute(
+                        """SELECT * FROM conversation_listings
+                           WHERE conversation_id = %s AND position = 1""",
+                        (conversation_id,),
+                    )
+                    row = cursor.fetchone()
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+        if row is None:
+            return None
+        return ConversationListingRecord(
+            id=str(row["id"]),
+            conversation_id=str(row["conversation_id"]),
+            position=int(row["position"]),
+            listing_type=row.get("listing_type"),
+            source_listing_id=row.get("source_listing_id"),
+            canonical_url=row.get("canonical_url"),
+            created_at=row["created_at"],
+        )
+
     def update_listing(
         self,
         listing_id: str,
@@ -340,6 +368,8 @@ class MySQLConversationRepository:
                            WHERE id = %s""",
                         (listing_type, source_listing_id, canonical_url, listing_id),
                     )
+                    if cursor.rowcount != 1:
+                        raise ValueError(f"listing not found: {listing_id}")
                 connection.commit()
             except Exception:
                 connection.rollback()
@@ -508,15 +538,43 @@ class MySQLConversationRepository:
         now = datetime.now(UTC)
         with self._connection() as connection:
             try:
-                with connection.cursor() as cursor:
+                with connection.cursor(pymysql.cursors.DictCursor) as cursor:
+                    cursor.execute(
+                        """SELECT ep.id
+                           FROM conversation_evidence_packs ep
+                           JOIN conversation_listing_snapshots cls
+                             ON cls.id = ep.conversation_listing_snapshot_id
+                           JOIN conversation_listings cl
+                             ON cl.id = cls.conversation_listing_id
+                           WHERE ep.conversation_id = %s
+                             AND ep.revision = %s
+                             AND cl.id = %s
+                             AND cl.conversation_id = %s
+                           FOR UPDATE""",
+                        (
+                            conversation_id,
+                            revision,
+                            listing_id,
+                            conversation_id,
+                        ),
+                    )
+                    if cursor.fetchone() is None:
+                        raise ValueError(
+                            "evidence revision does not belong to active listing"
+                        )
                     cursor.execute(
                         """UPDATE conversations
                            SET active_listing_id = %s,
                                active_evidence_revision = %s,
+                               status = 'ready',
                                updated_at = %s
                            WHERE id = %s""",
                         (listing_id, revision, now, conversation_id),
                     )
+                    if cursor.rowcount != 1:
+                        raise ValueError(
+                            f"conversation not found: {conversation_id}"
+                        )
                 connection.commit()
             except Exception:
                 connection.rollback()
@@ -614,6 +672,25 @@ class MySQLConversationRepository:
                     cursor.execute(
                         "UPDATE conversations SET status = %s, updated_at = %s WHERE id = %s",
                         (status, now, conversation_id),
+                    )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+
+    def set_title(self, *, conversation_id: str, title: str) -> None:
+        normalized = " ".join(title.split())[:160]
+        if not normalized:
+            return
+        now = datetime.now(UTC)
+        with self._connection() as connection:
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """UPDATE conversations
+                           SET title = %s, updated_at = %s
+                           WHERE id = %s""",
+                        (normalized, now, conversation_id),
                     )
                 connection.commit()
             except Exception:

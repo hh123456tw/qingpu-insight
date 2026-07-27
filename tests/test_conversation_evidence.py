@@ -208,6 +208,28 @@ def test_model_version_recorded() -> None:
     assert ev.valuation["dataset_version"] == "2025Q1"
 
 
+def test_runtime_valuation_versions_and_limitations_are_preserved() -> None:
+    snapshot = _make_snapshot()
+    builder = ConversationEvidenceBuilder(
+        valuation_service=lambda _payload: {
+            "point_estimate_twd": 15000000,
+            "low_estimate_twd": 13500000,
+            "high_estimate_twd": 16500000,
+            "confidence": "medium",
+            "model_version": "official-v3",
+            "dataset_version": "2026-06-13",
+            "limitations": ["捷運距離為推定值"],
+        },
+    )
+
+    ev = builder.build(snapshot=snapshot)
+
+    assert ev.valuation is not None
+    assert ev.valuation["model_version"] == "official-v3"
+    assert ev.valuation["dataset_version"] == "2026-06-13"
+    assert "捷運距離為推定值" in ev.limitations
+
+
 # ---------------------------------------------------------------------------
 # comparables limit
 # ---------------------------------------------------------------------------
