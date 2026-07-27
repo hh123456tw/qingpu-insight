@@ -41,6 +41,8 @@ document.addEventListener("DOMContentLoaded", async function () {
   var map = null;
   var markerLayer = null;
   var chart = null;
+  var lastController = null;
+  var mapMoveHandlerRegistered = false;
   function buildParams() {
     var params = new URLSearchParams();
     params.set("transaction_type", typeSelect.value);
@@ -68,13 +70,6 @@ document.addEventListener("DOMContentLoaded", async function () {
         maxZoom: 19,
       }).addTo(map);
       markerLayer = L.layerGroup().addTo(map);
-      var mapMoveTimer = null;
-      map.on("moveend", function () {
-        if (mapMoveTimer !== null) clearTimeout(mapMoveTimer);
-        mapMoveTimer = setTimeout(function () {
-          loadMap(buildParams(), currentMapView());
-        }, 200);
-      });
     }
   }
 
@@ -172,8 +167,10 @@ document.addEventListener("DOMContentLoaded", async function () {
   }
 
   function fetchData() {
+    if (lastController !== null) lastController.abort();
+    lastController = new AbortController();
     var params = buildParams();
-    var signal = new AbortController().signal;
+    var signal = lastController.signal;
 
     initMap();
     initChart();
@@ -223,6 +220,16 @@ document.addEventListener("DOMContentLoaded", async function () {
           buildTable(transactions.items || [])
         );
         loadMap(params, currentMapView());
+        if (map !== null && !mapMoveHandlerRegistered) {
+          var mapMoveTimer = null;
+          map.on("moveend", function () {
+            if (mapMoveTimer !== null) clearTimeout(mapMoveTimer);
+            mapMoveTimer = setTimeout(function () {
+              loadMap(buildParams(), currentMapView());
+            }, 200);
+          });
+          mapMoveHandlerRegistered = true;
+        }
       })
       .catch(function (err) {
         if (err.name === "AbortError") return;
