@@ -293,6 +293,59 @@ class MySQLConversationRepository:
         )
 
     # ------------------------------------------------------------------
+    # listing read / update
+    # ------------------------------------------------------------------
+
+    def get_listing(self, listing_id: str) -> ConversationListingRecord | None:
+        with self._connection() as connection:
+            try:
+                with connection.cursor(pymysql.cursors.DictCursor) as cursor:
+                    cursor.execute(
+                        "SELECT * FROM conversation_listings WHERE id = %s",
+                        (listing_id,),
+                    )
+                    row = cursor.fetchone()
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+        if row is None:
+            return None
+        return ConversationListingRecord(
+            id=str(row["id"]),
+            conversation_id=str(row["conversation_id"]),
+            position=int(row["position"]),
+            listing_type=row.get("listing_type"),
+            source_listing_id=row.get("source_listing_id"),
+            canonical_url=row.get("canonical_url"),
+            created_at=row["created_at"],
+        )
+
+    def update_listing(
+        self,
+        listing_id: str,
+        *,
+        listing_type: str | None,
+        source_listing_id: str | None,
+        canonical_url: str | None,
+    ) -> None:
+        with self._connection() as connection:
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """UPDATE conversation_listings
+                           SET listing_type = %s,
+                               source_listing_id = %s,
+                               canonical_url = %s
+                           WHERE id = %s""",
+                        (listing_type, source_listing_id, canonical_url, listing_id),
+                    )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+
+    # ------------------------------------------------------------------
     # snapshots
     # ------------------------------------------------------------------
 
