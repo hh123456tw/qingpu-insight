@@ -2654,10 +2654,8 @@ class TestModelAdminPage:
 
     def test_model_admin_page_contract(self, model_admin_client) -> None:
         response = model_admin_client.get("/admin/models")
-        assert response.status_code == 200
-        standalone_html = response.get_data(as_text=True)
-        assert "<title>模型觀測台 - 青埔智價</title>" in standalone_html
-        assert 'id="ma-official"' in standalone_html
+        assert response.status_code == 302
+        assert response.headers["Location"].endswith("/admin#models")
 
         response = model_admin_client.get("/admin")
         html = response.get_data(as_text=True)
@@ -2703,24 +2701,6 @@ class TestModelAdminPage:
         response = model_admin_client.get("/admin")
         html = response.get_data(as_text=True)
         assert "不會自動發布" in html
-
-    def test_models_admin_template_has_training_controls(self, model_admin_client) -> None:
-        from flask import render_template
-        app = model_admin_client.application
-        with app.test_request_context():
-            html = render_template("models_admin.html")
-        page = BeautifulSoup(html, "html.parser")
-        assert page.select_one("#ma-profile-quick").get("data-locked") == "true"
-        assert page.select_one("#ma-profile-balanced").get("data-locked") == "true"
-        assert page.select_one("#ma-profile-thorough").get("data-locked") == "true"
-        assert page.select_one("#ma-custom-enabled") is not None
-        assert page.select_one("#ma-custom-hgb-learning-rate") is not None
-        assert page.select_one("#ma-custom-hgb-max-iter") is not None
-        assert page.select_one("#ma-custom-rf-n-estimators") is not None
-        assert page.select_one("#ma-custom-half-life") is not None
-        assert page.select_one('link[href*="model_training.css"]') is not None
-        assert "不會自動發佈" in page.get_text()
-
 
 def test_admin_page_is_local_only(model_admin_client):
     assert model_admin_client.get(
