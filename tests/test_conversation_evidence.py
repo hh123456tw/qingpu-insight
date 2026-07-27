@@ -78,10 +78,10 @@ def test_sale_evidence() -> None:
     assert title_fact.observed_at == "2025-06-01 更新"
 
     price_fact = next(f for f in ev.facts if f.id == "listing.price")
-    assert price_fact.value == "18,800,000 元"
+    assert price_fact.value == "1,880 萬"
 
     unit_fact = next(f for f in ev.facts if f.id == "listing.unit_price")
-    assert unit_fact.value == "578,000 元/坪"
+    assert unit_fact.value == "57.8 萬／坪"
 
     location_fact = next(f for f in ev.facts if f.id == "listing.location")
     assert location_fact.value == "25.033611, 121.565"
@@ -327,6 +327,109 @@ def test_valuation_and_comparable_facts_present() -> None:
     assert ev.valuation["confidence"] == "medium"
 
     assert not any("相似成交案例不足 3 筆" in msg for msg in ev.limitations)
+
+
+# ---------------------------------------------------------------------------
+# asking-price comparison
+# ---------------------------------------------------------------------------
+
+
+def test_valuation_asking_price_comparison() -> None:
+    snapshot = _make_snapshot(
+        total_price_twd=22980000,
+        unit_price_twd_per_ping=587000,
+    )
+
+    def valuate(payload: dict) -> dict:
+        return {
+            "point_estimate_twd": 19890000,
+            "low_estimate_twd": 15380000,
+            "high_estimate_twd": 24410000,
+            "confidence": "low",
+        }
+
+    builder = ConversationEvidenceBuilder(valuation_service=valuate)
+    ev = builder.build(snapshot=snapshot)
+
+    facts = {fact.id: fact.value for fact in ev.facts}
+    assert facts["listing.price"] == "2,298 萬"
+    assert facts["listing.unit_price"] == "58.7 萬／坪"
+    assert facts["valuation.point"] == "1,989 萬"
+    assert facts["valuation.asking_gap_amount"] == "高於估值中心 309 萬"
+    assert facts["valuation.asking_gap_percent"] == "高於估值中心 15.5%"
+    assert facts["valuation.asking_position"] == "仍在合理區間內"
+    assert facts["valuation.confidence"] == "低"
+
+
+def test_asking_price_below_range() -> None:
+    snapshot = _make_snapshot(total_price_twd=12000000)
+
+    def valuate(payload: dict) -> dict:
+        return {
+            "point_estimate_twd": 19890000,
+            "low_estimate_twd": 15380000,
+            "high_estimate_twd": 24410000,
+            "confidence": "medium",
+        }
+
+    builder = ConversationEvidenceBuilder(valuation_service=valuate)
+    ev = builder.build(snapshot=snapshot)
+
+    facts = {fact.id: fact.value for fact in ev.facts}
+    assert "低於估值中心" in facts["valuation.asking_gap_amount"]
+    assert "低於估值中心" in facts["valuation.asking_gap_percent"]
+    assert facts["valuation.asking_position"] == "低於合理區間下限"
+
+
+def test_asking_price_above_range() -> None:
+    snapshot = _make_snapshot(total_price_twd=30000000)
+
+    def valuate(payload: dict) -> dict:
+        return {
+            "point_estimate_twd": 19890000,
+            "low_estimate_twd": 15380000,
+            "high_estimate_twd": 24410000,
+            "confidence": "high",
+        }
+
+    builder = ConversationEvidenceBuilder(valuation_service=valuate)
+    ev = builder.build(snapshot=snapshot)
+
+    facts = {fact.id: fact.value for fact in ev.facts}
+    assert "高於估值中心" in facts["valuation.asking_gap_amount"]
+    assert "高於估值中心" in facts["valuation.asking_gap_percent"]
+    assert facts["valuation.asking_position"] == "高於合理區間上限"
+
+
+def test_asking_price_equal_to_point() -> None:
+    snapshot = _make_snapshot(total_price_twd=19890000)
+
+    def valuate(payload: dict) -> dict:
+        return {
+            "point_estimate_twd": 19890000,
+            "low_estimate_twd": 15380000,
+            "high_estimate_twd": 24410000,
+            "confidence": "low",
+        }
+
+    builder = ConversationEvidenceBuilder(valuation_service=valuate)
+    ev = builder.build(snapshot=snapshot)
+
+    facts = {fact.id: fact.value for fact in ev.facts}
+    assert facts["valuation.asking_gap_amount"] == "與估值中心一致"
+    assert facts["valuation.asking_gap_percent"] == "與估值中心一致"
+    assert facts["valuation.asking_position"] == "仍在合理區間內"
+
+
+def test_asking_gap_missing_when_no_valuation() -> None:
+    snapshot = _make_snapshot(total_price_twd=22980000)
+    builder = ConversationEvidenceBuilder()
+    ev = builder.build(snapshot=snapshot)
+
+    fact_ids = {f.id for f in ev.facts}
+    assert "valuation.asking_gap_amount" not in fact_ids
+    assert "valuation.asking_gap_percent" not in fact_ids
+    assert "valuation.asking_position" not in fact_ids
 
 
 # ---------------------------------------------------------------------------

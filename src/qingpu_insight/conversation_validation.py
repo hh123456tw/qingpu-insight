@@ -64,7 +64,7 @@ def _render_validated_answer(
     if claims:
         claim_lines = ["【物件證據】"]
         claim_lines.extend(
-            f"- {claim.text}（依據：{', '.join(claim.fact_ids)}）"
+            f"- {claim.text}"
             for claim in claims
         )
         sections.append("\n".join(claim_lines))

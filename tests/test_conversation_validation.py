@@ -113,7 +113,8 @@ class TestValidateChatAnswer:
             evidence_revision=5,
         )
         assert isinstance(result, ValidatedChatAnswer)
-        assert "公園近（依據：f1, f2）" in result.answer
+        assert "公園近" in result.answer
+        assert "（依據：" not in result.answer
         assert "好物件。" not in result.answer
         assert result.citations == ["f1", "f2", "f3"]
         assert result.evidence_revision == 5
@@ -180,6 +181,21 @@ class TestValidateChatAnswer:
             validate_chat_answer(
                 draft, available_fact_ids=set(), evidence_revision=1
             )
+
+    def test_validated_answer_keeps_citations_out_of_visible_text(self) -> None:
+        draft = ChatAnswerDraft(
+            answer="test",
+            property_claims=[
+                PropertyClaim(text="開價總價 2,298 萬", fact_ids=["listing.price"])
+            ],
+        )
+        result = validate_chat_answer(
+            draft,
+            available_fact_ids={"listing.price"},
+            evidence_revision=1,
+        )
+        assert result.citations == ["listing.price"]
+        assert "依據：" not in result.answer
 
     def test_citation_ordering_and_deduplication(self) -> None:
         draft = ChatAnswerDraft(
@@ -266,7 +282,8 @@ class TestValidateChatAnswer:
             evidence_revision=1,
         )
         assert "沒有證據" not in result.answer
-        assert "listing.price" in result.answer
+        assert "listing.price" not in result.answer
+        assert "listing.price" in result.citations
 
     def test_no_extra_fields_on_validated_answer(self) -> None:
         draft = ChatAnswerDraft(

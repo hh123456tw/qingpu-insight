@@ -5,6 +5,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from qingpu_insight.conversation_repository import SnapshotRecord
+from qingpu_insight.presentation import (
+    format_total_price_wan,
+    format_unit_price_wan,
+    localize_confidence,
+)
 
 
 @dataclass(frozen=True)
@@ -86,6 +91,11 @@ class ConversationEvidenceBuilder:
 
         if valuation is not None:
             facts.extend(self._build_valuation_facts(valuation))
+            asking_price = payload.get("total_price_twd")
+            if asking_price is not None:
+                facts.extend(
+                    self._build_asking_gap_facts(valuation, asking_price)
+                )
         if len(comparables) > 10:
             comparables = comparables[:10]
 
@@ -128,7 +138,7 @@ class ConversationEvidenceBuilder:
                 EvidenceFact(
                     id="market.median_unit_price",
                     label="相似成交單價中位數",
-                    value=f"{median:,} 元/坪",
+                    value=format_unit_price_wan(median),
                     source="實價登錄",
                 )
             )
@@ -239,9 +249,9 @@ class ConversationEvidenceBuilder:
     @staticmethod
     def _format_value(key: str, value: Any) -> str:
         if key == "total_price_twd":
-            return f"{value:,} 元"
+            return format_total_price_wan(value)
         if key == "unit_price_twd_per_ping":
-            return f"{value:,} 元/坪"
+            return format_unit_price_wan(value)
         if key == "area_ping":
             return f"{value} 坪"
         if key == "age_years":
@@ -252,10 +262,10 @@ class ConversationEvidenceBuilder:
     def _build_valuation_facts(valuation: dict) -> list[EvidenceFact]:
         facts: list[EvidenceFact] = []
         mappings = [
-            ("point_estimate_twd", "valuation.point", "估值點", lambda v: f"{v:,} 元"),
-            ("low_estimate_twd", "valuation.low", "估值下限", lambda v: f"{v:,} 元"),
-            ("high_estimate_twd", "valuation.high", "估值上限", lambda v: f"{v:,} 元"),
-            ("confidence", "valuation.confidence", "信心度", str),
+            ("point_estimate_twd", "valuation.point", "估值點", format_total_price_wan),
+            ("low_estimate_twd", "valuation.low", "估值下限", format_total_price_wan),
+            ("high_estimate_twd", "valuation.high", "估值上限", format_total_price_wan),
+            ("confidence", "valuation.confidence", "信心度", localize_confidence),
         ]
         for key, fact_id, label, formatter in mappings:
             value = valuation.get(key)
@@ -272,6 +282,72 @@ class ConversationEvidenceBuilder:
         return facts
 
     @staticmethod
+    def _build_asking_gap_facts(
+        valuation: dict, asking_price_twd: int
+    ) -> list[EvidenceFact]:
+        facts: list[EvidenceFact] = []
+        point = valuation.get("point_estimate_twd")
+        low = valuation.get("low_estimate_twd")
+        high = valuation.get("high_estimate_twd")
+
+        if point is not None:
+            gap = asking_price_twd - point
+            gap_wan = gap / 10000
+
+            if gap > 0:
+                amount_text = f"高於估值中心 {int(gap_wan)} 萬"
+                pct = (gap / point) * 100
+                pct_text = f"高於估值中心 {pct:.1f}%"
+            elif gap < 0:
+                amount_text = f"低於估值中心 {int(abs(gap_wan))} 萬"
+                pct = (abs(gap) / point) * 100
+                pct_text = f"低於估值中心 {pct:.1f}%"
+            else:
+                amount_text = "與估值中心一致"
+                pct_text = "與估值中心一致"
+
+            facts.append(
+                EvidenceFact(
+                    id="valuation.asking_gap_amount",
+                    label="開價與估值差距",
+                    value=amount_text,
+                    source="估值模型",
+                    observed_at=None,
+                )
+            )
+            facts.append(
+                EvidenceFact(
+                    id="valuation.asking_gap_percent",
+                    label="開價與估值差距百分比",
+                    value=pct_text,
+                    source="估值模型",
+                    observed_at=None,
+                )
+            )
+
+        if low is not None and high is not None and point is not None:
+            if low <= asking_price_twd <= high:
+                position_text = "仍在合理區間內"
+            elif asking_price_twd > high:
+                position_text = "高於合理區間上限"
+            else:
+                position_text = "低於合理區間下限"
+        else:
+            position_text = "—"
+
+        facts.append(
+            EvidenceFact(
+                id="valuation.asking_position",
+                label="開價在估值區間的位置",
+                value=position_text,
+                source="估值模型",
+                observed_at=None,
+            )
+        )
+
+        return facts
+
+    @staticmethod
     def _build_comparable_facts(comparables: list[dict]) -> list[EvidenceFact]:
         facts: list[EvidenceFact] = []
         for comp in comparables:
@@ -279,12 +355,12 @@ class ConversationEvidenceBuilder:
             if rank is None:
                 continue
             mappings = [
-                ("price_twd", f"comparable.{rank}.price", "總價", lambda v: f"{v:,} 元"),
+                ("price_twd", f"comparable.{rank}.price", "總價", format_total_price_wan),
                 (
                     "unit_price_per_ping_twd",
                     f"comparable.{rank}.unit_price",
                     "單價",
-                    lambda v: f"{v:,} 元/坪",
+                    format_unit_price_wan,
                 ),
                 ("distance_m", f"comparable.{rank}.distance", "距離", lambda v: f"{v} 公尺"),
                 ("transaction_date", f"comparable.{rank}.date", "交易日期", str),

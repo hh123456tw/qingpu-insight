@@ -48,6 +48,31 @@ _FACT_3 = EvidenceFact(
     observed_at=_NOW,
 )
 
+_RULE_FACT_PRICE = EvidenceFact(
+    id="listing.price",
+    label="開價總價",
+    value="2,298 萬",
+    source="591",
+    kind="asking_price",
+    observed_at=_NOW,
+)
+
+_RULE_FACT_POINT = EvidenceFact(
+    id="valuation.point",
+    label="估值點",
+    value="1,989 萬",
+    source="估值模型",
+    observed_at=_NOW,
+)
+
+_RULE_FACT_POSITION = EvidenceFact(
+    id="valuation.asking_position",
+    label="開價在估值區間的位置",
+    value="仍在合理區間內",
+    source="估值模型",
+    observed_at=_NOW,
+)
+
 _VALID_DRAFT_DICT = {
     "answer": "這是個不錯的物件。",
     "property_claims": [
@@ -72,23 +97,22 @@ class TestRuleConversationProvider:
             rolling_summary=None,
             recent_messages=(),
             evidence_revision=1,
-            evidence_facts=(_FACT_1, _FACT_2),
+            evidence_facts=(_RULE_FACT_PRICE, _FACT_2),
             limitations=(),
         )
         provider = RuleConversationProvider()
         draft = provider.reply(model="rule", question="這個物件怎麼樣？", context=ctx)
 
         assert "這是物件證據摘要" in draft.answer
-        assert len(draft.property_claims) == 2
+        assert len(draft.property_claims) == 1
         assert any("開價總價" in c.text for c in draft.property_claims)
-        assert any("建物面積" in c.text for c in draft.property_claims)
 
     def test_rule_provider_ignores_question(self) -> None:
         ctx = ConversationContext(
             rolling_summary=None,
             recent_messages=(),
             evidence_revision=1,
-            evidence_facts=(_FACT_1,),
+            evidence_facts=(_RULE_FACT_PRICE,),
             limitations=(),
         )
         provider = RuleConversationProvider()
@@ -117,24 +141,26 @@ class TestRuleConversationProvider:
         provider = RuleConversationProvider()
         draft = provider.reply(model="rule", question="test", context=_EMPTY_CONTEXT)
 
-        assert len(draft.general_guidance) >= 2
-        assert all("一般建議" in g for g in draft.general_guidance)
+        assert len(draft.general_guidance) <= 1
+        if draft.general_guidance:
+            assert "一般建議" in draft.general_guidance[0]
 
     def test_rule_provider_claims_have_fact_ids(self) -> None:
         ctx = ConversationContext(
             rolling_summary=None,
             recent_messages=(),
             evidence_revision=1,
-            evidence_facts=(_FACT_1, _FACT_2),
+            evidence_facts=(_RULE_FACT_PRICE, _RULE_FACT_POINT),
             limitations=(),
         )
         provider = RuleConversationProvider()
         draft = provider.reply(model="rule", question="test", context=ctx)
 
+        assert len(draft.property_claims) >= 1
         for claim in draft.property_claims:
             assert len(claim.fact_ids) >= 1
 
-    def test_rule_provider_caps_claims_and_keeps_summary_facts(self) -> None:
+    def test_rule_provider_excludes_comparables_and_caps_at_six(self) -> None:
         comparable_facts = tuple(
             EvidenceFact(
                 id=f"comparable.{index}.price",
@@ -145,18 +171,11 @@ class TestRuleConversationProvider:
             )
             for index in range(40)
         )
-        market_summary = EvidenceFact(
-            id="market.sample_size",
-            label="相似成交筆數",
-            value="10",
-            source="實價登錄",
-            observed_at=_NOW,
-        )
         ctx = ConversationContext(
             rolling_summary=None,
             recent_messages=(),
             evidence_revision=1,
-            evidence_facts=comparable_facts + (_FACT_1, market_summary),
+            evidence_facts=comparable_facts + (_RULE_FACT_PRICE, _RULE_FACT_POINT, _RULE_FACT_POSITION),
             limitations=(),
         )
 
@@ -171,9 +190,11 @@ class TestRuleConversationProvider:
             for claim in draft.property_claims
             for fact_id in claim.fact_ids
         }
-        assert len(draft.property_claims) == 30
-        assert "f001" in cited_ids
-        assert "market.sample_size" in cited_ids
+        assert len(draft.property_claims) <= 6
+        assert "listing.price" in cited_ids
+        assert "valuation.point" in cited_ids
+        assert "valuation.asking_position" in cited_ids
+        assert not any(fid.startswith("comparable.") for fid in cited_ids)
 
     def test_rule_provider_accepts_shared_repair_hint_contract(self) -> None:
         provider = RuleConversationProvider()
@@ -186,6 +207,36 @@ class TestRuleConversationProvider:
         )
 
         assert "物件證據摘要" in draft.answer
+
+    def test_rule_summary_prioritizes_six_decision_facts(self) -> None:
+        facts = (
+            _RULE_FACT_PRICE,
+            EvidenceFact(id="listing.area", label="建物面積", value="32.5 坪", source="591", observed_at=_NOW),
+            EvidenceFact(id="listing.floor", label="樓層", value="12", source="591", observed_at=_NOW),
+            _RULE_FACT_POINT,
+            _RULE_FACT_POSITION,
+            EvidenceFact(id="valuation.low", label="估值下限", value="1,538 萬", source="估值模型", observed_at=_NOW),
+            EvidenceFact(id="valuation.high", label="估值上限", value="2,441 萬", source="估值模型", observed_at=_NOW),
+            EvidenceFact(id="valuation.confidence", label="信心度", value="低", source="估值模型", observed_at=_NOW),
+            EvidenceFact(id="valuation.asking_gap_percent", label="開價與估值差距百分比", value="高於估值中心 15.5%", source="估值模型", observed_at=_NOW),
+            EvidenceFact(id="market.sample_size", label="相似成交筆數", value="10", source="實價登錄", observed_at=_NOW),
+        )
+        ctx = ConversationContext(
+            rolling_summary=None,
+            recent_messages=(),
+            evidence_revision=1,
+            evidence_facts=facts,
+            limitations=(),
+        )
+        draft = RuleConversationProvider().reply(
+            model="rule", question="摘要", context=ctx,
+        )
+        assert len(draft.property_claims) <= 6
+        cited = {fid for claim in draft.property_claims for fid in claim.fact_ids}
+        assert "listing.price" in cited
+        assert "valuation.point" in cited
+        assert "valuation.asking_position" in cited
+        assert not any(fid.startswith("comparable.") for fid in cited)
 
 
 class TestOllamaConversationProvider:
