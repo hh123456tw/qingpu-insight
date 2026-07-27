@@ -417,9 +417,9 @@ class MySQLConversationRepository:
                             f" conversation {conversation_id}"
                         )
                     cursor.execute(
-                        """SELECT MAX(revision) AS rev
-                           FROM conversation_evidence_packs
-                           WHERE conversation_id = %s
+                        """SELECT MAX(ep.revision) AS rev
+                           FROM conversation_evidence_packs ep
+                           WHERE ep.conversation_id = %s
                            FOR UPDATE""",
                         (conversation_id,),
                     )
@@ -461,6 +461,34 @@ class MySQLConversationRepository:
     # ------------------------------------------------------------------
     # activate evidence
     # ------------------------------------------------------------------
+
+    def get_evidence_pack(self, conversation_id: str, revision: int) -> EvidencePackRecord | None:
+        with self._connection() as connection:
+            try:
+                with connection.cursor(pymysql.cursors.DictCursor) as cursor:
+                    cursor.execute(
+                        """SELECT * FROM conversation_evidence_packs
+                           WHERE conversation_id = %s AND revision = %s""",
+                        (conversation_id, revision),
+                    )
+                    row = cursor.fetchone()
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+        if row is None:
+            return None
+        return EvidencePackRecord(
+            id=str(row["id"]),
+            conversation_id=str(row["conversation_id"]),
+            conversation_listing_snapshot_id=str(row["conversation_listing_snapshot_id"]),
+            revision=int(row["revision"]),
+            generated_at=row["generated_at"],
+            facts=json.loads(row["facts"]) if isinstance(row["facts"], str) else row["facts"],
+            valuation=json.loads(row["valuation"]) if isinstance(row.get("valuation"), str) and row["valuation"] is not None else row.get("valuation"),
+            comparables=json.loads(row["comparables"]) if isinstance(row["comparables"], str) else row["comparables"],
+            limitations=json.loads(row["limitations"]) if isinstance(row["limitations"], str) else row["limitations"],
+        )
 
     def activate_evidence(
         self, *, conversation_id: str, listing_id: str, revision: int

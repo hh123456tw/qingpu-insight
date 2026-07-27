@@ -211,6 +211,135 @@ section > h2 {
   background: rgba(20, 125, 111, 0.04);
 }
 
+/* --- Assistant Starter --- */
+
+#assistant-starter {
+  background: var(--card);
+  border: 2px solid var(--accent);
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  text-align: center;
+}
+
+#assistant-starter h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+#assistant-starter .supported-urls {
+  margin: 0 0 1rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+#assistant-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: center;
+  max-width: 700px;
+  margin: 0 auto;
+}
+
+#assistant-form input[type="url"] {
+  flex: 3 1 280px;
+  min-width: 200px;
+  min-height: 44px;
+  font-size: 0.9rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+#assistant-form select,
+#assistant-form input[type="text"] {
+  flex: 0 1 auto;
+  min-width: 120px;
+  min-height: 44px;
+  font-size: 0.9rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+#assistant-form button {
+  min-height: 44px;
+  font-size: 1rem;
+  font-weight: 600;
+  padding: 0.5rem 1.5rem;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+#assistant-form button:hover {
+  opacity: 0.9;
+}
+
+#assistant-form button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+#assistant-form input:focus,
+#assistant-form select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+#assistant-status.status {
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+#assistant-status.status.error {
+  color: #c0392b;
+  font-weight: 600;
+}
+
+#recent-conversations {
+  margin-top: 0.75rem;
+}
+
+.recent-heading {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin: 0 0 0.25rem;
+}
+
+.recent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: center;
+}
+
+.recent-list a {
+  font-size: 0.85rem;
+  color: var(--accent);
+  text-decoration: none;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.recent-list a:hover {
+  background: var(--paper);
+}
+
 .method-note {
   margin-top: 1.5rem;
   font-size: 0.75rem;

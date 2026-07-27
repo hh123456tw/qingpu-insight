@@ -43,9 +43,23 @@ def _conversation_to_json(record: Any) -> dict[str, Any]:
         "status": record.status,
         "default_provider": record.default_provider,
         "default_model": record.default_model,
+        "active_listing_id": record.active_listing_id,
         "active_evidence_revision": record.active_evidence_revision,
         "created_at": record.created_at.isoformat(),
         "updated_at": record.updated_at.isoformat(),
+    }
+
+
+def _evidence_to_json(ev: Any) -> dict[str, Any]:
+    return {
+        "id": ev.id,
+        "conversation_id": ev.conversation_id,
+        "revision": ev.revision,
+        "generated_at": ev.generated_at.isoformat(),
+        "facts": ev.facts,
+        "valuation": ev.valuation,
+        "comparables": ev.comparables,
+        "limitations": ev.limitations,
     }
 
 
@@ -145,6 +159,31 @@ def create_conversation_blueprint(service, repository):
                 "error": {"code": "not_found", "message": "對話不存在。"}
             }), 404
         return jsonify(_conversation_to_json(record))
+
+    @bp.route("/api/conversations/<conversation_id>/evidence", methods=["GET"])
+    def get_evidence(conversation_id):
+        if repository is None:
+            return jsonify({
+                "error": {"code": "service_unavailable", "message": "對話功能未啟用。"}
+            }), 503
+        record = repository.get_conversation(conversation_id)
+        if record is None:
+            return jsonify({
+                "error": {"code": "not_found", "message": "對話不存在。"}
+            }), 404
+        if record.active_evidence_revision is None:
+            return jsonify({
+                "error": {"code": "no_evidence", "message": "尚無證據資料。"}
+            }), 404
+        evidence = repository.get_evidence_pack(
+            conversation_id=conversation_id,
+            revision=record.active_evidence_revision,
+        )
+        if evidence is None:
+            return jsonify({
+                "error": {"code": "not_found", "message": "證據資料不存在。"}
+            }), 404
+        return jsonify(_evidence_to_json(evidence))
 
     @bp.route("/api/conversations/<conversation_id>", methods=["DELETE"])
     def delete_conversation(conversation_id):
@@ -310,6 +349,10 @@ def create_conversation_blueprint(service, repository):
 
     @bp.route("/assistant/<conversation_id>")
     def assistant_page(conversation_id):
-        return render_template("assistant.html", conversation_id=conversation_id)
+        return render_template(
+            "assistant.html",
+            conversation_id=conversation_id,
+            csrf_token=session.get("_csrf_token", ""),
+        )
 
     return bp
