@@ -10,6 +10,7 @@
     "overview", "data", "listings", "models",
     "llm", "backups", "jobs", "diagnostics",
   ];
+  var DEFAULT_LISTING_TYPES = ["sale", "newhouse"];
 
   function normalizeSection(hash) {
     var section = hash.replace(/^#/, "");
@@ -69,14 +70,9 @@
 
   function runListingSequence(_a) {
     var types = _a.types, submit = _a.submit, waitForTerminal = _a.waitForTerminal, onTypeStart = _a.onTypeStart, onTypeDone = _a.onTypeDone;
-    var order = ["sale", "newhouse", "rental"];
-    var ordered = [];
-    for (var i = 0; i < order.length; i++) {
-      if (types.indexOf(order[i]) !== -1) ordered.push(order[i]);
-    }
-    for (var j = 0; j < types.length; j++) {
-      if (ordered.indexOf(types[j]) === -1) ordered.push(types[j]);
-    }
+    var ordered = DEFAULT_LISTING_TYPES.filter(function (type) {
+      return types.indexOf(type) !== -1;
+    });
     var results = {};
     function step(idx) {
       if (idx >= ordered.length) return Promise.resolve(results);
@@ -114,7 +110,7 @@
     var retryBtns = document.querySelectorAll(".listing-retry-btn");
     for (var j = 0; j < retryBtns.length; j++) { retryBtns[j].style.display = "none"; }
     runListingSequence({
-      types: ["sale", "newhouse", "rental"],
+      types: DEFAULT_LISTING_TYPES.slice(),
       maxPages: maxPages,
       submit: function (type) {
         return fetch("/api/admin/listing-updates", {
@@ -880,6 +876,7 @@
   }
 
   return {
+    DEFAULT_LISTING_TYPES: DEFAULT_LISTING_TYPES,
     SECTIONS: SECTIONS,
     normalizeSection: normalizeSection,
     overviewView: overviewView,

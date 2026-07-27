@@ -2404,6 +2404,17 @@ def test_admin_page_is_local_only(model_admin_client):
     ).status_code == 403
 
 
+def test_admin_listing_controls_exclude_rental(
+    model_admin_client: FlaskClient,
+) -> None:
+    html = model_admin_client.get("/admin").get_data(as_text=True)
+    page = BeautifulSoup(html, "html.parser")
+    types = [item.get("data-type") for item in page.select(".listing-status-item")]
+    assert types == ["sale", "newhouse"]
+    assert page.select_one("#ls-status-rental") is None
+    assert page.select_one("#ls-run-all-btn").get_text(strip=True) == "更新出售與新建案"
+
+
 def test_admin_page_has_eight_classified_sections(model_admin_client):
     
 

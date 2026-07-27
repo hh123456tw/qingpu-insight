@@ -50,10 +50,12 @@ assert.deepEqual(admin.buildReleasePreviewPayload("rollback", "presale", "v1"), 
 assert.equal(admin.canConfirmDangerousAction("abc", "abc"), true);
 assert.equal(admin.canConfirmDangerousAction("abc", "def"), false);
 
-async function testListingSequenceKeepsTypesIndependent() {
+assert.deepEqual(admin.DEFAULT_LISTING_TYPES, ["sale", "newhouse"]);
+
+async function testListingSequenceUsesOnlyWebListingTypes() {
   var submitted = [];
   var result = await admin.runListingSequence({
-    types: ["sale", "newhouse", "rental"],
+    types: admin.DEFAULT_LISTING_TYPES,
     maxPages: 10,
     submit: async function (type) {
       submitted.push(type);
@@ -67,13 +69,13 @@ async function testListingSequenceKeepsTypesIndependent() {
     onTypeStart: function () {},
     onTypeDone: function () {},
   });
-  assert.deepEqual(submitted, ["sale", "newhouse", "rental"]);
+  assert.deepEqual(submitted, ["sale", "newhouse"]);
   assert.equal(result.sale.status, "succeeded");
   assert.equal(result.newhouse.status, "failed");
-  assert.equal(result.rental.status, "succeeded");
+  assert.equal(Object.hasOwn(result, "rental"), false);
 }
 
-testListingSequenceKeepsTypesIndependent().then(function () {
+testListingSequenceUsesOnlyWebListingTypes().then(function () {
   process.stdout.write("admin contract passed\n");
 }).catch(function (err) {
   console.error(err);

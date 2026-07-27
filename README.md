@@ -44,7 +44,7 @@ python -m qingpu_insight.web
 |------|-----|------|
 | 總覽 | `#admin-overview` | 系統就緒狀態、待辦事項 |
 | 資料 | `#admin-data` | 一鍵資料更新（指定季度範圍，可選檢查點） |
-| 刊登 | `#admin-listings` | 591 一鍵更新（中古屋→預售屋→租屋，獨立順序執行） |
+| 刊登 | `#admin-listings` | 591 一鍵更新（中古屋→預售屋，固定順序執行） |
 | 模型 | `#admin-models` | 模型訓練只建立候選，獨立發布／回滾 |
 | LLM | `#admin-llm` | Rule／Ollama／Gemini 設定與 smoke test；LLM 固定案例 benchmark |
 | 備份 | `#admin-backups` | 備份建立、隔離還原演練、正式資料庫還原（保留 control table） |
@@ -63,7 +63,7 @@ python -m qingpu_insight.web
 指定季度範圍（如 `110S3`～`115S2`），可選從預設 `acquire`、`analyse`、`market_build` 或 `mysql_publish` 檢查點繼續。背景依序執行：下載官方資料 → 地理編碼 → 建立市場資料集 → 發布至 MySQL。
 
 **591 一鍵更新**  
-三類（中古屋、預售屋、租屋）獨立順序執行。每類完成才進入下一類，失敗不影響其他類，可個別重試。
+Web 一鍵更新固定依序執行 591 中古屋出售與預售新建案（sale → newhouse）。租屋不在本專題的 Web 操作主線；既有租屋資料與明確 CLI 相容入口不會被刪除。
 
 **模型訓練**  
 選擇 `resale`／`presale` 啟動訓練。結果寫入 `artifacts/candidates/<run_id>/`，**不會自動發布**。需透過發布預覽流程（輸入確認文字）手動發布，或選擇版本回滾。
@@ -483,7 +483,7 @@ POST /api/admin/listing-updates
 Content-Type: application/json
 X-Qingpu-CSRF: <current-session-token>
 
-{"types":["sale","newhouse","rental"],"max_pages":1,"trigger":"manual"}
+{"types":["sale","newhouse"],"max_pages":1,"trigger":"manual"}
 ```
 
 查詢 API 為 `GET /api/jobs/<uuid>` 與 `GET /api/jobs?limit=<1..100>`。回應只包含
@@ -493,7 +493,7 @@ code/message；不包含 DB URL、SQL、traceback、HTML、電話或內部 repos
 
 ### 發布、重試與復原語義
 
-- `sale`、`newhouse`、`rental` 先全部 preparation 成功且每類至少一筆，才產生一個 immutable artifact；
+- `sale` 與 `newhouse` 先全部 preparation 成功且每類至少一筆，才產生一個 immutable artifact；
   stage 及 publish 各一次。artifact hash/count/schema、任一類完整性、runtime row/event 或 pointer update
   失敗，都 rollback 並保留上一個 published dataset。
 - exact active request 使用同一 idempotency key：回既有 run 並監看，不重複 enqueue、capture 或 publish。
