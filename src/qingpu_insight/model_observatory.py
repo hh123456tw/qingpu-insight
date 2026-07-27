@@ -212,6 +212,9 @@ class ModelObservatory:
                 "results": [
                     r.model_dump(mode="json") for r in manifest.results
                 ],
+                "tuning_plan_version": manifest.tuning_plan_version,
+                "profiles": [profile.model_dump(mode="json") for profile in manifest.profiles],
+                "legacy_tuning_record": manifest.schema_version < 3,
             }
 
             markets_info: dict[str, dict[str, Any]] = {}

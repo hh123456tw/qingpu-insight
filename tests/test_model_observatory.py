@@ -12,7 +12,9 @@ from qingpu_insight.model_artifacts import (
     CandidateArtifactStore,
     DataSnapshot,
     MarketTrainingResult,
+    ProfileTrainingResult,
     TrainingManifest,
+    TrainingProfileSnapshot,
     sha256_file,
 )
 from qingpu_insight.model_observatory import ModelObservatory
@@ -376,3 +378,55 @@ class TestModelObservatoryStatus:
             assert "publishable" in result["markets"][m]
             assert "release_blockers" in result["markets"][m]
             assert "current_official_version_id" in result["markets"][m]
+
+    def test_get_run_includes_schema_v3_tuning_fields(self, tmp_path: Path) -> None:
+        profile = TrainingProfileSnapshot(
+            name="quick",
+            source="preset",
+            hgb_learning_rate=0.08,
+            hgb_max_iter=180,
+            rf_n_estimators=160,
+            recency_half_life_months=48,
+        )
+        manifest = manifest_fixture()
+        result_entry = manifest.results[0].model_copy(update={
+            "selected_profile": "quick",
+            "profile_results": [
+                ProfileTrainingResult(
+                    profile_name="quick",
+                    parameters={"hgb_learning_rate": 0.08, "hgb_max_iter": 180},
+                    selection_metrics={"ridge": {"overall": {"mae": 50_000}}},
+                    candidate_errors={},
+                )
+            ],
+            "test_coverage": 0.9,
+            "average_interval_width_twd_per_ping": 120_000,
+        })
+        v3_manifest = manifest.model_copy(update={
+            "schema_version": 3,
+            "tuning_plan_version": 1,
+            "profiles": [profile],
+            "results": [result_entry],
+        })
+        observatory = observatory_fixture(
+            tmp_path, candidate_runs=[v3_manifest]
+        )
+        result = observatory.get_run(str(v3_manifest.run_id))
+        assert result is not None
+        m = result["manifest"]
+        assert m["tuning_plan_version"] == 1
+        assert len(m["profiles"]) == 1
+        assert m["profiles"][0]["name"] == "quick"
+        assert m["legacy_tuning_record"] is False
+
+    def test_get_run_marks_v1_as_legacy_tuning_record(self, tmp_path: Path) -> None:
+        manifest = manifest_fixture()
+        observatory = observatory_fixture(
+            tmp_path, candidate_runs=[manifest]
+        )
+        result = observatory.get_run(str(manifest.run_id))
+        assert result is not None
+        m = result["manifest"]
+        assert m["legacy_tuning_record"] is True
+        assert m["tuning_plan_version"] is None
+        assert m["profiles"] == []

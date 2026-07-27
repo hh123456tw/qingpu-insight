@@ -12,7 +12,9 @@ from qingpu_insight.model_artifacts import (
     CandidateArtifactStore,
     DataSnapshot,
     MarketTrainingResult,
+    ProfileTrainingResult,
     TrainingManifest,
+    TrainingProfileSnapshot,
     sha256_file,
 )
 from qingpu_insight.valuation import ValuationBundle
@@ -155,6 +157,57 @@ class TestManifestHelpers:
         )
         assert manifest.schema_version == 1
         assert isinstance(manifest.run_id, UUID)
+
+        loaded = TrainingManifest.model_validate_json(manifest.model_dump_json())
+        assert loaded.tuning_plan_version is None
+        assert loaded.profiles == []
+        assert loaded.results[0].selected_profile is None
+        assert loaded.results[0].profile_results == []
+        assert loaded.results[0].test_coverage is None
+
+    def test_schema_v3_round_trips_tuning_evidence(self) -> None:
+        h = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        quick = TrainingProfileSnapshot(
+            name="quick",
+            source="preset",
+            hgb_learning_rate=0.08,
+            hgb_max_iter=180,
+            rf_n_estimators=160,
+            recency_half_life_months=48,
+        )
+        manifest_v1 = manifest_fixture(
+            run_id="00000000-0000-4000-8000-000000000001",
+            artifact_hash=h,
+            report_hash=h,
+        )
+        result = manifest_v1.results[0].model_copy(update={
+            "selected_profile": "quick",
+            "profile_results": [
+                ProfileTrainingResult(
+                    profile_name="quick",
+                    parameters={
+                        "hgb_learning_rate": 0.08,
+                        "hgb_max_iter": 180,
+                        "rf_n_estimators": 160,
+                        "recency_half_life_months": 48,
+                    },
+                    selection_metrics={"ridge": {"overall": {"mae": 50_000}}},
+                    candidate_errors={},
+                )
+            ],
+            "test_coverage": 0.9,
+            "average_interval_width_twd_per_ping": 120_000,
+        })
+        manifest = manifest_v1.model_copy(update={
+            "schema_version": 3,
+            "tuning_plan_version": 1,
+            "profiles": [quick],
+            "results": [result],
+        })
+        loaded = TrainingManifest.model_validate_json(manifest.model_dump_json())
+        assert loaded.schema_version == 3
+        assert loaded.results[0].selected_profile == "quick"
+        assert loaded.results[0].test_coverage == 0.9
 
     def test_sha256_file(self, tmp_path: Path) -> None:
         f = tmp_path / "test.bin"

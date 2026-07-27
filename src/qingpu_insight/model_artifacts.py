@@ -35,6 +35,24 @@ class DataSnapshot(BaseModel):
     max_date: date
 
 
+class TrainingProfileSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: Literal["quick", "balanced", "thorough", "custom"]
+    source: Literal["preset", "custom"]
+    hgb_learning_rate: float = Field(ge=0.01, le=0.20)
+    hgb_max_iter: int = Field(ge=100, le=1000)
+    rf_n_estimators: int = Field(ge=100, le=1000)
+    recency_half_life_months: int | None = Field(default=None, ge=12, le=84)
+
+
+class ProfileTrainingResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    profile_name: Literal["quick", "balanced", "thorough", "custom"]
+    parameters: dict[str, int | float | None]
+    selection_metrics: dict[str, dict[str, object]]
+    candidate_errors: dict[str, str] = Field(default_factory=dict)
+
+
 class MarketTrainingResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     market: Literal["resale", "presale"]
@@ -47,11 +65,15 @@ class MarketTrainingResult(BaseModel):
     artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     report_files: dict[str, str]
     report_sha256: dict[str, str]
+    selected_profile: Literal["quick", "balanced", "thorough", "custom"] | None = None
+    profile_results: list[ProfileTrainingResult] = Field(default_factory=list)
+    test_coverage: float | None = Field(default=None, ge=0.0, le=1.0)
+    average_interval_width_twd_per_ping: float | None = Field(default=None, ge=0.0)
 
 
 class TrainingManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2, 3] = 1
     run_id: UUID
     created_at: datetime
     markets: list[Literal["resale", "presale"]]
@@ -60,6 +82,8 @@ class TrainingManifest(BaseModel):
     runtime_versions: dict[str, str]
     data_snapshot: DataSnapshot
     results: list[MarketTrainingResult]
+    tuning_plan_version: int | None = Field(default=None, ge=1)
+    profiles: list[TrainingProfileSnapshot] = Field(default_factory=list)
 
 
 class CandidateArtifactStore:
