@@ -3,6 +3,7 @@ import {
   createMapLoader,
   mapStatusText,
   markerRadius,
+  transactionItemsToMapPayload,
   withMapView,
   withRecentLimit,
 } from "../../src/qingpu_insight/static/market_map.mjs";
@@ -42,36 +43,103 @@ assert.equal(
 assert.equal(markerRadius(1), 5);
 assert.equal(markerRadius(10000), 16);
 
-let requestedUrl = "";
-let rendered = null;
-const loader = createMapLoader({
-  fetchImpl: async (url) => {
-    requestedUrl = url;
+// --- transactionItemsToMapPayload conversion ---
+
+const converted = transactionItemsToMapPayload([
+  {
+    id: "valid",
+    latitude: 25.01,
+    longitude: 121.21,
+    total_price: 1800,
+    transaction_date: "2026-07-01",
+  },
+  {id: "nan", latitude: "not-a-number", longitude: 121.22},
+  {id: "missing", latitude: null, longitude: null},
+]);
+assert.equal(converted.mode, "compatibility");
+assert.equal(converted.total_records, 3);
+assert.equal(converted.located_records, 1);
+assert.equal(converted.unlocated_records, 2);
+assert.equal(converted.group_count, 1);
+assert.equal(converted.items[0].record_count, 1);
+
+// --- 404 fallback compatibility path ---
+
+const calls = [];
+let compatibilityPayload = null;
+const fallbackLoader = createMapLoader({
+  fetchImpl: async function (url) {
+    calls.push(url);
+    if (calls.length === 1) {
+      return {ok: false, status: 404};
+    }
     return {
       ok: true,
+      status: 200,
       json: async () => ({
-        total_records: 2,
-        located_records: 2,
-        unlocated_records: 0,
-        group_count: 1,
-        items: [],
+        items: [{
+          id: "tx-1",
+          latitude: 25.01,
+          longitude: 121.21,
+          total_price: 1800,
+          transaction_date: "2026-07-01",
+        }],
       }),
     };
   },
-  render: (payload) => {
-    rendered = payload;
+  render: (payload) => { compatibilityPayload = payload; },
+  showError: () => assert.fail("404 compatibility path must render"),
+});
+await fallbackLoader(base, {
+  zoom: 14, south: 24.9, west: 121.0, north: 25.1, east: 121.3,
+});
+assert.match(calls[0], /^\/api\/market\/map-points\?/);
+assert.equal(
+  calls[1],
+  "/api/transactions?transaction_type=resale&station=A17&station=A18&limit=100"
+);
+assert.equal(compatibilityPayload.mode, "compatibility");
+assert.match(mapStatusText(compatibilityPayload), /^相容模式：/);
+assert.match(mapStatusText(compatibilityPayload), /最近 100 筆/);
+assert.match(mapStatusText(compatibilityPayload), /重新啟動 Web/);
+
+// --- Non-fallback error paths ---
+
+for (const response of [
+  {ok: false, status: 500},
+  {ok: true, status: 200, json: async () => ({items: "invalid"})},
+]) {
+  let fetchCount = 0;
+  let error = "";
+  const loaderUnderTest = createMapLoader({
+    fetchImpl: async () => { fetchCount += 1; return response; },
+    render: () => assert.fail("invalid primary response must not render"),
+    showError: (message) => { error = message; },
+  });
+  assert.equal(await loaderUnderTest(base, {
+    zoom: 14, south: 24.9, west: 121.0, north: 25.1, east: 121.3,
+  }), null);
+  assert.equal(fetchCount, 1);
+  assert.match(error, /^地圖資料載入失敗：/);
+}
+
+// --- AbortError ---
+
+let abortCalled = false;
+const abortLoader = createMapLoader({
+  fetchImpl: async () => {
+    abortCalled = true;
+    const err = new Error("simulated abort");
+    err.name = "AbortError";
+    throw err;
   },
-  showError: () => assert.fail("successful request must not show an error"),
+  render: () => assert.fail("abort must not render"),
+  showError: () => assert.fail("abort must not show error"),
 });
-await loader(base, {
-  zoom: 14,
-  south: 24.9,
-  west: 121.0,
-  north: 25.1,
-  east: 121.3,
-});
-assert.match(requestedUrl, /^\/api\/market\/map-points\?/);
-assert.equal(rendered.group_count, 1);
+assert.equal(await abortLoader(base, {
+  zoom: 14, south: 24.9, west: 121.0, north: 25.1, east: 121.3,
+}), null);
+assert.equal(abortCalled, true);
 
 let errorMessage = "";
 let renderCount = 0;

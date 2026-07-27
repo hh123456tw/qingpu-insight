@@ -277,6 +277,7 @@ document.addEventListener("DOMContentLoaded", async function () {
     fetchImpl: fetch,
     render: renderMap,
     showError: function (message) {
+      markerLayer.clearLayers();
       mapStatus.textContent = message;
     },
   });
