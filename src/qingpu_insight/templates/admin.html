@@ -7,6 +7,7 @@
 <title>管理中心 - 青埔智價</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='admin.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='models_admin.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='model_training.css') }}">
 </head>
 <body class="admin-page">
   <aside class="admin-sidebar">
@@ -85,6 +86,7 @@
             <option value="all">全部</option>
           </select>
         </label>
+        {% include "_model_training_controls.html" %}
         <button type="submit" id="ma-submit-btn" class="mutation-btn admin-btn">開始訓練</button>
         <span id="ma-submit-notice" class="ma-reason"></span>
       </form>
@@ -655,13 +657,23 @@
         button.disabled = true;
         notice.textContent = "正在建立訓練工作…";
         var market = document.getElementById("ma-market-select").value;
+        var includeCustom = document.getElementById("ma-custom-enabled") && document.getElementById("ma-custom-enabled").checked;
+        var customValues = null;
+        if (includeCustom) {
+          customValues = {
+            hgb_learning_rate: document.getElementById("ma-custom-hgb-learning-rate").value,
+            hgb_max_iter: document.getElementById("ma-custom-hgb-max-iter").value,
+            rf_n_estimators: document.getElementById("ma-custom-rf-n-estimators").value,
+            recency_half_life_months: document.getElementById("ma-custom-half-life").value,
+          };
+        }
         fetch("/api/admin/model-training-runs", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             "X-Qingpu-CSRF": getCSRF(),
           },
-          body: JSON.stringify(ma.buildTrainingPayload(market)),
+          body: JSON.stringify(ma.buildTrainingPayload(market, includeCustom, customValues)),
         })
           .then(function (response) {
             return response.json().then(function (data) {
@@ -692,6 +704,29 @@
           });
       }
 
+      function updateTrainingSummary() {
+        var sel = document.getElementById("ma-market-select");
+        var cb = document.getElementById("ma-custom-enabled");
+        var summary = document.getElementById("ma-submit-summary");
+        if (summary && sel) {
+          summary.textContent = ma.trainingSubmitSummary(sel.value, cb ? cb.checked : false);
+        }
+      }
+
+      function updateHalfLifeState() {
+        var sel = document.getElementById("ma-market-select");
+        var halfLife = document.getElementById("ma-custom-half-life");
+        if (!halfLife || !sel) return;
+        if (sel.value === "presale") {
+          halfLife.disabled = true;
+          halfLife.value = "";
+        } else {
+          halfLife.disabled = false;
+          if (!halfLife.value) halfLife.value = "48";
+        }
+        updateTrainingSummary();
+      }
+
       document.addEventListener("DOMContentLoaded", function () {
         loadModelStatus();
         loadTrainingRuns();
@@ -703,6 +738,10 @@
           pendingPreview = null;
           document.getElementById("mr-preview-dialog").style.display = "none";
         });
+        document.getElementById("ma-market-select").addEventListener("change", updateHalfLifeState);
+        var customCb = document.getElementById("ma-custom-enabled");
+        if (customCb) customCb.addEventListener("change", updateTrainingSummary);
+        updateHalfLifeState();
       });
     })();
   </script>

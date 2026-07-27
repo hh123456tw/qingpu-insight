@@ -1,0 +1,141 @@
+/* Profile cards */
+.ma-profiles {
+  display: flex;
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+  flex-wrap: wrap;
+}
+.ma-profile-card {
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+  flex: 1 1 160px;
+  background: #f9f9f9;
+}
+.ma-profile-card[data-locked="true"] {
+  cursor: default;
+  opacity: 0.85;
+}
+.ma-profile-card h3 {
+  margin: 0 0 0.35rem;
+  font-size: 0.95rem;
+}
+.ma-profile-card dl {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #555;
+}
+.ma-profile-card dt {
+  font-weight: 600;
+  margin-top: 0.2rem;
+}
+.ma-profile-card dd {
+  margin: 0 0 0.1rem 0.5rem;
+  color: #333;
+}
+
+/* Custom tuning section */
+.ma-custom-section {
+  margin: 0.75rem 0;
+}
+.ma-custom-section details {
+  margin-top: 0.35rem;
+}
+.ma-custom-section summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #0066cc;
+}
+.ma-custom-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+.ma-custom-grid label {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.85rem;
+  color: #444;
+}
+.ma-custom-grid input {
+  margin-top: 0.2rem;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid #bbb;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  width: 100%;
+  box-sizing: border-box;
+}
+.ma-custom-grid input:focus {
+  border-color: #0066cc;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(0, 102, 204, 0.15);
+}
+
+/* Field errors */
+.ma-custom-grid input.ma-field-error {
+  border-color: #cc0000;
+  background: #fff5f5;
+}
+
+/* Summary strip */
+.ma-submit-summary {
+  font-size: 0.85rem;
+  color: #666;
+  margin: 0.5rem 0;
+  min-height: 1.2em;
+}
+
+/* Metric cards */
+.ma-metric-cards {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin: 0.5rem 0;
+}
+.ma-metric-card {
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 0.4rem 0.6rem;
+  background: #fff;
+  text-align: center;
+  flex: 0 0 auto;
+  min-width: 100px;
+}
+.ma-metric-card .ma-metric-value {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #222;
+}
+.ma-metric-card .ma-metric-label {
+  font-size: 0.75rem;
+  color: #888;
+  margin-top: 0.15rem;
+}
+
+/* Warning states */
+.ma-warning {
+  background: #fff3cd;
+  border: 1px solid #ffc107;
+  border-radius: 4px;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.85rem;
+  color: #856404;
+  margin: 0.35rem 0;
+}
+.ma-warning strong {
+  font-weight: 700;
+}
+
+/* Disclosure spacing for profile comparison */
+.ma-disclosure {
+  margin: 0.5rem 0;
+}
+.ma-disclosure summary {
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #0066cc;
+}

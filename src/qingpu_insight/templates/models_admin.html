@@ -6,6 +6,7 @@
 <meta name="csrf-token" content="{{ csrf_token }}">
 <title>模型觀測台 - 青埔智價</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='models_admin.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='model_training.css') }}">
 </head>
 <body class="ma-page">
   <a class="ma-back" href="/">&larr; 回首頁</a>
@@ -32,6 +33,7 @@
           <option value="all">全部</option>
         </select>
       </label>
+      {% include "_model_training_controls.html" %}
       <button type="submit" id="ma-submit-btn">開始訓練</button>
       <span id="ma-submit-notice" class="ma-reason"></span>
     </form>
@@ -440,13 +442,46 @@
       return controller;
     }
 
+    function updateTrainingSummary() {
+      var sel = document.getElementById("ma-market-select");
+      var cb = document.getElementById("ma-custom-enabled");
+      var summary = document.getElementById("ma-submit-summary");
+      if (summary && sel) {
+        summary.textContent = ma.trainingSubmitSummary(sel.value, cb ? cb.checked : false);
+      }
+    }
+
+    function updateHalfLifeState() {
+      var sel = document.getElementById("ma-market-select");
+      var halfLife = document.getElementById("ma-custom-half-life");
+      if (!halfLife || !sel) return;
+      if (sel.value === "presale") {
+        halfLife.disabled = true;
+        halfLife.value = "";
+      } else {
+        halfLife.disabled = false;
+        if (!halfLife.value) halfLife.value = "48";
+      }
+      updateTrainingSummary();
+    }
+
     document.getElementById("ma-train-form").addEventListener("submit", function (e) {
       e.preventDefault();
       var btn = document.getElementById("ma-submit-btn");
       if (btn.disabled) return;
       btn.disabled = true;
       var select = document.getElementById("ma-market-select");
-      var payload = ma.buildTrainingPayload(select.value);
+      var includeCustom = document.getElementById("ma-custom-enabled") && document.getElementById("ma-custom-enabled").checked;
+      var customValues = null;
+      if (includeCustom) {
+        customValues = {
+          hgb_learning_rate: document.getElementById("ma-custom-hgb-learning-rate").value,
+          hgb_max_iter: document.getElementById("ma-custom-hgb-max-iter").value,
+          rf_n_estimators: document.getElementById("ma-custom-rf-n-estimators").value,
+          recency_half_life_months: document.getElementById("ma-custom-half-life").value,
+        };
+      }
+      var payload = ma.buildTrainingPayload(select.value, includeCustom, customValues);
       var token = ma.csrfToken();
       fetch("/api/admin/model-training-runs", {
         method: "POST",
@@ -466,6 +501,11 @@
           btn.disabled = false;
         });
     });
+
+    document.getElementById("ma-market-select").addEventListener("change", updateHalfLifeState);
+    var customCb = document.getElementById("ma-custom-enabled");
+    if (customCb) customCb.addEventListener("change", updateTrainingSummary);
+    updateHalfLifeState();
 
     loadStatus();
     loadHistory();

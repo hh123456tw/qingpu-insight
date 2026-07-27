@@ -1,0 +1,56 @@
+{% if not tuning_disabled|default(false) %}
+<div id="ma-tuning-controls">
+  <div class="ma-profiles">
+    <div class="ma-profile-card" id="ma-profile-quick" data-locked="true">
+      <h3>快速 (quick)</h3>
+      <dl>
+        <dt>HGB 學習率</dt><dd>0.08</dd>
+        <dt>HGB 迭代</dt><dd>180</dd>
+        <dt>RF 樹數</dt><dd>160</dd>
+        <dt>近期權重半衰期</dt><dd>48 個月</dd>
+      </dl>
+    </div>
+    <div class="ma-profile-card" id="ma-profile-balanced" data-locked="true">
+      <h3>平衡 (balanced)</h3>
+      <dl>
+        <dt>HGB 學習率</dt><dd>0.06</dd>
+        <dt>HGB 迭代</dt><dd>350</dd>
+        <dt>RF 樹數</dt><dd>400</dd>
+        <dt>近期權重半衰期</dt><dd>48 個月</dd>
+      </dl>
+    </div>
+    <div class="ma-profile-card" id="ma-profile-thorough" data-locked="true">
+      <h3>精細 (thorough)</h3>
+      <dl>
+        <dt>HGB 學習率</dt><dd>0.04</dd>
+        <dt>HGB 迭代</dt><dd>600</dd>
+        <dt>RF 樹數</dt><dd>700</dd>
+        <dt>近期權重半衰期</dt><dd>48 個月</dd>
+      </dl>
+    </div>
+  </div>
+
+  <div class="ma-custom-section">
+    <label><input type="checkbox" id="ma-custom-enabled"> 使用自訂設定</label>
+    <details id="ma-custom-fields">
+      <summary>自訂參數</summary>
+      <div class="ma-custom-grid">
+        <label>HGB 學習率 (0.01 ~ 0.20)
+          <input id="ma-custom-hgb-learning-rate" name="hgb_learning_rate" type="number" min="0.01" max="0.20" step="0.01" value="0.06">
+        </label>
+        <label>HGB 迭代次數 (100 ~ 1000)
+          <input id="ma-custom-hgb-max-iter" name="hgb_max_iter" type="number" min="100" max="1000" step="1" value="350">
+        </label>
+        <label>RF 決策樹數量 (100 ~ 1000)
+          <input id="ma-custom-rf-n-estimators" name="rf_n_estimators" type="number" min="100" max="1000" step="1" value="400">
+        </label>
+        <label>近期權重半衰期 (12 ~ 84 個月)
+          <input id="ma-custom-half-life" name="recency_half_life_months" type="number" min="12" max="84" step="1" value="48">
+        </label>
+      </div>
+    </details>
+  </div>
+
+  <div class="ma-submit-summary" id="ma-submit-summary"></div>
+</div>
+{% endif %}
