@@ -79,9 +79,19 @@ assert.deepEqual(asst.buildReplyPayload("test", undefined), {
   content: "test",
 });
 
-assert.equal(asst.fallbackReasonLabel("cloud_timeout"), "雲端逾時，已自動切換");
-assert.equal(asst.fallbackReasonLabel("cloud_auth_failed"), "雲端驗證失敗，已自動切換");
-assert.equal(asst.fallbackReasonLabel("unknown"), "已使用備援模型");
+assert.equal(asst.fallbackLabel({
+  provider: "ollama",
+  model: "gemma4:e2b",
+  fallback_reason: "cloud_timeout",
+}), "Gemini 連線逾時，已改用本機 Gemma 4");
+assert.equal(
+  asst.actualModelLabel({ provider: "rule", model: "rule" }),
+  "Rule／離線摘要"
+);
+assert.equal(
+  asst.fallbackLabel({ fallback_reason: "unknown" }),
+  "已自動切換備援模型"
+);
 
 // --- formatMoney ---
 
@@ -123,8 +133,8 @@ assert.equal(contentEl.textContent, "這是分析結果");
 // Ensure no XSS via innerHTML
 assert.equal(typeof contentEl.textContent, "string");
 var messageText = collectText(msgEl);
-assert.ok(messageText.indexOf("gemma4:e2b") !== -1);
-assert.ok(messageText.indexOf("雲端逾時，已自動切換") !== -1);
+assert.ok(messageText.indexOf("本機 Gemma 4") !== -1);
+assert.ok(messageText.indexOf("Gemini 連線逾時，已改用本機 Gemma 4") !== -1);
 
 // User message
 var userMsg = asst.renderMessage({ role: "user", content: "<script>alert(1)</script>" }, null);

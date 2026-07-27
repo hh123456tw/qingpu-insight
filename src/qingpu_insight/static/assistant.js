@@ -69,16 +69,34 @@
   }
 
   var FALLBACK_REASON_LABELS = {
-    cloud_timeout: "雲端逾時，已自動切換",
-    cloud_rate_limited: "雲端流量受限，已自動切換",
-    cloud_auth_failed: "雲端驗證失敗，已自動切換",
-    cloud_unavailable: "雲端暫時不可用，已自動切換",
-    cloud_invalid_response: "雲端回覆格式異常，已自動切換",
+    cloud_timeout: "Gemini 連線逾時",
+    cloud_rate_limited: "Gemini 暫時達到使用限制",
+    cloud_unavailable: "Gemini 暫時無法使用",
+    cloud_auth_failed: "Gemini API Key 無法使用",
+    cloud_invalid_response: "Gemini 回覆未通過資料驗證",
     local_unavailable: "本機模型不可用，已切換 Rule",
   };
 
-  function fallbackReasonLabel(reason) {
-    return FALLBACK_REASON_LABELS[reason] || "已使用備援模型";
+  function actualModelLabel(message) {
+    if (message.provider === "rule") return "Rule／離線摘要";
+    if (message.provider === "ollama") return "本機 Gemma 4";
+    return message.model || message.provider || "未知模型";
+  }
+
+  function fallbackLabel(message) {
+    var reason = message.fallback_reason;
+    var base = FALLBACK_REASON_LABELS[reason];
+    if (!base) return "已自動切換備援模型";
+    if (reason === "local_unavailable") {
+      return "本機 Ollama 無法使用，已改用離線摘要";
+    }
+    if (message.provider === "ollama") {
+      return base + "，已改用本機 Gemma 4";
+    }
+    if (message.provider === "rule") {
+      return base + "，已改用離線摘要";
+    }
+    return base;
   }
 
   function renderEvidencePanel(data) {
@@ -189,18 +207,17 @@
   }
 
   function renderMessage(msg, currentEvidenceRevision) {
-    var div = el("div", { "class": "message message-" + msg.role });
+    var messageClass = "message message-" + msg.role;
+    if (msg.role === "assistant" && msg.provider === "rule") {
+      messageClass += " offline-summary";
+    }
+    var div = el("div", { "class": messageClass });
     var header = el("div", { "class": "message-header" });
     var roleLabel = msg.role === "user" ? "\u4f60" : "\u52a9\u7406";
     header.appendChild(el("span", { "class": "message-role" }, [roleLabel]));
     if (msg.role === "assistant" && msg.provider) {
       header.appendChild(el("span", { "class": "message-provider" }, [
-        "實際：" + msg.provider + (msg.model ? " / " + msg.model : ""),
-      ]));
-    }
-    if (msg.role === "assistant" && msg.fallback_reason) {
-      header.appendChild(el("span", { "class": "fallback-badge" }, [
-        fallbackReasonLabel(msg.fallback_reason),
+        "實際：" + actualModelLabel(msg),
       ]));
     }
     if (msg.role === "assistant" && msg.evidence_revision != null) {
@@ -214,6 +231,12 @@
     var content = el("div", { "class": "message-content" });
     content.textContent = msg.content;
     div.appendChild(content);
+    if (msg.role === "assistant" && msg.fallback_reason) {
+      div.appendChild(el("p", {
+        "class": "fallback-notice",
+        "role": "status",
+      }, [fallbackLabel(msg)]));
+    }
     return div;
   }
 
@@ -422,7 +445,14 @@
             : "";
         }
         if (sendBtn) {
-          sendBtn.disabled = data.status !== "ready";
+          sendBtn.disabled = (
+            data.status !== "ready"
+            || data.default_provider === "rule"
+          );
+        }
+        if (questionInput && data.default_provider === "rule") {
+          questionInput.disabled = true;
+          questionInput.placeholder = "Rule 模式只顯示離線證據摘要";
         }
         return loadEvidence(conversationId);
       }).then(function (evData) {
@@ -643,7 +673,8 @@
     formatMoney: formatMoney,
     stageLabel: stageLabel,
     buildReplyPayload: buildReplyPayload,
-    fallbackReasonLabel: fallbackReasonLabel,
+    actualModelLabel: actualModelLabel,
+    fallbackLabel: fallbackLabel,
     renderEvidencePanel: renderEvidencePanel,
     renderMessage: renderMessage,
     renderSuggestedQuestions: renderSuggestedQuestions,

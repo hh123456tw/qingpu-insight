@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from qingpu_insight.conversation_fallback import ReplyExecution
 from qingpu_insight.conversation_service import ConversationService
 from qingpu_insight.conversation_validation import ValidatedChatAnswer
 from qingpu_insight.job_executor import LocalJobExecutor
@@ -114,6 +115,8 @@ def test_conversation_commands_use_executor_owned_start_transition() -> None:
     conversation_repository.get_conversation.return_value = SimpleNamespace(
         active_evidence_revision=1,
         rolling_summary=None,
+        default_provider="gemini",
+        default_model="gemini-3.5-flash-lite",
     )
     conversation_repository.get_evidence_pack.return_value = SimpleNamespace(
         facts=[],
@@ -131,10 +134,18 @@ def test_conversation_commands_use_executor_owned_start_transition() -> None:
             suggested_questions=[],
         )
     )
+    reply_executor = MagicMock()
+    reply_executor.execute.return_value = ReplyExecution(
+        validated=validator.return_value,
+        actual_provider="rule",
+        actual_model="rule",
+        fallback_reason="cloud_unavailable",
+    )
     service = ConversationService(
         repository=conversation_repository,
         import_service=import_service,
         provider_registry=provider_registry,
+        reply_executor=reply_executor,
         validator=validator,
         job_service=job_service,
         executor=executor,
@@ -162,8 +173,6 @@ def test_conversation_commands_use_executor_owned_start_transition() -> None:
     replied = service.start_reply(
         conversation_id="conv-1",
         question="值得買嗎？",
-        provider="ollama",
-        model="local-model",
         evidence_revision=1,
         idempotency_key="conversation-reply",
     )

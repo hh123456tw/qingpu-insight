@@ -66,17 +66,17 @@ assert.deepEqual(ha.buildCreatePayload(""), { model: "" });
 
 assert.equal(
   ha.modelStatusText(
-    { cloud: true, description: "快速、穩定" },
+    { provider: "gemini", cloud: true },
     false
   ),
-  "快速、穩定；尚未設定 Gemini API Key，失敗時會自動切換本機或 Rule"
+  "尚未設定 Gemini API Key；送出後將自動使用本機模型"
 );
 assert.equal(
   ha.modelStatusText(
-    { cloud: false, description: "完全離線備援" },
-    false
+    { provider: "ollama", cloud: false },
+    true
   ),
-  "完全離線備援"
+  "本機模式，不使用 Google API"
 );
 
 assert.deepEqual(ha.buildListingPayload("https://sale.591.com.tw/abc"), {

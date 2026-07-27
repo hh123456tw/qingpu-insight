@@ -180,7 +180,8 @@ python -m venv .venv
 ### 快速開始
 
 1. 打開首頁，在「貼上 591 物件，開始分析」輸入框貼上 591 詳細頁網址
-2. 選擇 Provider（Ollama / Gemini / Rule）與模型名稱
+2. 從固定清單選擇回答模型：Google Gemini 3.5 Flash-Lite、Google Gemma 4
+   31B、本機 Ollama Gemma 4 或 Rule
 3. 點擊「分析這個物件」
 4. 系統以可見 Chrome 開啟 591 頁面、建立物件快照與估價證據
 5. 自動導向雙欄工作台，左側顯示物件資訊與證據，右側可開始對話
@@ -190,9 +191,13 @@ python -m venv .venv
 
 ### 進階功能
 
-- **Rule 模式**：顯示固定物件摘要與建議問題，不使用 LLM
-- **Ollama**：本機模型，設定 `OLLAMA_BASE_URL` 環境變數
-- **Gemini**：Google Gemini，設定 `GEMINI_API_KEY` 環境變數
+- **模型固定**：模型在建立對話時選定，後續回覆不能由瀏覽器覆寫 provider
+- **Google 模型**：使用管理中心儲存的 `QINGPU_GEMINI_API_KEY`；金鑰更新後
+  下一次請求立即生效，不必重啟 Web
+- **自動備援**：Google 失敗時依序嘗試本機 `gemma4:e2b` 與 Rule；本機模型失敗
+  時使用 Rule。回答會標示實際模型與安全化的切換原因
+- **Ollama**：預設連線 `http://127.0.0.1:11434`，可用 `OLLAMA_BASE_URL` 覆寫
+- **Rule 模式**：完全離線，使用證據資料產生固定摘要與建議
 
 ### 技術說明
 

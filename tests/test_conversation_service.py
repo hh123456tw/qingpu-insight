@@ -5,11 +5,11 @@ from unittest.mock import ANY, MagicMock, call, sentinel
 
 import pytest
 
+from qingpu_insight.conversation_fallback import ReplyExecution
 from qingpu_insight.conversation_repository import (
     ConversationRecord,
     MessageRecord,
 )
-from qingpu_insight.conversation_fallback import ReplyExecution
 from qingpu_insight.conversation_service import (
     ConversationCommand,
     ConversationService,

@@ -317,13 +317,18 @@ body {
   margin-bottom: 0.25rem;
 }
 
-.fallback-badge {
-  padding: 0.12rem 0.4rem;
-  border-radius: 999px;
+.fallback-notice {
+  margin: 0.45rem 0 0;
+  padding: 0.4rem 0.55rem;
+  border-radius: 0.35rem;
   color: #7a4b00;
   background: #fff2cf;
   border: 1px solid #e7c76e;
-  font-size: 0.72rem;
+  font-size: 0.78rem;
+}
+
+.message.offline-summary {
+  border-style: dashed;
 }
 
 .message-role {

@@ -17,7 +17,6 @@ from qingpu_insight.conversation_validation import (
 )
 from qingpu_insight.ollama_report_provider import ProviderError
 
-
 _FACT = EvidenceFact(
     id="f1",
     label="開價",

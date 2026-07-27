@@ -36,7 +36,9 @@ Evidence Pack，再讓使用者針對同一物件持續對話。
                         ↓
               使用者提問 → ConversationService._run_reply()
                         ↓
-              Provider（Rule / Ollama / Gemini）→ ChatAnswerDraft
+              固定模型 → Google（最多 2 次）→ Ollama → Rule
+                        ↓
+              ChatAnswerDraft（記錄實際模型與 fallback 原因）
                         ↓
               validate_chat_answer() → 檢驗 fact ID 接地
                         ↓
@@ -54,18 +56,22 @@ Evidence Pack，再讓使用者針對同一物件持續對話。
 | `conversation_repository.py` | MySQL 持久層（conversations、listings、snapshots、evidence、messages） |
 | `conversation_validation.py` | ChatAnswerDraft fact ID 接地驗證 |
 | `conversation_providers.py` | Rule / Ollama / Gemini provider |
+| `conversation_models.py` | 固定模型目錄與 model → provider 對應 |
+| `conversation_fallback.py` | Google → Ollama → Rule 的安全備援編排 |
 | `conversation_service.py` | 流程編排（import、refresh、reply） |
 | `conversation_import.py` | 首次匯入與重新擷取 |
 
 ## 資料庫 Migration
 
-本功能需要 migration 008，新增以下表格：
+本功能需要 migration 008 與 009；008 建立對話表格，009 為既有資料庫補上
+`fallback_reason`：
 
 - `conversations` — 對話主記錄（status、provider、active evidence revision）
 - `conversation_listings` — 對話關聯的物件（支援未來多物件擴充）
 - `conversation_listing_snapshots` — 各版本快照（hash 去重）
 - `conversation_evidence_packs` — 各版本證據包（facts、valuation、comparables）
-- `conversation_messages` — 對話訊息（role、content、evidence revision、citations）
+- `conversation_messages` — 對話訊息（role、content、evidence revision、citations、
+  實際 provider/model、fallback reason）
 
 ```sql
 -- 簡要結構（完整 SQL 請見 database/008_conversation_assistant_schema.sql）
@@ -88,8 +94,10 @@ CREATE TABLE conversations (
 
 - **MySQL 8**：必備，負責對話、快照、證據與訊息持久化
 - **Chrome（可見模式）**：用於 591 詳細頁擷取（headless 不支援驗證頁）
-- **Ollama**（選用）：設定 `OLLAMA_BASE_URL` 環境變數
-- **Gemini**（選用）：設定 `GEMINI_API_KEY` 環境變數
+- **Ollama**（選用）：預設 `http://127.0.0.1:11434`，可設定
+  `OLLAMA_BASE_URL`
+- **Gemini**（選用）：在管理中心儲存 API Key，或設定
+  `QINGPU_GEMINI_API_KEY`
 - **Rule**：不需外部服務，使用內建規則產生摘要與建議
 
 ## 隱私邊界
@@ -119,7 +127,7 @@ CREATE TABLE conversations (
 2. 設定 `QINGPU_DATABASE_URL` 與 `QINGPU_SECRET_KEY`
 3. 啟動 Web：`python -m qingpu_insight.web`
 4. 開啟 `http://127.0.0.1:5000`
-5. 在首頁貼入 591 詳細頁網址，選擇 Provider，點擊「分析這個物件」
+5. 在首頁貼入 591 詳細頁網址，從固定清單選擇回答模型，點擊「分析這個物件」
 
 ### 對話
 1. 在雙欄工作台右側輸入問題
@@ -143,6 +151,7 @@ CREATE TABLE conversations (
 | 瀏覽器無回應 | Chrome 未安裝或版本過舊 | 確認 Chrome 為最新穩定版 |
 | Verification 頁面 | 591 要求驗證 | 手動操作可見 Chrome 完成驗證後重試 |
 | Provider 錯誤 | Ollama/Gemini 設定不完整 | 檢查環境變數或 API Key |
+| 回答顯示「已自動切換」 | 雲端逾時、限流、驗證失敗或格式不合格 | 查看回答旁的實際模型；到管理中心執行 smoke test |
 | 回答無引用 | 問題與物件無關或 fact ID 不足 | 重新擷取或重新提問 |
 
 ## 未來擴充

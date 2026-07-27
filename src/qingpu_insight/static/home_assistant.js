@@ -44,17 +44,22 @@
 
   function modelStatusText(item, geminiConfigured) {
     if (!item) return "";
-    var description = item.description || "";
     if (item.cloud && !geminiConfigured) {
-      return description
-        + "；尚未設定 Gemini API Key，失敗時會自動切換本機或 Rule";
+      return "尚未設定 Gemini API Key；送出後將自動使用本機模型";
     }
-    return description;
+    if (item.provider === "ollama") {
+      return "本機模式，不使用 Google API";
+    }
+    if (item.provider === "rule") {
+      return "離線摘要，不使用 LLM";
+    }
+    return "雲端模型；失敗時會自動切換本機模型";
   }
 
   function renderModelCatalog(catalog) {
     var select = document.getElementById("assistant-model");
-    var status = document.getElementById("assistant-model-status");
+    var status = document.getElementById("assistant-model-help");
+    var startButton = document.getElementById("assistant-start");
     if (!select) return;
     select.innerHTML = "";
     (catalog.items || []).forEach(function (item) {
@@ -64,6 +69,8 @@
       select.appendChild(option);
     });
     select.value = catalog.default_model || "";
+    select.disabled = false;
+    if (startButton) startButton.disabled = false;
 
     function updateStatus() {
       if (!status) return;
@@ -86,8 +93,8 @@
         return response.json();
       })
       .then(renderModelCatalog)
-      .catch(function (error) {
-        renderStatus(error.message, true);
+      .catch(function () {
+        renderStatus("模型目錄暫時無法載入，請重新整理頁面", true);
       });
   }
 

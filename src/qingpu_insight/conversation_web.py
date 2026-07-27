@@ -3,9 +3,9 @@ from __future__ import annotations
 import hashlib
 import re
 import uuid
+from collections.abc import Callable
 from datetime import datetime
 from ipaddress import ip_address
-from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
 
