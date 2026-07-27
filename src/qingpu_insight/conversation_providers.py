@@ -5,6 +5,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
+from collections.abc import Callable
 from typing import Any, Protocol
 
 import requests
@@ -26,7 +27,12 @@ class ConversationContext:
 
 class ConversationProvider(Protocol):
     def reply(
-        self, *, model: str, question: str, context: ConversationContext
+        self,
+        *,
+        model: str,
+        question: str,
+        context: ConversationContext,
+        repair_hint: str | None = None,
     ) -> ChatAnswerDraft: ...
 
 
@@ -86,7 +92,12 @@ def _build_prompt(question: str, context: ConversationContext) -> str:
 
 class RuleConversationProvider:
     def reply(
-        self, *, model: str, question: str, context: ConversationContext
+        self,
+        *,
+        model: str,
+        question: str,
+        context: ConversationContext,
+        repair_hint: str | None = None,
     ) -> ChatAnswerDraft:
         return self._build_draft(context)
 
@@ -163,12 +174,12 @@ class OllamaConversationProvider:
         try:
             data = resp.json()
         except (json.JSONDecodeError, requests.exceptions.JSONDecodeError):
-            raise ProviderError("ollama_non_json_response") from None
+            raise ProviderError("ollama_validation_error") from None
 
         try:
             return data["message"]["content"]
         except (KeyError, TypeError):
-            raise ProviderError("ollama_non_json_response") from None
+            raise ProviderError("ollama_validation_error") from None
 
     def reply(
         self, *, model: str, question: str, context: ConversationContext,
@@ -189,22 +200,15 @@ class OllamaConversationProvider:
 
         try:
             content_raw = self._request_ollama(model=model, messages=messages)
-            try:
-                draft = ChatAnswerDraft.model_validate_json(content_raw)
-            except Exception as first_error:
-                messages.append({
-                    "role": "user",
-                    "content": f"The previous response failed validation. Error: {first_error}",
-                })
-                content_raw = self._request_ollama(model=model, messages=messages)
-                try:
-                    draft = ChatAnswerDraft.model_validate_json(content_raw)
-                except Exception:
-                    raise ProviderError("ollama_validation_error") from None
+            draft = ChatAnswerDraft.model_validate_json(content_raw)
         except ProviderError:
             duration_ms = int((time.perf_counter() - start) * 1000)
             logger.info("ollama %s duration=%dms result=error", model, duration_ms)
             raise
+        except Exception:
+            duration_ms = int((time.perf_counter() - start) * 1000)
+            logger.info("ollama %s duration=%dms result=error", model, duration_ms)
+            raise ProviderError("ollama_validation_error") from None
 
         duration_ms = int((time.perf_counter() - start) * 1000)
         logger.info("ollama %s duration=%dms result=success", model, duration_ms)
@@ -218,11 +222,11 @@ _CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*([\s\S]*?)\s*```$", re.MULTILINE)
 class GeminiConversationProvider:
     def __init__(
         self,
-        api_key: str,
+        api_key_getter: Callable[[], str | None],
         timeout_seconds: int = 30,
         session: requests.Session | None = None,
     ) -> None:
-        self._api_key = api_key
+        self._api_key_getter = api_key_getter
         self._timeout = timeout_seconds
         self._session = session or requests.Session()
 
@@ -241,10 +245,13 @@ class GeminiConversationProvider:
                 for msg in messages[1:]
             ],
         }
+        api_key = self._api_key_getter()
+        if not api_key:
+            raise ProviderError("gemini_auth_missing")
         try:
             headers = {
                 "Content-Type": "application/json",
-                "x-goog-api-key": self._api_key,
+                "x-goog-api-key": api_key,
             }
             resp = self._session.post(
                 url,
@@ -257,18 +264,24 @@ class GeminiConversationProvider:
         except requests.exceptions.ConnectionError:
             raise ProviderError("gemini_connection_error") from None
 
+        if resp.status_code in {401, 403}:
+            raise ProviderError("gemini_auth_failed")
+        if resp.status_code == 429:
+            raise ProviderError("gemini_rate_limited")
+        if resp.status_code >= 500:
+            raise ProviderError("gemini_unavailable")
         if resp.status_code >= 400:
             raise ProviderError("gemini_http_error")
 
         try:
             data = resp.json()
         except (json.JSONDecodeError, requests.exceptions.JSONDecodeError):
-            raise ProviderError("gemini_non_json_response") from None
+            raise ProviderError("gemini_validation_error") from None
 
         try:
             content_raw = data["candidates"][0]["content"]["parts"][0]["text"]
         except (KeyError, TypeError, IndexError):
-            raise ProviderError("gemini_non_json_response") from None
+            raise ProviderError("gemini_validation_error") from None
 
         content_raw = self._strip_code_fence(content_raw)
         return content_raw
@@ -292,22 +305,15 @@ class GeminiConversationProvider:
 
         try:
             content_raw = self._request_gemini(model=model, messages=messages)
-            try:
-                draft = ChatAnswerDraft.model_validate_json(content_raw)
-            except Exception as first_error:
-                messages.append({
-                    "role": "user",
-                    "content": f"The previous response failed validation. Error: {first_error}",
-                })
-                content_raw = self._request_gemini(model=model, messages=messages)
-                try:
-                    draft = ChatAnswerDraft.model_validate_json(content_raw)
-                except Exception:
-                    raise ProviderError("gemini_validation_error") from None
+            draft = ChatAnswerDraft.model_validate_json(content_raw)
         except ProviderError:
             duration_ms = int((time.perf_counter() - start) * 1000)
             logger.info("gemini %s duration=%dms result=error", model, duration_ms)
             raise
+        except Exception:
+            duration_ms = int((time.perf_counter() - start) * 1000)
+            logger.info("gemini %s duration=%dms result=error", model, duration_ms)
+            raise ProviderError("gemini_validation_error") from None
 
         duration_ms = int((time.perf_counter() - start) * 1000)
         logger.info("gemini %s duration=%dms result=success", model, duration_ms)

@@ -134,6 +134,18 @@ class TestRuleConversationProvider:
         for claim in draft.property_claims:
             assert len(claim.fact_ids) >= 1
 
+    def test_rule_provider_accepts_shared_repair_hint_contract(self) -> None:
+        provider = RuleConversationProvider()
+
+        draft = provider.reply(
+            model="rule",
+            question="test",
+            context=_EMPTY_CONTEXT,
+            repair_hint="Return valid JSON.",
+        )
+
+        assert "物件證據摘要" in draft.answer
+
 
 class TestOllamaConversationProvider:
     _URL = "http://localhost:11434/api/chat"
@@ -171,6 +183,7 @@ class TestOllamaConversationProvider:
             with pytest.raises(ProviderError) as exc:
                 provider.reply(model="llama3", question="test", context=_EMPTY_CONTEXT)
             assert exc.value.code == "ollama_validation_error"
+            assert len(rsps.calls) == 1
 
     def test_ollama_timeout(self) -> None:
         provider = OllamaConversationProvider(
@@ -208,7 +221,7 @@ class TestOllamaConversationProvider:
             provider = OllamaConversationProvider(base_url="http://localhost:11434")
             with pytest.raises(ProviderError) as exc:
                 provider.reply(model="llama3", question="test", context=_EMPTY_CONTEXT)
-            assert exc.value.code == "ollama_non_json_response"
+            assert exc.value.code == "ollama_validation_error"
 
     def test_ollama_sends_format_json(self) -> None:
         with responses.RequestsMock() as rsps:
@@ -249,7 +262,7 @@ class TestGeminiConversationProvider:
     def test_gemini_valid_json(self) -> None:
         with responses.RequestsMock() as rsps:
             rsps.post(self._URL, json=self._gemini_response(_VALID_DRAFT_DICT), status=200)
-            provider = GeminiConversationProvider(api_key="test-key")
+            provider = GeminiConversationProvider(api_key_getter=lambda: "test-key")
             draft = provider.reply(
                 model="gemini-pro", question="test", context=_EMPTY_CONTEXT,
             )
@@ -266,7 +279,7 @@ class TestGeminiConversationProvider:
                 json={"candidates": [{"content": {"parts": [{"text": raw}]}}]},
                 status=200,
             )
-            provider = GeminiConversationProvider(api_key="test-key")
+            provider = GeminiConversationProvider(api_key_getter=lambda: "test-key")
             draft = provider.reply(
                 model="gemini-pro", question="test", context=_EMPTY_CONTEXT,
             )
@@ -280,16 +293,17 @@ class TestGeminiConversationProvider:
                 json={"candidates": [{"content": {"parts": [{"text": "not json"}]}}]},
                 status=200,
             )
-            provider = GeminiConversationProvider(api_key="test-key")
+            provider = GeminiConversationProvider(api_key_getter=lambda: "test-key")
             with pytest.raises(ProviderError) as exc:
                 provider.reply(
                     model="gemini-pro", question="test", context=_EMPTY_CONTEXT,
                 )
             assert exc.value.code == "gemini_validation_error"
+            assert len(rsps.calls) == 1
 
     def test_gemini_timeout(self) -> None:
         provider = GeminiConversationProvider(
-            api_key="test-key", timeout_seconds=1,
+            api_key_getter=lambda: "test-key", timeout_seconds=1,
         )
         mock_session = MagicMock()
         mock_session.post.side_effect = requests.exceptions.Timeout("timed out")
@@ -299,40 +313,58 @@ class TestGeminiConversationProvider:
             provider.reply(model="gemini-pro", question="test", context=_EMPTY_CONTEXT)
         assert exc.value.code == "gemini_timeout"
 
-    def test_gemini_http_error(self) -> None:
+    @pytest.mark.parametrize(
+        ("status_code", "expected_code"),
+        [
+            (401, "gemini_auth_failed"),
+            (403, "gemini_auth_failed"),
+            (429, "gemini_rate_limited"),
+            (500, "gemini_unavailable"),
+            (503, "gemini_unavailable"),
+            (404, "gemini_http_error"),
+        ],
+    )
+    def test_gemini_maps_http_status_without_exposing_body(
+        self, status_code: int, expected_code: str,
+    ) -> None:
         with responses.RequestsMock() as rsps:
-            rsps.post(self._URL, body="Unauthorized", status=401)
-            provider = GeminiConversationProvider(api_key="bad-key")
+            rsps.post(self._URL, body="secret upstream body", status=status_code)
+            provider = GeminiConversationProvider(
+                api_key_getter=lambda: "test-key",
+            )
             with pytest.raises(ProviderError) as exc:
                 provider.reply(
                     model="gemini-pro", question="test", context=_EMPTY_CONTEXT,
                 )
-            assert exc.value.code == "gemini_http_error"
+            assert exc.value.code == expected_code
+            assert "secret upstream body" not in str(exc.value)
 
     def test_gemini_non_json_response(self) -> None:
         with responses.RequestsMock() as rsps:
             rsps.post(self._URL, body="not json", status=200)
-            provider = GeminiConversationProvider(api_key="test-key")
+            provider = GeminiConversationProvider(api_key_getter=lambda: "test-key")
             with pytest.raises(ProviderError) as exc:
                 provider.reply(
                     model="gemini-pro", question="test", context=_EMPTY_CONTEXT,
                 )
-            assert exc.value.code == "gemini_non_json_response"
+            assert exc.value.code == "gemini_validation_error"
 
     def test_gemini_empty_candidates(self) -> None:
         with responses.RequestsMock() as rsps:
             rsps.post(self._URL, json={"candidates": []}, status=200)
-            provider = GeminiConversationProvider(api_key="test-key")
+            provider = GeminiConversationProvider(api_key_getter=lambda: "test-key")
             with pytest.raises(ProviderError) as exc:
                 provider.reply(
                     model="gemini-pro", question="test", context=_EMPTY_CONTEXT,
                 )
-            assert exc.value.code == "gemini_non_json_response"
+            assert exc.value.code == "gemini_validation_error"
 
     def test_gemini_api_key_not_in_error_message(self) -> None:
         with responses.RequestsMock() as rsps:
             rsps.post(self._URL, body="Unauthorized", status=401)
-            provider = GeminiConversationProvider(api_key="secret-key-12345")
+            provider = GeminiConversationProvider(
+                api_key_getter=lambda: "secret-key-12345",
+            )
             with pytest.raises(ProviderError) as exc:
                 provider.reply(
                     model="gemini-pro", question="test", context=_EMPTY_CONTEXT,
@@ -348,13 +380,54 @@ class TestGeminiConversationProvider:
         session.post.return_value = resp
 
         provider = GeminiConversationProvider(
-            api_key="test-key", session=session,
+            api_key_getter=lambda: "test-key", session=session,
         )
         draft = provider.reply(
             model="gemini-pro", question="test", context=_EMPTY_CONTEXT,
         )
         assert isinstance(draft, ChatAnswerDraft)
         session.post.assert_called_once()
+
+    def test_gemini_resolves_key_for_each_request(self) -> None:
+        session = MagicMock()
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = self._gemini_response(_VALID_DRAFT_DICT)
+        session.post.return_value = response
+        keys = iter(["first-key", "second-key"])
+        provider = GeminiConversationProvider(
+            api_key_getter=lambda: next(keys),
+            session=session,
+        )
+
+        provider.reply(
+            model="gemini-pro", question="first", context=_EMPTY_CONTEXT,
+        )
+        provider.reply(
+            model="gemini-pro", question="second", context=_EMPTY_CONTEXT,
+        )
+
+        assert session.post.call_args_list[0].kwargs["headers"]["x-goog-api-key"] == (
+            "first-key"
+        )
+        assert session.post.call_args_list[1].kwargs["headers"]["x-goog-api-key"] == (
+            "second-key"
+        )
+
+    def test_gemini_missing_key_fails_without_http_call(self) -> None:
+        session = MagicMock()
+        provider = GeminiConversationProvider(
+            api_key_getter=lambda: None,
+            session=session,
+        )
+
+        with pytest.raises(ProviderError) as exc:
+            provider.reply(
+                model="gemini-pro", question="test", context=_EMPTY_CONTEXT,
+            )
+
+        assert exc.value.code == "gemini_auth_missing"
+        session.post.assert_not_called()
 
 
 class TestConversationProviderRegistry:
