@@ -314,6 +314,8 @@ document.addEventListener("DOMContentLoaded", async function () {
   typeSelect.addEventListener("change", toggleAge);
   toggleAge();
 
+  var display = typeof QingpuDisplayFormat !== "undefined" ? QingpuDisplayFormat : null;
+
   function money(val) {
     return new Intl.NumberFormat("zh-TW", {
       style: "currency", currency: "TWD", maximumFractionDigits: 0,
@@ -334,7 +336,45 @@ document.addEventListener("DOMContentLoaded", async function () {
     return node;
   }
 
-  function renderValuation(result) {
+  function renderPricePosition(low, point, high, asking) {
+    if (!display || typeof document === "undefined") return null;
+    var state = display.pricePositionState(low, point, high, asking);
+    if (!state) return null;
+    var posLabel = "";
+    if (state.askingPosition === "inside") posLabel = "內";
+    else if (state.askingPosition === "below") posLabel = "下";
+    else if (state.askingPosition === "above") posLabel = "上";
+    else posLabel = "外";
+    var ariaLabel = "估值區間：低標 " + display.formatTotalWan(low)
+      + " 至高標 " + display.formatTotalWan(high)
+      + "，估值點 " + display.formatTotalWan(point);
+    if (asking != null) {
+      ariaLabel += "，開價 " + display.formatTotalWan(asking)
+        + "（位於區間" + posLabel + "）";
+    }
+    var wrapper = el("div", { "class": "price-position", "role": "img", "aria-label": ariaLabel });
+    var track = el("div", { "class": "price-range-track" });
+    track.appendChild(el("span", {
+      "class": "price-marker price-marker-point",
+      "style": "left: " + state.pointPercent + "%",
+    }));
+    if (state.askingPosition !== "missing") {
+      track.appendChild(el("span", {
+        "class": "price-marker price-marker-asking",
+        "style": "left: " + state.askingPercent + "%",
+      }));
+    }
+    wrapper.appendChild(track);
+    wrapper.appendChild(el("div", { "class": "price-labels" }, [
+      el("span", {}, ["低標 " + display.formatTotalWan(low)]),
+      el("span", {}, ["估值 " + display.formatTotalWan(point)]),
+      el("span", {}, ["開價 " + (asking != null ? display.formatTotalWan(asking) : "—")]),
+      el("span", {}, ["高標 " + display.formatTotalWan(high)]),
+    ]));
+    return wrapper;
+  }
+
+  function renderValuation(result, askingVal) {
     resultSection.replaceChildren();
 
     var cards = [];
@@ -342,24 +382,34 @@ document.addEventListener("DOMContentLoaded", async function () {
     // Price interval card
     var priceCard = el("div", { "class": "valuation-card" }, [
       el("h3", {}, ["估價結果"]),
-      el("p", { "class": "estimated-price" }, [money(result.estimated_total_price_twd)]),
+      el("p", { "class": "estimated-price" }, [display ? display.formatTotalWan(result.estimated_total_price_twd) : money(result.estimated_total_price_twd)]),
       el("p", { "class": "price-range" }, [
-        "合理區間：" + money(result.interval_total_price_twd[0]) +
-        " ~ " + money(result.interval_total_price_twd[1])
+        "合理區間：" + (display ? display.formatTotalWan(result.interval_total_price_twd[0]) : money(result.interval_total_price_twd[0])) +
+        " ~ " + (display ? display.formatTotalWan(result.interval_total_price_twd[1]) : money(result.interval_total_price_twd[1]))
       ]),
     ]);
     cards.push(priceCard);
 
     // Asking price assessment
     if (result.asking_price_assessment) {
+      var askCard = el("div", { "class": "valuation-card" }, []);
       var askLabel = "";
       if (result.asking_price_assessment === "偏低") askLabel = "低於區間";
       else if (result.asking_price_assessment === "合理區間") askLabel = "在區間內";
       else askLabel = "高於區間";
-      cards.push(el("div", { "class": "valuation-card" }, [
-        el("h3", {}, ["開價評估"]),
-        el("p", {}, ["開價" + askLabel]),
+      askCard.appendChild(el("h3", {}, ["開價評估"]));
+      askCard.appendChild(el("p", {}, ["開價" + askLabel]));
+      var ppEl = renderPricePosition(
+        result.interval_total_price_twd[0],
+        result.estimated_total_price_twd,
+        result.interval_total_price_twd[1],
+        askingVal ? parseInt(askingVal) : null
+      );
+      if (ppEl) askCard.appendChild(ppEl);
+      askCard.appendChild(el("p", { "class": "asking-caveat" }, [
+        "591 開價僅供參考，實際成交價可能包含議價空間"
       ]));
+      cards.push(askCard);
     }
 
     // Confidence card
@@ -403,9 +453,11 @@ document.addEventListener("DOMContentLoaded", async function () {
       var tbody = el("tbody");
       result.comparables.forEach(function (c) {
         var tr = el("tr");
-        [(c.transaction_date || "").slice(0, 10), c.station_code,
-         c.building_area_ping.toFixed(1), money(c.total_price_twd),
-         money(c.unit_price_per_ping_twd), (c.similarity_score * 100).toFixed(0) + "%"
+         [(c.transaction_date || "").slice(0, 10), c.station_code,
+          c.building_area_ping.toFixed(1),
+          display ? display.formatTotalWan(c.total_price_twd) : money(c.total_price_twd),
+          display ? display.formatUnitWan(c.unit_price_per_ping_twd) : money(c.unit_price_per_ping_twd),
+          (c.similarity_score * 100).toFixed(0) + "%"
         ].forEach(function (val) { tr.appendChild(el("td", {}, [val])); });
         tbody.appendChild(tr);
       });
@@ -440,6 +492,7 @@ document.addEventListener("DOMContentLoaded", async function () {
 
   form.addEventListener("submit", function (e) {
     e.preventDefault();
+    if (!form.reportValidity()) return;
     statusEl.textContent = "估價中…";
     resultSection.hidden = true;
 
@@ -474,208 +527,47 @@ document.addEventListener("DOMContentLoaded", async function () {
       .then(function (r) {
         if (!r.ok) {
           return r.json().then(function (err) {
-            throw new Error(
-              (err.error && err.error.fields
-                ? Object.keys(err.error.fields).join("、") + " 欄位錯誤"
-                : err.error && err.error.message
-                ? err.error.message
-                : "估價失敗")
-            );
+            throw err;
           });
         }
         return r.json();
       })
       .then(function (result) {
         statusEl.textContent = "";
-        renderValuation(result);
+        renderValuation(result, askingVal);
       })
       .catch(function (err) {
-        statusEl.textContent = err.message;
-        resultSection.hidden = true;
-      });
-  });
-})();
-
-// --- Report (M4.4) ---
-
-(function () {
-  const form = document.getElementById("report-form");
-  const submitBtn = document.getElementById("report-submit");
-  const candidateInput = document.getElementById("report-candidate-ids");
-  const providerSelect = document.getElementById("report-provider");
-  const geminiNotice = document.getElementById("gemini-notice");
-  const intendedUseSelect = document.getElementById("report-intended-use");
-  const budgetInput = document.getElementById("report-budget");
-  const statusEl = document.getElementById("report-status");
-  const resultSection = document.getElementById("report-result");
-
-  providerSelect.addEventListener("change", function () {
-    geminiNotice.hidden = providerSelect.value !== "gemini";
-  });
-
-  function getCSRFToken() {
-    var meta = document.querySelector('meta[name="csrf-token"]');
-    return meta ? meta.getAttribute("content") : "";
-  }
-
-  function el(tag, attrs, children) {
-    var node = document.createElement(tag);
-    if (attrs) {
-      Object.keys(attrs).forEach(function (k) { node.setAttribute(k, attrs[k]); });
-    }
-    if (children) {
-      (Array.isArray(children) ? children : [children]).forEach(function (c) {
-        if (typeof c === "string") { node.appendChild(document.createTextNode(c)); }
-        else if (c) { node.appendChild(c); }
-      });
-    }
-    return node;
-  }
-
-  function renderReport(report) {
-    resultSection.replaceChildren();
-
-    if (report.fallback_reason) {
-      resultSection.appendChild(
-        el("div", { "class": "report-card fallback" }, [
-          el("p", {}, ["⚠ 使用備援模式：" + report.fallback_reason]),
-        ])
-      );
-    }
-
-    var content = report.content;
-    if (!content) return;
-
-    // Summary
-    if (content.summary) {
-      resultSection.appendChild(
-        el("div", { "class": "report-card" }, [
-          el("h3", {}, ["摘要"]),
-          el("p", {}, [content.summary.text || ""]),
-        ])
-      );
-    }
-
-    // Advantages
-    if (content.advantages && content.advantages.length) {
-      var advDiv = el("div", { "class": "report-card" }, [el("h3", {}, ["優點"])]);
-      var advList = el("ul");
-      content.advantages.forEach(function (a) {
-        advList.appendChild(el("li", {}, [a.text || ""]));
-      });
-      advDiv.appendChild(advList);
-      resultSection.appendChild(advDiv);
-    }
-
-    // Risks
-    if (content.risks && content.risks.length) {
-      var riskDiv = el("div", { "class": "report-card" }, [el("h3", {}, ["風險"])]);
-      var riskList = el("ul");
-      content.risks.forEach(function (r) {
-        riskList.appendChild(el("li", {}, [r.text || ""]));
-      });
-      riskDiv.appendChild(riskList);
-      resultSection.appendChild(riskDiv);
-    }
-
-    // Negotiation
-    if (content.negotiation && content.negotiation.length) {
-      var negoDiv = el("div", { "class": "report-card" }, [el("h3", {}, ["議價建議"])]);
-      var negoList = el("ul");
-      content.negotiation.forEach(function (n) {
-        negoList.appendChild(el("li", {}, [n.text || ""]));
-      });
-      negoDiv.appendChild(negoList);
-      resultSection.appendChild(negoDiv);
-    }
-
-    // Limitations
-    if (content.limitations && content.limitations.length) {
-      var limDiv = el("div", { "class": "report-card limitation" }, [el("h3", {}, ["限制"])]);
-      var limList = el("ul");
-      content.limitations.forEach(function (l) {
-        limList.appendChild(el("li", {}, [l.text || ""]));
-      });
-      limDiv.appendChild(limList);
-      resultSection.appendChild(limDiv);
-    }
-
-    // Metadata
-    resultSection.appendChild(
-      el("div", { "class": "report-card disclosure" }, [
-        el("p", {}, ["Provider: " + report.provider + " | Model: " + report.model]),
-        el("p", {}, ["資料版本: " + report.dataset_version]),
-        report.evidence_pack_id ? el("p", {}, ["證據包: " + report.evidence_pack_id]) : null,
-      ].filter(Boolean))
-    );
-
-    resultSection.hidden = false;
-  }
-
-  form.addEventListener("submit", function (e) {
-    e.preventDefault();
-    if (submitBtn) submitBtn.disabled = true;
-    statusEl.textContent = "產生報告中…";
-    resultSection.hidden = true;
-
-    var raw = candidateInput.value.trim();
-    if (!raw) {
-      statusEl.textContent = "請輸入至少一個候選物件 ID";
-      return;
-    }
-    var candidateIds = raw.split(",").map(function (s) { return s.trim(); }).filter(Boolean);
-    if (candidateIds.length === 0) {
-      statusEl.textContent = "請輸入至少一個候選物件 ID";
-      return;
-    }
-    if (candidateIds.length > 5) {
-      statusEl.textContent = "最多 5 個候選物件";
-      return;
-    }
-
-    var payload = {
-      candidate_ids: candidateIds,
-      intended_use: intendedUseSelect.value,
-      provider: providerSelect.value,
-    };
-    var budgetVal = budgetInput.value;
-    if (budgetVal) payload.budget_twd = parseInt(budgetVal);
-
-    var restore = function () { if (submitBtn) submitBtn.disabled = false; };
-    fetch("/api/reports", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Qingpu-CSRF": getCSRFToken(),
-      },
-      body: JSON.stringify(payload),
-    })
-      .then(function (r) {
-        if (!r.ok) {
-          return r.json().then(function (err) {
-            restore();
-            throw new Error(
-              (err.error && err.error.fields
-                ? Object.keys(err.error.fields).join("、") + " 欄位錯誤"
-                : err.error && err.error.message
-                ? err.error.message
-                : "報告產生失敗")
-            );
-          });
+        if (err && err.error && err.error.fields) {
+          var fieldMap = {
+            building_area_ping: "valuation-area",
+            station_distance_m: "valuation-distance",
+            building_type: "valuation-building-type",
+            bedrooms: "valuation-bedrooms",
+            living_rooms: "valuation-living-rooms",
+            bathrooms: "valuation-bathrooms",
+            floor: "valuation-floor",
+            total_floors: "valuation-total-floors",
+            parking_area_ping: "valuation-parking-area",
+            building_age_years: "valuation-age",
+            parking_type: "valuation-parking-type",
+            transaction_type: "valuation-type",
+            station_code: "valuation-station",
+            asking_total_price_twd: "asking-price",
+          };
+          var controlId = QingpuValuationForm.firstErrorControlId(err.error.fields, fieldMap);
+          if (controlId) {
+            var controlEl = document.getElementById(controlId);
+            if (controlEl) {
+              controlEl.focus();
+              controlEl.scrollIntoView({ behavior: "smooth", block: "center" });
+            }
+          }
         }
-        return r.json();
-      })
-      .then(function (report) {
-        restore();
-        statusEl.textContent = "";
-        renderReport(report);
-      })
-      .catch(function (err) {
-        restore();
-        statusEl.textContent = err.message;
+        statusEl.textContent = (err && err.error && err.error.message) ? err.error.message : "估價失敗";
         resultSection.hidden = true;
       });
   });
 })();
+
 
 

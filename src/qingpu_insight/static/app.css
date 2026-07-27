@@ -396,9 +396,26 @@ section > h2 {
 }
 
 #valuation-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+#valuation-form fieldset {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.75rem;
+  margin: 0;
+}
+
+#valuation-form fieldset legend {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--accent);
+  padding: 0 0.35rem;
 }
 
 #valuation-form > * {
@@ -427,7 +444,6 @@ section > h2 {
 }
 
 #valuation-form button {
-  grid-column: 1 / -1;
   min-height: 44px;
   font-size: 1rem;
   font-weight: 600;
@@ -441,6 +457,22 @@ section > h2 {
 
 #valuation-form button:hover {
   opacity: 0.9;
+}
+
+/* Error focus — highlight first invalid field */
+input:focus:invalid,
+select:focus:invalid {
+  outline: 2px solid #c0392b;
+  outline-offset: 2px;
+  box-shadow: none;
+}
+
+/* Price position within valuation cards */
+.asking-caveat {
+  font-size: 0.7rem;
+  color: var(--muted);
+  font-style: italic;
+  margin-top: 0.3rem;
 }
 
 #valuation-status {
@@ -537,6 +569,51 @@ section > h2 {
   font-size: 0.75rem;
   font-style: italic;
   color: var(--muted);
+}
+
+/* Price Position */
+.price-position {
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  background: var(--paper);
+  border-radius: 4px;
+  font-size: 0.75rem;
+}
+
+.price-range-track {
+  position: relative;
+  height: 6px;
+  background: var(--line);
+  border-radius: 3px;
+  margin-bottom: 0.25rem;
+}
+
+.price-marker {
+  position: absolute;
+  top: -3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  transform: translateX(-50%);
+}
+
+.price-marker-point {
+  background: var(--accent);
+  border: 2px solid var(--card);
+  z-index: 1;
+}
+
+.price-marker-asking {
+  background: var(--accent-warm);
+  border: 2px solid var(--card);
+}
+
+.price-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: var(--muted);
+  margin-top: 0.15rem;
 }
 
 @media (max-width: 960px) {

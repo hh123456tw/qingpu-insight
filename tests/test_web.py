@@ -468,11 +468,21 @@ class TestReportApi:
         assert response.status_code == 201
 
 
+def test_homepage_has_h1_before_assistant_starter_and_valuation_fieldsets(client) -> None:
+    home = BeautifulSoup(client.get("/").get_data(as_text=True), "html.parser")
+    assert home.find(["h1", "h2"]).name == "h1"
+    assert home.select_one("#assistant-starter") is not None
+    assert home.select_one("#report-form") is None
+    assert home.select_one("#report-result") is None
+    assert home.select_one("#valuation-form fieldset.basic-valuation-fields") is not None
+    assert home.select_one("#valuation-form fieldset.detailed-valuation-fields") is not None
+
+
 def test_homepage_keeps_user_features_and_moves_ops_to_admin(client) -> None:
     home = BeautifulSoup(client.get("/").get_data(as_text=True), "html.parser")
     admin_page = BeautifulSoup(client.get("/admin/").get_data(as_text=True), "html.parser")
     assert home.select_one("#valuation-form") is not None
-    assert home.select_one("#report-form") is not None
+    assert home.select_one("#report-form") is None
     assert home.select_one("#job-submit") is None
     assert home.select_one(".ops-panel") is None
     assert home.select_one('a[href="/admin"]') is not None
