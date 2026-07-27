@@ -153,6 +153,56 @@ def local_factors(bundle: ValuationBundle, row: pd.DataFrame) -> list[dict[str, 
     return sorted(factors, key=lambda item: abs(item["impact_twd_per_ping"]), reverse=True)[:5]
 
 
+def _component_similarity(left: object, right: object, tolerance: float) -> float | None:
+    try:
+        l_val = float(left)  # type: ignore[arg-type]
+        r_val = float(right)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if np.isnan(l_val) or np.isnan(r_val):
+        return None
+    if tolerance <= 0:
+        return None
+    return max(0.0, 1.0 - abs(l_val - r_val) / tolerance)
+
+
+def _layout_similarity(input_row: pd.Series, candidate: pd.Series) -> float:
+    score = _component_similarity(input_row["bedrooms"], candidate["bedrooms"], 2)
+    return score if score is not None else 0.0
+
+
+def _comparable_similarity(
+    input_row: pd.Series, candidate: pd.Series, max_date: pd.Timestamp
+) -> float:
+    ref_area = float(input_row["building_area_ping"])
+    area = float(candidate["building_area_ping"])
+    ref_distance = float(input_row["station_distance_m"])
+    distance = float(candidate["station_distance_m"])
+    ref_age = input_row.get("building_age_years", float("nan"))
+    age = candidate.get("building_age_years", float("nan"))
+    ref_floor_ratio = float(input_row["floor_ratio"])
+    floor_ratio = float(candidate["floor_ratio"])
+    ref_type = str(input_row["building_type"])
+    candidate_type = str(candidate["building_type"])
+    months_old = (max_date - pd.Timestamp(candidate["transaction_date"])).days / 30.0
+
+    components = [
+        (0.25, _component_similarity(ref_area, area, 20)),
+        (0.20, _component_similarity(ref_distance, distance, 1000)),
+        (0.15, _layout_similarity(input_row, candidate)),
+        (0.10, _component_similarity(ref_age, age, 20)),
+        (0.10, _component_similarity(ref_floor_ratio, floor_ratio, 0.5)),
+        (0.10, 1.0 if ref_type == candidate_type else 0.0),
+        (0.10, max(0.0, 1.0 - months_old / 60)),
+    ]
+    available = [(weight, score) for weight, score in components if score is not None]
+    if not available:
+        return 0.0
+    return sum(weight * score for weight, score in available) / sum(
+        weight for weight, _ in available
+    )
+
+
 def similar_transactions(
     bundle: ValuationBundle, input_row: pd.DataFrame, market: pd.DataFrame
 ) -> dict[str, Any]:
@@ -173,41 +223,18 @@ def similar_transactions(
     pool = same_station if not expanded else candidates
     scope = "same_station" if not expanded else "expanded_station"
 
-    ref_area = float(input_row.at[0, "building_area_ping"])
-    ref_dist = float(input_row.at[0, "station_distance_m"])
-    ref_bed = float(input_row.at[0, "bedrooms"])
-    ref_age = (
-        float(input_row.at[0, "building_age_years"])
-        if pd.notna(input_row.at[0, "building_age_years"])
-        else 0
-    )
-    ref_ratio = float(input_row.at[0, "floor_ratio"])
-    ref_type = str(input_row.at[0, "building_type"])
+    input_series = input_row.iloc[0]
 
     scores = []
     for _, row in pool.iterrows():
-        age = float(row["building_age_years"]) if pd.notna(row.get("building_age_years")) else 0
-        dist = (
-            abs(float(row["building_area_ping"]) - ref_area)
-            + abs(float(row["station_distance_m"]) - ref_dist) / 100
-            + abs(float(row["bedrooms"]) - ref_bed)
-            + abs(age - ref_age) / 10
-            + abs(float(row.get("floor_ratio", 0)) - ref_ratio)
-            + abs((max_date - pd.Timestamp(row["transaction_date"])).days) / 30
-        )
-        penalty = 0.5 if str(row.get("building_type", "")) != ref_type else 0
-        scores.append((dist + penalty, row))
+        similarity = _comparable_similarity(input_series, row, max_date)
+        scores.append((similarity, row))
 
-    scores.sort(key=lambda item: item[0])
+    scores.sort(key=lambda item: (-item[0], -item[1]["transaction_date"].timestamp()))
     top = scores[:5]
 
-    max_dist = max(item[0] for item in top) if top else 1
-    if max_dist == 0:
-        max_dist = 1
-
     comparables_list = []
-    for dist_score, row in top:
-        similarity = max(0.0, 1.0 - dist_score / max_dist)
+    for similarity, row in top:
         comparables_list.append(
             {
                 "record_id": str(row["record_id"]),

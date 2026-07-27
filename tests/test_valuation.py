@@ -417,6 +417,149 @@ def test_degraded_valuation_refuses_to_invent_price_without_market_data(valid_re
         valuate(valid_resale_input, UnavailableRegistry(), empty)
 
 
+# --- Task 2 helpers ---
+
+
+def _candidate(
+    area=31,
+    distance=520,
+    bedrooms=3,
+    months_old=6,
+    age=6.0,
+    floor_ratio=0.5,
+    building_type="住宅大樓",
+    record_id="C0",
+) -> dict:
+    """Build a candidate dict for a market DataFrame row."""
+    return {
+        "record_id": record_id,
+        "transaction_type": "resale",
+        "transaction_date": pd.Timestamp("2026-06-01") - pd.DateOffset(months=months_old),
+        "station_code": "A17",
+        "building_type": building_type,
+        "building_area_ping": area,
+        "unit_price_per_ping_twd": 500000,
+        "total_price_twd": 15000000,
+        "station_distance_m": distance,
+        "bedrooms": bedrooms,
+        "floor_ratio": floor_ratio,
+        "longitude": 121.23,
+        "latitude": 25.03,
+        "building_age_years": age,
+    }
+
+
+def _market(candidates: list[dict]) -> pd.DataFrame:
+    return pd.DataFrame(candidates)
+
+
+def test_comparable_similarity_is_absolute_not_batch_relative(bundle):
+    input_row = pd.DataFrame(
+        {
+            "station_code": ["A17"],
+            "building_area_ping": [30],
+            "station_distance_m": [500],
+            "bedrooms": [3],
+            "building_age_years": [6.0],
+            "floor_ratio": [0.5],
+            "building_type": ["住宅大樓"],
+        }
+    )
+    close = _candidate(area=31, distance=520, bedrooms=3, months_old=6)
+    far = _candidate(area=80, distance=1900, bedrooms=1, months_old=35)
+    close_rows = [close] * 3
+    base = similar_transactions(bundle, input_row, _market(close_rows))
+    with_outlier = similar_transactions(
+        bundle, input_row, _market(close_rows + [far])
+    )
+    assert base["comparables"][0]["similarity_score"] == (
+        with_outlier["comparables"][0]["similarity_score"]
+    )
+
+
+def test_missing_optional_age_renormalizes_weights():
+    candidate = _candidate(age=float("nan"))
+    input_row_without_age = pd.Series(
+        {
+            "station_code": "A17",
+            "building_area_ping": 30,
+            "station_distance_m": 500,
+            "bedrooms": 3,
+            "floor_ratio": 0.5,
+            "building_type": "住宅大樓",
+        }
+    )
+    max_date = pd.Timestamp("2026-06-01")
+    from qingpu_insight.valuation import _comparable_similarity
+
+    score = _comparable_similarity(input_row_without_age, candidate, max_date)
+    assert 0 <= score <= 1
+
+
+def test_typical_close_cases_clear_point_six(bundle):
+    input_row = pd.DataFrame(
+        {
+            "station_code": ["A17"],
+            "building_area_ping": [30],
+            "station_distance_m": [500],
+            "bedrooms": [3],
+            "building_age_years": [6.0],
+            "floor_ratio": [0.5],
+            "building_type": ["住宅大樓"],
+        }
+    )
+    close_candidates = [
+        _candidate(area=31, distance=520, bedrooms=3, months_old=6, record_id="C1"),
+        _candidate(area=28, distance=480, bedrooms=3, months_old=4, record_id="C2"),
+        _candidate(area=32, distance=510, bedrooms=2, months_old=8, record_id="C3"),
+        _candidate(
+            area=55, distance=1200, bedrooms=4, months_old=15,
+            building_type="華廈", record_id="C4",
+        ),
+        _candidate(area=70, distance=1800, bedrooms=1, months_old=30, record_id="C5"),
+    ]
+    result = similar_transactions(bundle, input_row, _market(close_candidates))
+    assert sum(c["similarity_score"] >= 0.60 for c in result["comparables"]) >= 3
+
+
+def test_confidence_not_low_solely_from_comparable_insufficiency_when_three_good(
+    bundle, market, valid_resale_input
+):
+    result = valuate(valid_resale_input, FakeRegistry(bundle), market)
+    good = sum(1 for c in result["comparables"] if c["similarity_score"] >= 0.60)
+    if good >= 3:
+        assert not any("高相似度成交案例不足" in r for r in result["confidence_reasons"])
+
+
+def test_dissimilar_comparables_include_insufficient_evidence_reason(
+    bundle, valid_resale_input
+):
+    small_market = pd.DataFrame(
+        {
+            "record_id": ["D1", "D2", "D3"],
+            "transaction_type": ["resale", "resale", "resale"],
+            "transaction_date": pd.to_datetime(
+                ["2026-01-01", "2026-02-01", "2026-03-01"]
+            ),
+            "station_code": ["A17", "A17", "A17"],
+            "building_type": ["公寓", "公寓", "公寓"],
+            "building_area_ping": [80, 90, 100],
+            "unit_price_per_ping_twd": [400000, 500000, 600000],
+            "total_price_twd": [32000000, 45000000, 60000000],
+            "station_distance_m": [2000, 2500, 3000],
+            "bedrooms": [1, 1, 1],
+            "floor_ratio": [0.1, 0.1, 0.1],
+            "longitude": [121.20, 121.21, 121.22],
+            "latitude": [25.00, 25.01, 25.02],
+            "building_age_years": [30.0, 35.0, 40.0],
+        }
+    )
+    result = valuate(
+        valid_resale_input, FakeRegistry(bundle), small_market
+    )
+    assert any("高相似度成交案例不足" in r for r in result["confidence_reasons"])
+
+
 def test_similar_transactions_insufficient_data(bundle):
     row = pd.DataFrame(
         {
