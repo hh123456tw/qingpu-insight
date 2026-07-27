@@ -5,7 +5,7 @@ const admin = require("../../src/qingpu_insight/static/admin.js");
 
 assert.deepEqual(admin.SECTIONS, [
   "overview", "data", "listings", "models",
-  "llm", "backups", "jobs", "diagnostics",
+  "llm", "jobs", "diagnostics",
 ]);
 assert.equal(admin.normalizeSection("#models"), "models");
 assert.equal(admin.normalizeSection("#unknown"), "overview");

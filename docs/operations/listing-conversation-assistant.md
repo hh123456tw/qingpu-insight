@@ -151,7 +151,7 @@ CREATE TABLE conversations (
 | 瀏覽器無回應 | Chrome 未安裝或版本過舊 | 確認 Chrome 為最新穩定版 |
 | Verification 頁面 | 591 要求驗證 | 手動操作可見 Chrome 完成驗證後重試 |
 | Provider 錯誤 | Ollama/Gemini 設定不完整 | 檢查環境變數或 API Key |
-| 回答顯示「已自動切換」 | 雲端逾時、限流、驗證失敗或格式不合格 | 查看回答旁的實際模型；到管理中心執行 smoke test |
+| 回答顯示「已自動切換」 | 雲端逾時、限流、驗證失敗或格式不合格 | 查看回答旁的實際模型；到管理中心執行 LLM Benchmark |
 | 回答無引用 | 問題與物件無關或 fact ID 不足 | 重新擷取或重新提問 |
 
 ## 未來擴充

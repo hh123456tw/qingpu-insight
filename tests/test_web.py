@@ -477,7 +477,7 @@ def test_homepage_keeps_user_features_and_moves_ops_to_admin(client) -> None:
     assert home.select_one(".ops-panel") is None
     assert home.select_one('a[href="/admin"]') is not None
     assert admin_page.select_one("#admin-data") is not None
-    assert admin_page.select_one("#admin-backups") is not None
+    assert admin_page.select_one("#admin-backups") is None
 
 
 def test_homepage_contains_market_dashboard_contract(client) -> None:
@@ -2719,7 +2719,7 @@ def test_admin_listing_controls_exclude_rental(
     assert page.select_one("#ls-run-all-btn").get_text(strip=True) == "更新出售與新建案"
 
 
-def test_admin_page_has_eight_classified_sections(model_admin_client):
+def test_admin_page_has_seven_classified_sections(model_admin_client):
     
 
     response = model_admin_client.get("/admin")
@@ -2727,7 +2727,7 @@ def test_admin_page_has_eight_classified_sections(model_admin_client):
     assert response.status_code == 200
     assert [node["id"] for node in soup.select("main > section[id]")] == [
         "admin-overview", "admin-data", "admin-listings", "admin-models",
-        "admin-llm", "admin-backups", "admin-jobs", "admin-diagnostics",
+        "admin-llm", "admin-jobs", "admin-diagnostics",
     ]
     assert soup.select_one('meta[name="csrf-token"]')["content"]
 

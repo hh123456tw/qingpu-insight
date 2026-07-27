@@ -20,7 +20,6 @@
         <li><a href="#listings">刊登</a></li>
         <li><a href="#models">模型</a></li>
         <li><a href="#llm">LLM</a></li>
-        <li><a href="#backups">備份</a></li>
         <li><a href="#jobs">工作</a></li>
         <li><a href="#diagnostics">診斷</a></li>
       </ul>
@@ -134,16 +133,6 @@
           <button id="gm-key-delete-btn" class="admin-btn admin-btn-secondary">刪除 Key</button>
         </div>
         <div id="gm-key-status" class="admin-od-status"></div>
-        <h3>Provider Smoke Test</h3>
-        <div class="admin-field-row">
-          <select id="smoke-provider-select" class="admin-input">
-            <option value="rule">Rule</option>
-            <option value="ollama">Ollama</option>
-            <option value="gemini">Gemini</option>
-          </select>
-          <button id="smoke-run-btn" class="mutation-btn admin-btn">執行 Smoke Test</button>
-        </div>
-        <div id="smoke-result" class="admin-od-status"></div>
         <h3>LLM Benchmark</h3>
         <div class="admin-field-row">
           <label for="benchmark-model-select">模型</label>
@@ -160,33 +149,6 @@
           <div id="benchmark-result" aria-live="polite"></div>
         </div>
       </div></section>
-    <section id="admin-backups"><h2>備份</h2><div class="admin-content">
-        <div class="admin-field-row">
-          <button id="bk-create-btn" class="mutation-btn admin-btn">建立備份</button>
-        </div>
-        <div id="bk-status" class="admin-bk-status"></div>
-        <table id="bk-table" class="admin-bk-table" style="width:100%;border-collapse:collapse;margin-top:12px">
-            <thead><tr>
-              <th>備份ID</th><th>建立時間</th><th>大小</th><th>SHA256</th><th>還原狀態</th><th>操作</th>
-            </tr></thead>
-            <tbody></tbody>
-          </table>
-          <h3>正式資料庫還原</h3>
-          <div class="admin-field-row">
-            <label>備份ID <input type="text" id="restore-backup-id" class="admin-input" placeholder="輸入備份ID"></label>
-            <button id="restore-preview-btn" class="mutation-btn admin-btn">取得還原預覽</button>
-          </div>
-          <div id="restore-preview-area" style="display:none">
-            <p id="restore-preview-detail"></p>
-            <div class="admin-field-row">
-              <label>請輸入確認文字 <input type="text" id="restore-confirm-input" class="admin-input" placeholder="輸入確認文字"></label>
-              <button id="restore-confirm-btn" class="mutation-btn admin-btn" disabled>確認還原</button>
-              <button id="restore-cancel-btn" class="admin-btn admin-btn-secondary">取消</button>
-            </div>
-            <p id="restore-error" class="admin-od-error" style="display:none"></p>
-          </div>
-          <div id="restore-status" class="admin-bk-status"></div>
-        </div></section>
     <section id="admin-jobs"><h2>工作</h2><div class="admin-content"></div></section>
     <section id="admin-diagnostics"><h2>診斷</h2><div class="admin-content"></div></section>
   </main>

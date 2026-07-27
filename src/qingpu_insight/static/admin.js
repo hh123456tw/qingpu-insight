@@ -8,7 +8,7 @@
 
   var SECTIONS = [
     "overview", "data", "listings", "models",
-    "llm", "backups", "jobs", "diagnostics",
+    "llm", "jobs", "diagnostics",
   ];
   var DEFAULT_LISTING_TYPES = ["sale", "newhouse"];
   var mutationReady = false;
@@ -629,25 +629,6 @@
         }
       });
 
-      loadBackups();
-
-      var bkCreateBtn = document.getElementById("bk-create-btn");
-      if (bkCreateBtn) bkCreateBtn.addEventListener("click", startBackupCreate);
-
-      var restorePreviewBtn = document.getElementById("restore-preview-btn");
-      if (restorePreviewBtn) restorePreviewBtn.addEventListener("click", startRestorePreview);
-
-      var restoreConfirmBtn = document.getElementById("restore-confirm-btn");
-      if (restoreConfirmBtn) restoreConfirmBtn.addEventListener("click", submitRestore);
-
-      var restoreCancelBtn = document.getElementById("restore-cancel-btn");
-      if (restoreCancelBtn) {
-        restoreCancelBtn.addEventListener("click", function () {
-          pendingRestorePreview = null;
-          document.getElementById("restore-preview-area").style.display = "none";
-        });
-      }
-
       loadProviderStatus();
 
       var gmSetBtn = document.getElementById("gm-key-set-btn");
@@ -655,9 +636,6 @@
 
       var gmDeleteBtn = document.getElementById("gm-key-delete-btn");
       if (gmDeleteBtn) gmDeleteBtn.addEventListener("click", deleteGeminiKey);
-
-      var smokeBtn = document.getElementById("smoke-run-btn");
-      if (smokeBtn) smokeBtn.addEventListener("click", runSmokeTest);
 
       var benchmarkSelect = document.getElementById("benchmark-model-select");
       if (benchmarkSelect) {
@@ -671,16 +649,6 @@
       if (benchmarkBtn) benchmarkBtn.addEventListener("click", runBenchmark);
       loadBenchmarkModels();
 
-      var restoreInput = document.getElementById("restore-confirm-input");
-      if (restoreInput) {
-        restoreInput.addEventListener("input", function () {
-          var match = canConfirmDangerousAction(
-            restoreInput.value,
-            pendingRestorePreview ? pendingRestorePreview.confirmation_text : ""
-          );
-          document.getElementById("restore-confirm-btn").disabled = !match;
-        });
-      }
     });
   }
 
@@ -984,7 +952,6 @@
     loadProviderStatus: loadProviderStatus,
     setGeminiKey: setGeminiKey,
     deleteGeminiKey: deleteGeminiKey,
-    runSmokeTest: runSmokeTest,
     buildBenchmarkPayload: buildBenchmarkPayload,
     benchmarkModelHelp: benchmarkModelHelp,
     canRunBenchmark: canRunBenchmark,
