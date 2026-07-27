@@ -353,7 +353,8 @@ def test_execute_runs_tuned_model_experiment_with_profiles_and_recency_weighting
     import qingpu_insight.model_training_service as mts
     captured = []
 
-    def spy(split, *, profiles, feature_columns, use_recency_weights, baseline_months, on_profile_start=None):
+    def spy(split, *, profiles, feature_columns,
+            use_recency_weights, baseline_months, on_profile_start=None):
         captured.append({
             "profile_count": len(profiles),
             "use_recency_weights": use_recency_weights,
@@ -361,7 +362,7 @@ def test_execute_runs_tuned_model_experiment_with_profiles_and_recency_weighting
         })
         from qingpu_insight.model_training import run_model_experiment as orig
         result = orig(split)
-        from qingpu_insight.model_training import TunedModelExperiment, ProfileEvaluation
+        from qingpu_insight.model_training import ProfileEvaluation, TunedModelExperiment
         profiles_tuple = tuple(
             ProfileEvaluation(profile=p, candidates=(), candidate_errors={})
             for p in profiles
@@ -370,7 +371,8 @@ def test_execute_runs_tuned_model_experiment_with_profiles_and_recency_weighting
             profile_results=profiles_tuple,
             selected_profile="balanced",
             selected_model="ridge",
-            selected_evaluation=result.final_test_results.get("ridge", result.final_test_results.get("baseline")),
+            selected_evaluation=result.final_test_results.get(
+                "ridge", result.final_test_results.get("baseline")),
             selected_estimator=result.selected_estimator,
             final_test_results=result.final_test_results,
             recommended=result.recommended,

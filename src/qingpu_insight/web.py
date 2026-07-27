@@ -588,7 +588,11 @@ def _parse_model_training_request() -> object:
     elif any(m not in {"resale", "presale"} for m in raw_markets):
         fields["markets"] = "supported_values"
 
-    ordered = [m for m in ("resale", "presale") if m in raw_markets] if isinstance(raw_markets, list) else []
+    market_order = ("resale", "presale")
+    ordered = (
+        [m for m in market_order if m in raw_markets]
+        if isinstance(raw_markets, list) else []
+    )
 
     try:
         tuning_plan = parse_tuning_plan(

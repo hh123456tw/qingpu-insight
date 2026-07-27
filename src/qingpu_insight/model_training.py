@@ -14,10 +14,10 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from qingpu_insight.model_features import FEATURE_COLUMNS
 from qingpu_insight.model_tuning import (
-    TrainingProfile,
     BALANCED_PROFILE,
     PRESET_PROFILES,
     PROFILE_ORDER,
+    TrainingProfile,
 )
 
 
@@ -433,7 +433,7 @@ def run_tuned_model_experiment(
     baseline = RecentMedianBaseline(months=baseline_months)
     try:
         baseline.fit(split.train)
-        baseline_cal = evaluate_fitted_candidate("baseline", baseline, split.calibration)
+        evaluate_fitted_candidate("baseline", baseline, split.calibration)
     except Exception as exc:
         raise BaselineEvaluationError("baseline evaluation failed") from exc
 

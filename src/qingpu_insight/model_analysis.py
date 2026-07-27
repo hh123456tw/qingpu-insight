@@ -3,9 +3,8 @@ import pandas as pd
 from qingpu_insight.model_training import (
     candidate_estimators,
     evaluate_candidate,
-    TimeSplit,
 )
-from qingpu_insight.model_tuning import TrainingProfile, BALANCED_PROFILE
+from qingpu_insight.model_tuning import BALANCED_PROFILE, TrainingProfile
 
 
 def run_annual_backtests(

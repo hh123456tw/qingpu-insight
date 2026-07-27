@@ -209,7 +209,10 @@ class ModelTrainingRequest:
         )
 
     def __repr__(self) -> str:
-        return f"ModelTrainingRequest(markets={self.markets}, trigger={self.trigger!r}, tuning_plan={self.tuning_plan})"
+        return (
+            f"ModelTrainingRequest(markets={self.markets}, "
+            f"trigger={self.trigger!r}, tuning_plan={self.tuning_plan})"
+        )
 
 
 class ModelTrainingService:
@@ -283,13 +286,6 @@ class ModelTrainingService:
             results: list[MarketTrainingResult] = []
             for market in markets:
                 is_resale = market == "resale"
-                self._jobs.progress(
-                    run_id,
-                    {
-                        "stage": f"training_{market}",
-                        "completed_markets": list(completed),
-                    },
-                )
                 model_frame = build_model_frame(frame, market)
                 split = split_by_time(model_frame)
                 try:
@@ -299,11 +295,11 @@ class ModelTrainingService:
                         feature_columns=FEATURE_COLUMNS,
                         use_recency_weights=is_resale,
                         baseline_months=12 if is_resale else 24,
-                        on_profile_start=lambda profile_name: self._jobs.progress(
+                        on_profile_start=lambda pn, _m=market: self._jobs.progress(
                             run_id,
                             {
-                                "stage": f"training_{market}",
-                                "profile": profile_name,
+                                "stage": f"training_{_m}",
+                                "profile": pn,
                                 "completed_markets": list(completed),
                             },
                         ),
@@ -335,7 +331,8 @@ class ModelTrainingService:
                 )
                 try:
                     winning_profile = next(
-                        p for p in request.tuning_plan.profiles if p.name == experiment.selected_profile
+                        p for p in request.tuning_plan.profiles
+                        if p.name == experiment.selected_profile
                     )
                     artifact_path = train_artifact(
                         market, locked, split, seed_bundle, stage,

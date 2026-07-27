@@ -5,15 +5,14 @@ import pandas as pd
 import pytest
 from sklearn.base import BaseEstimator
 
-from qingpu_insight.model_features import FEATURE_COLUMNS
 import qingpu_insight.model_training as model_training
+from qingpu_insight.model_features import FEATURE_COLUMNS
 from qingpu_insight.model_training import (
     BaselineEvaluationError,
     CandidateEvaluation,
     ProfileEvaluationError,
     RecentMedianBaseline,
     TimeSplit,
-    TunedModelExperiment,
     candidate_estimators,
     evaluate_candidate,
     leakage_audit,
@@ -24,7 +23,7 @@ from qingpu_insight.model_training import (
     select_release_candidate,
     split_by_time,
 )
-from qingpu_insight.model_tuning import TrainingProfile, PRESET_PROFILES
+from qingpu_insight.model_tuning import PRESET_PROFILES, TrainingProfile
 
 
 def _build_synthetic_frame(n_rows: int = 800) -> pd.DataFrame:

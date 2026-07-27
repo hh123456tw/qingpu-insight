@@ -1,5 +1,4 @@
 import pandas as pd
-import pytest
 
 from qingpu_insight.model_analysis import run_annual_backtests
 from qingpu_insight.model_tuning import TrainingProfile
@@ -10,8 +9,8 @@ def test_run_annual_backtests_uses_custom_profile(monkeypatch):
 
     def fake_estimators(seed=42, profile=None):
         captured["profile"] = profile
-        from sklearn.pipeline import Pipeline
         from sklearn.dummy import DummyRegressor
+        from sklearn.pipeline import Pipeline
 
         return {
             "hist_gradient_boosting": Pipeline(
