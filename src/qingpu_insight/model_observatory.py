@@ -17,6 +17,15 @@ from qingpu_insight.model_training_service import ModelTrainingService, build_da
 from qingpu_insight.valuation import ValuationBundle
 
 
+def _project_result(r: Any) -> dict[str, Any]:
+    data = r.model_dump(mode="json")
+    fe = data.get("feature_experiments", [])
+    bt = data.get("backtests", [])
+    rc = data.get("release_checks", {})
+    data["analysis_available"] = bool(fe or bt or rc)
+    return data
+
+
 class ModelObservatory:
     def __init__(
         self,
@@ -55,7 +64,7 @@ class ModelObservatory:
             "warning": "official_manifest_missing",
         }
 
-    def status(self) -> dict[str, Any]:
+    def status(self, latest_data_date: pd.Timestamp | None = None) -> dict[str, Any]:
         official_models: dict[str, Any] = {}
         for market in ("resale", "presale"):
             if self._official_store is not None:
@@ -78,14 +87,11 @@ class ModelObservatory:
                             "warning": f"{market}_model_corrupt",
                         }
                 else:
-                    official_models[market] = (
-                        self._legacy_model_status(market)
-                        or {
-                            "available": False,
-                            "role": "official",
-                            "warning": f"{market}_model_unavailable",
-                        }
-                    )
+                    official_models[market] = self._legacy_model_status(market) or {
+                        "available": False,
+                        "role": "official",
+                        "warning": f"{market}_model_unavailable",
+                    }
             else:
                 path = self._artifact_dir / f"{market}.joblib"
                 if not path.exists():
@@ -143,6 +149,25 @@ class ModelObservatory:
             if self._cached_snapshot is not None:
                 result["data_status"] = dict(self._cached_snapshot)
 
+        ref_date = latest_data_date
+        if ref_date is None and self._cached_snapshot is not None:
+            ref_date = pd.Timestamp(self._cached_snapshot["max_date"])
+
+        for market_info in official_models.values():
+            if (
+                market_info.get("available")
+                and market_info.get("data_max_date") is not None
+                and ref_date is not None
+            ):
+                data_max = pd.Timestamp(market_info["data_max_date"])
+                age = (ref_date - data_max).days
+                market_info["age_days"] = age
+                market_info["stale"] = age > 180
+            else:
+                market_info["age_days"] = None
+                market_info["stale"] = False
+            market_info["stale_after_days"] = 180
+
         return result
 
     def report_path(self, run_id: str, report_type: str) -> Path:
@@ -165,12 +190,8 @@ class ModelObservatory:
                 "run_id": run.run_id,
                 "status": run.status,
                 "trigger": run.trigger,
-                "started_at": (
-                    run.started_at.isoformat() if run.started_at else None
-                ),
-                "finished_at": (
-                    run.finished_at.isoformat() if run.finished_at else None
-                ),
+                "started_at": (run.started_at.isoformat() if run.started_at else None),
+                "finished_at": (run.finished_at.isoformat() if run.finished_at else None),
             }
             manifest = manifests.get(run.run_id)
             if manifest is not None:
@@ -194,24 +215,19 @@ class ModelObservatory:
             "run_id": run.run_id,
             "status": run.status,
             "trigger": run.trigger,
-            "started_at": (
-                run.started_at.isoformat() if run.started_at else None
-            ),
-            "finished_at": (
-                run.finished_at.isoformat() if run.finished_at else None
-            ),
+            "started_at": (run.started_at.isoformat() if run.started_at else None),
+            "finished_at": (run.finished_at.isoformat() if run.finished_at else None),
         }
 
         if manifest is not None:
             result["manifest"] = {
+                "schema_version": manifest.schema_version,
                 "markets": manifest.markets,
                 "created_at": manifest.created_at.isoformat(),
                 "source_commit": manifest.source_commit,
                 "source_dirty": manifest.source_dirty,
                 "data_snapshot": manifest.data_snapshot.model_dump(mode="json"),
-                "results": [
-                    r.model_dump(mode="json") for r in manifest.results
-                ],
+                "results": [_project_result(r) for r in manifest.results],
                 "tuning_plan_version": manifest.tuning_plan_version,
                 "profiles": [profile.model_dump(mode="json") for profile in manifest.profiles],
                 "legacy_tuning_record": manifest.schema_version < 3,

@@ -6,7 +6,11 @@ import pytest
 from sklearn.base import BaseEstimator
 
 import qingpu_insight.model_training as model_training
-from qingpu_insight.model_features import FEATURE_COLUMNS
+from qingpu_insight.model_features import (
+    BASE_FEATURE_COLUMNS,
+    FEATURE_COLUMNS,
+    add_derived_features,
+)
 from qingpu_insight.model_training import (
     BaselineEvaluationError,
     CandidateEvaluation,
@@ -18,6 +22,7 @@ from qingpu_insight.model_training import (
     leakage_audit,
     make_preprocessor,
     metric_rows,
+    recency_weights,
     run_model_experiment,
     run_tuned_model_experiment,
     select_release_candidate,
@@ -73,7 +78,7 @@ def _build_synthetic_frame(n_rows: int = 800) -> pd.DataFrame:
                 "road_key": f"R{i % 10}",
             }
         )
-    return pd.DataFrame(rows)
+    return add_derived_features(pd.DataFrame(rows))
 
 
 @pytest.fixture
@@ -351,6 +356,50 @@ class ConstantEstimator:
         return np.full(len(X), self.value)
 
 
+def test_recency_weights_use_48_month_half_life_and_floor(model_frame):
+    latest = model_frame["transaction_date"].max().normalize()
+    sample = pd.DataFrame(
+        {
+            "transaction_date": [
+                latest,
+                latest - pd.DateOffset(months=48),
+                latest - pd.DateOffset(months=240),
+            ]
+        }
+    )
+    weights = recency_weights(sample, reference_date=latest)
+    assert weights[0] == pytest.approx(1.0)
+    assert weights[1] == pytest.approx(0.5)
+    assert weights[2] == pytest.approx(0.10)
+
+
+def test_recent_median_baseline_defaults_to_12_months(fallback_frame):
+    baseline = RecentMedianBaseline()
+    assert baseline.months == 12
+
+
+class RecordingRegressor(BaseEstimator):
+    def fit(self, X, y, sample_weight=None):
+        self.received_sample_weight = sample_weight
+        self.mean_ = float(np.average(y, weights=sample_weight))
+        return self
+
+    def predict(self, X):
+        return np.full(len(X), self.mean_)
+
+
+def test_candidate_fit_receives_recency_weights(model_frame):
+    split = split_by_time(model_frame)
+    estimator = RecordingRegressor()
+    run_model_experiment(
+        split,
+        estimators={"recording": estimator},
+        feature_columns=BASE_FEATURE_COLUMNS,
+    )
+    assert estimator.received_sample_weight is not None
+    assert estimator.received_sample_weight.max() == pytest.approx(1.0)
+
+
 class FailingRegressor(BaseEstimator):
     def fit(self, X, y=None):
         raise RuntimeError("fit failed")
@@ -456,7 +505,7 @@ def test_experiment_final_gate_returns_recommended_false_when_candidate_fails():
                 "road_key": f"R{i % 10}",
             }
         )
-    frame = pd.DataFrame(rows)
+    frame = add_derived_features(pd.DataFrame(rows))
     split = split_by_time(frame)
 
     from sklearn.dummy import DummyRegressor

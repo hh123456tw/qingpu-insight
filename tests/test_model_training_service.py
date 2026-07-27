@@ -5,12 +5,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
+import joblib
 import numpy as np
 import pandas as pd
 import pytest
 
 from qingpu_insight.jobs import ACTIVE_STATUSES, JobRun, JobService, JobStatus
 from qingpu_insight.model_artifacts import CandidateArtifactStore, sha256_file
+from qingpu_insight.model_features import BASE_FEATURE_COLUMNS
 from qingpu_insight.model_training import ProfileEvaluationError
 from qingpu_insight.model_training_service import (
     ModelTrainingError,
@@ -40,8 +42,7 @@ class FakeJobRepository:
             (
                 run
                 for run in self._runs.values()
-                if run.idempotency_key == idempotency_key
-                and run.status in ACTIVE_STATUSES
+                if run.idempotency_key == idempotency_key and run.status in ACTIVE_STATUSES
             ),
             None,
         )
@@ -76,30 +77,20 @@ class FakeJobRepository:
         self._runs[run_id] = replace(
             run,
             status=target_status,
-            started_at=(
-                run.started_at or now if target_status == "running" else run.started_at
-            ),
+            started_at=(run.started_at or now if target_status == "running" else run.started_at),
             finished_at=(
-                now
-                if target_status in ("succeeded", "failed", "skipped")
-                else run.finished_at
+                now if target_status in ("succeeded", "failed", "skipped") else run.finished_at
             ),
             attempt=run.attempt
             + (1 if (run.status == "retry_wait" and target_status == "running") else 0),
-            output_version=(
-                output_version if output_version is not None else run.output_version
-            ),
+            output_version=(output_version if output_version is not None else run.output_version),
             summary=summary if summary is not None else run.summary,
             error_code=error_code if error_code is not None else run.error_code,
-            error_message=(
-                error_message if error_message is not None else run.error_message
-            ),
+            error_message=(error_message if error_message is not None else run.error_message),
         )
         return True
 
-    def list_recent(
-        self, limit: int = 20, job_type: str | None = None
-    ) -> list[JobRun]:
+    def list_recent(self, limit: int = 20, job_type: str | None = None) -> list[JobRun]:
         return list(self._runs.values())[-limit:][::-1]
 
     def list_active(self, job_type: str) -> list[JobRun]:
@@ -125,9 +116,7 @@ def service_fixture(
         jobs=jobs,
         store=store,
         input_path=input_path,
-        source_version_provider=SourceVersionProvider(
-            commit="test-hash", dirty=False
-        ),
+        source_version_provider=SourceVersionProvider(commit="test-hash", dirty=False),
     )
     return service, jobs
 
@@ -135,10 +124,10 @@ def service_fixture(
 @pytest.fixture
 def market_parquet(tmp_path: Path) -> Path:
     np.random.seed(42)
-    n_per_market = 800
+    n_per_market = 3000
     total = n_per_market * 2
-    base = pd.Timestamp("2020-01-01")
-    total_days = 1825
+    base = pd.Timestamp("2017-01-01")
+    total_days = 2922
 
     stations = ["A17", "A18", "A19"]
     types = ["住宅大樓", "華廈"]
@@ -232,15 +221,15 @@ def test_execute_writes_traceable_candidate_without_touching_official_models(
 
     assert manifest.run_id == UUID(run.run_id)
     assert manifest.markets == ["resale"]
-    assert manifest.data_snapshot.raw_count == 1_600
+    assert manifest.data_snapshot.raw_count == 6_000
     assert manifest.data_snapshot.usable_counts == {
-        "resale": 800,
-        "presale": 800,
+        "resale": 3000,
+        "presale": 3000,
     }
     assert manifest.data_snapshot.station_counts == {
-        "A17": 534,
-        "A18": 534,
-        "A19": 532,
+        "A17": 2000,
+        "A18": 2000,
+        "A19": 2000,
     }
     assert sha256_file(official) == before
     assert jobs.get(run.run_id).status == "succeeded"
@@ -361,7 +350,12 @@ def test_execute_runs_tuned_model_experiment_with_profiles_and_recency_weighting
             "profile_names": [p.name for p in profiles],
         })
         from qingpu_insight.model_training import run_model_experiment as orig
-        result = orig(split)
+        result = orig(
+            split,
+            feature_columns=feature_columns,
+            use_recency_weights=use_recency_weights,
+            baseline_months=baseline_months,
+        )
         from qingpu_insight.model_training import ProfileEvaluation, TunedModelExperiment
         profiles_tuple = tuple(
             ProfileEvaluation(profile=p, candidates=(), candidate_errors={})
@@ -393,3 +387,51 @@ def test_execute_runs_tuned_model_experiment_with_profiles_and_recency_weighting
         assert cap["profile_count"] == 3
         assert cap["profile_names"] == ["quick", "balanced", "thorough"]
     assert manifest.results[0].selected_profile == "balanced"
+
+
+def test_resale_training_writes_schema_v2_analysis(tmp_path, market_parquet):
+    service, jobs = service_fixture(tmp_path, input_path=market_parquet)
+    run = service.submit(ModelTrainingRequest(("resale",))).run
+    jobs.start(run.run_id)
+    manifest = service.execute(run.run_id, ModelTrainingRequest(("resale",)))
+    result = manifest.results[0]
+    assert manifest.schema_version == 3
+    assert result.market == "resale"
+    assert result.feature_contract_version == 2
+    assert result.diagnostics["station_counts"]["A18"] > 0
+    assert len(result.feature_experiments) == 7
+    assert len(result.backtests) == 3
+    assert result.selected_profile in {"quick", "balanced", "thorough"}
+    assert result.profile_results
+    assert result.test_coverage is not None
+    assert result.average_interval_width_twd_per_ping is not None
+    assert "a18_improved" in result.release_checks
+    assert result.recommended is result.release_checks["recommended"]
+    expected_reasons = {
+        "overall_mae_improved": "overall_mae_not_improved",
+        "stations_within_limit": "station_regression",
+        "a18_improved": "a18_not_improved",
+        "backtests_passed": "backtest_insufficient",
+        "backtest_stations_within_limit": "backtest_station_regression",
+        "candidate_fresh": "candidate_stale",
+    }
+    assert set(result.reason_codes) == {
+        reason for check, reason in expected_reasons.items() if not result.release_checks[check]
+    }
+    artifact = joblib.load(tmp_path / "candidates" / run.run_id / result.artifact_file)
+    source = pd.read_parquet(market_parquet)
+    resale_max = source.loc[source["transaction_type"].eq("resale"), "transaction_date"].max()
+    assert artifact.data_max_date == str(resale_max.date())
+
+
+def test_presale_training_does_not_run_resale_analysis(tmp_path, market_parquet):
+    service, jobs = service_fixture(tmp_path, input_path=market_parquet)
+    run = service.submit(ModelTrainingRequest(("presale",))).run
+    jobs.start(run.run_id)
+    manifest = service.execute(run.run_id, ModelTrainingRequest(("presale",)))
+    result = manifest.results[0]
+    assert result.market == "presale"
+    assert result.feature_experiments == []
+    assert result.backtests == []
+    artifact = joblib.load(tmp_path / "candidates" / run.run_id / result.artifact_file)
+    assert artifact.feature_columns == BASE_FEATURE_COLUMNS

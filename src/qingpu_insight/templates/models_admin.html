@@ -25,7 +25,7 @@
   <section aria-labelledby="ma-train-title">
     <h2 id="ma-train-title">訓練</h2>
     <div class="ma-notice" id="ma-permanent-notice">模型訓練完成後不會自動發佈。請手動確認並發佈模型以更新 API。</div>
-    <form class="ma-form" id="ma-train-form">
+    <form class="ma-form" id="ma-train-form" novalidate>
       <label>市場
         <select id="ma-market-select">
           <option value="resale">中古屋</option>
@@ -318,7 +318,7 @@
 
       // Overview section
       if (first) {
-        var st = ma.trainingRecordState(first);
+        var st = ma.trainingRecordState(manifest);
         if (st.legacy) {
           var legacyNotice = document.createElement("div");
           legacyNotice.className = "ma-legacy-notice";
@@ -367,6 +367,13 @@
             delta.textContent = "與基準模型相比 MAE " + direction + " " + Math.abs(overview.baselineMaeDelta / 10000).toFixed(2) + " 萬元／坪";
             ovSection.appendChild(delta);
           }
+          if (overview.stationWarnings.length > 0) {
+            var stationWarning = document.createElement("p");
+            stationWarning.className = "ma-regression";
+            stationWarning.textContent =
+              "站點退步警告：" + overview.stationWarnings.join("、");
+            ovSection.appendChild(stationWarning);
+          }
 
           var note = document.createElement("p");
           note.className = "ma-reading-order";
@@ -413,6 +420,39 @@
 
           renderModelMetricsTable(section, "校正評估", r.selection_metrics);
           renderModelMetricsTable(section, "最終測試", r.final_test_metrics);
+          renderEvidenceTable(section, "調參設定比較", ma.profileComparisonRows(r), [
+            ["profile", "設定"],
+            ["model", "模型"],
+            ["mae", "MAE"],
+            ["mape", "MAPE"],
+            ["selected", "選定"],
+          ]);
+          renderEvidenceTable(section, "候選模型比較", ma.modelComparisonRows(r), [
+            ["name", "模型"],
+            ["mae", "MAE"],
+            ["mape", "MAPE"],
+            ["selected", "選定"],
+          ]);
+          renderEvidenceTable(section, "站點表現", ma.stationRows(r), [
+            ["station", "站點"],
+            ["mape", "候選 MAPE"],
+            ["baselineMape", "Baseline MAPE"],
+            ["comparison", "比較"],
+          ]);
+          renderEvidenceTable(section, "特徵實驗", ma.ablationRows(r), [
+            ["name", "實驗"],
+            ["selected_model", "選定模型"],
+          ]);
+          renderEvidenceTable(section, "時間回測", ma.backtestRows(r), [
+            ["cutoff_date", "截止日"],
+            ["candidate_mae", "候選 MAE"],
+            ["baseline_mae", "Baseline MAE"],
+            ["passed", "通過"],
+          ]);
+          renderEvidenceTable(section, "發布檢查", ma.releaseCheckRows(r), [
+            ["code", "檢查"],
+            ["passed", "通過"],
+          ]);
 
           detailsWrapper.appendChild(section);
         }
@@ -452,6 +492,41 @@
         }
         container.appendChild(rpSection);
       }
+    }
+
+    function renderEvidenceTable(container, title, rows, columns) {
+      if (!rows || rows.length === 0) return;
+      var heading = document.createElement("h5");
+      heading.textContent = title;
+      container.appendChild(heading);
+      var wrap = document.createElement("div");
+      wrap.className = "ma-table-wrap ma-compact";
+      var table = document.createElement("table");
+      table.className = "ma-table";
+      var head = document.createElement("thead");
+      var headRow = document.createElement("tr");
+      columns.forEach(function (column) {
+        var th = document.createElement("th");
+        th.textContent = column[1];
+        headRow.appendChild(th);
+      });
+      head.appendChild(headRow);
+      table.appendChild(head);
+      var body = document.createElement("tbody");
+      rows.forEach(function (row) {
+        var tr = document.createElement("tr");
+        columns.forEach(function (column) {
+          var td = document.createElement("td");
+          var value = row[column[0]];
+          if (typeof value === "boolean") value = value ? "是" : "否";
+          td.textContent = value == null || value === "" ? "—" : String(value);
+          tr.appendChild(td);
+        });
+        body.appendChild(tr);
+      });
+      table.appendChild(body);
+      wrap.appendChild(table);
+      container.appendChild(wrap);
     }
 
     function loadStatus() {
@@ -560,6 +635,15 @@
           rf_n_estimators: document.getElementById("ma-custom-rf-n-estimators").value,
           recency_half_life_months: document.getElementById("ma-custom-half-life").value,
         };
+        var clientErrors = ma.validateCustomTuning(select.value, customValues);
+        if (showTuningErrors(clientErrors)) {
+          btn.disabled = false;
+          document.getElementById("ma-submit-notice").textContent =
+            "請先修正標示的自訂參數。";
+          return;
+        }
+      } else {
+        showTuningErrors({});
       }
       var payload = ma.buildTrainingPayload(select.value, includeCustom, customValues);
       var token = ma.csrfToken();
@@ -571,16 +655,76 @@
         },
         body: JSON.stringify(payload),
       })
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
+        .then(function (r) {
+          return r.json().then(function (data) {
+            return { ok: r.ok, data: data };
+          });
+        })
+        .then(function (result) {
           btn.disabled = false;
-          startPolling(data.run_id);
+          if (!result.ok || result.data.error) {
+            var fields =
+              result.data.error && result.data.error.fields
+                ? result.data.error.fields
+                : {};
+            var tuningErrors = {};
+            Object.keys(fields).forEach(function (key) {
+              if (key.indexOf("tuning.custom.") === 0) {
+                tuningErrors[key.slice("tuning.custom.".length)] = fields[key];
+              }
+            });
+            showTuningErrors(tuningErrors);
+            throw new Error(
+              (result.data.error && result.data.error.message) ||
+              "訓練工作無法啟動"
+            );
+          }
+          document.getElementById("ma-submit-notice").textContent =
+            "工作已建立：" + result.data.run_id.slice(0, 8);
+          startPolling(result.data.run_id);
           loadHistory();
         })
-        .catch(function () {
+        .catch(function (error) {
           btn.disabled = false;
+          document.getElementById("ma-submit-notice").textContent =
+            error.message || "訓練工作無法啟動";
         });
     });
+
+    function showTuningErrors(errors) {
+      var fields = {
+        hgb_learning_rate: [
+          "ma-custom-hgb-learning-rate",
+          "ma-error-hgb-learning-rate",
+          "請輸入 0.01～0.20 的數字",
+        ],
+        hgb_max_iter: [
+          "ma-custom-hgb-max-iter",
+          "ma-error-hgb-max-iter",
+          "請輸入 100～1000 的整數",
+        ],
+        rf_n_estimators: [
+          "ma-custom-rf-n-estimators",
+          "ma-error-rf-n-estimators",
+          "請輸入 100～1000 的整數",
+        ],
+        recency_half_life_months: [
+          "ma-custom-half-life",
+          "ma-error-half-life",
+          "中古屋請輸入 12～84 個月；預售屋不適用",
+        ],
+      };
+      var hasErrors = false;
+      Object.keys(fields).forEach(function (key) {
+        var input = document.getElementById(fields[key][0]);
+        var message = document.getElementById(fields[key][1]);
+        var invalid = Object.prototype.hasOwnProperty.call(errors || {}, key);
+        if (input) input.setAttribute("aria-invalid", invalid ? "true" : "false");
+        if (message) message.textContent = invalid ? fields[key][2] : "";
+        hasErrors = hasErrors || invalid;
+      });
+      return hasErrors;
+    }
 
     document.getElementById("ma-market-select").addEventListener("change", updateHalfLifeState);
     var customCb = document.getElementById("ma-custom-enabled");

@@ -137,6 +137,23 @@ assert.deepEqual(admin.buildTrainingPayload("resale", true, custom), {
     },
   },
 });
+assert.deepEqual(admin.buildTrainingPayload("presale", true, {
+  hgb_learning_rate: "0.05",
+  hgb_max_iter: "420",
+  rf_n_estimators: "520",
+  recency_half_life_months: "",
+}), {
+  markets: ["presale"],
+  tuning: {
+    mode: "preset_comparison",
+    include_custom: true,
+    custom: {
+      hgb_learning_rate: 0.05,
+      hgb_max_iter: 420,
+      rf_n_estimators: 520,
+    },
+  },
+});
 
 // validateCustomTuning tests
 assert.equal(
@@ -178,13 +195,10 @@ assert.equal(admin.trainingSubmitSummary("presale", false), "1 個市場 × 3 �
 
 // v3Result fixture
 var v3Result = {
+  selected_model: "hist_gradient_boosting",
   final_test_metrics: {
-    locked_winner: "profile_3",
-    profiles: {
-      profile_0: { mape: 12.3, mae: 45000.0, coverage: 0.75 },
-      profile_1: { mape: 10.1, mae: 52000.0, coverage: 0.80 },
-      profile_2: { mape: 9.8, mae: 48000.0, coverage: 0.82 },
-      profile_3: { mape: 8.5, mae: 45000.0, coverage: 0.85 },
+    hist_gradient_boosting: {
+      overall: { mape: 8.5, mae: 45000.0, coverage: 0.85 },
     },
   },
   profile_results: [
@@ -217,9 +231,28 @@ assert.equal(rows[0].name, "baseline");
 assert.deepEqual(rows[0].metrics, { mape: 12.3, mae: 55000.0, coverage: 0.70 });
 assert.equal(rows[3].name, "profile_3");
 
+var persistedProfileRows = admin.profileComparisonRows({
+  selected_profile: "balanced",
+  selected_model: "ridge",
+  profile_results: [{
+    profile_name: "balanced",
+    parameters: { hgb_learning_rate: 0.06 },
+    selection_metrics: {
+      ridge: { overall: { mae: 48000, mape: 9.8 } },
+    },
+  }],
+});
+assert.equal(persistedProfileRows[0].name, "balanced:ridge");
+assert.equal(persistedProfileRows[0].mae, 48000);
+assert.equal(persistedProfileRows[0].selected, true);
+
 // trainingRecordState tests
 assert.equal(admin.trainingRecordState({ schema_version: 2 }).legacy, true);
 assert.match(admin.trainingRecordState({ schema_version: 2 }).notice, /舊版未保存調參快照/);
+assert.match(
+  admin.trainingRecordState({ schema_version: 2 }).notice,
+  /未包含特徵實驗與時間回測/
+);
 assert.equal(admin.trainingRecordState({ schema_version: 3 }).legacy, false);
 assert.equal(admin.trainingRecordState({ schema_version: 3 }).notice, null);
 
@@ -266,7 +299,6 @@ assert.ok(overview.baselineMaeDelta < 0);
 assert.equal(overview.mape, "8.5%");
 assert.equal(overview.mae, "4.50 萬元／坪");
 assert.equal(overview.coverage, "85.0%");
-assert.equal(overview.state.legacy, false);
 
 // Regression fixture: A18 candidate exceeds baseline
 var regressionResult = {
@@ -278,22 +310,18 @@ var regressionResult = {
   final_test_metrics: {
     random_forest: {
       overall: { mape: 11.5, mae: 56000.0 },
-      stations: {
-        A17: { mape: 10.2, mae: 50000.0 },
-        A18: { mape: 13.8, mae: 62000.0 },
-        A19: { mape: 10.5, mae: 51000.0 },
-      },
+      "station:A17": { mape: 10.2, mae: 50000.0 },
+      "station:A18": { mape: 13.8, mae: 62000.0 },
+      "station:A19": { mape: 10.5, mae: 51000.0 },
     },
     ridge: {
       overall: { mape: 12.0, mae: 57000.0 },
     },
     baseline: {
       overall: { mape: 11.0, mae: 53000.0 },
-      stations: {
-        A17: { mape: 10.5, mae: 50000.0 },
-        A18: { mape: 11.2, mae: 54000.0 },
-        A19: { mape: 11.3, mae: 55000.0 },
-      },
+      "station:A17": { mape: 10.5, mae: 50000.0 },
+      "station:A18": { mape: 11.2, mae: 54000.0 },
+      "station:A19": { mape: 11.3, mae: 55000.0 },
     },
   },
   schema_version: 3,
@@ -302,10 +330,59 @@ var regOverview = admin.trainingOverview(regressionResult);
 assert.equal(regOverview.publishable, false);
 assert.equal(regOverview.baselineMaeDelta, 3000);
 assert.equal(regOverview.selectedModelLabel, "Random Forest");
+assert.deepEqual(regOverview.stationWarnings, ["A18"]);
 
 assert.equal(admin.PROFILE_LABELS.quick, "快速");
 assert.equal(admin.PROFILE_LABELS.balanced, "平衡");
 assert.equal(admin.PROFILE_LABELS.thorough, "精細");
 assert.equal(admin.PROFILE_LABELS.custom, "自訂");
+
+var result = {
+  selected_model: "hist_gradient_boosting",
+  selection_metrics: {
+    baseline: { overall: { mae: 84000, mape: 18.0 } },
+    ridge: { overall: { mae: 82000, mape: 17.5 } },
+    random_forest: { overall: { mae: 70000, mape: 15.0 } },
+    hist_gradient_boosting: { overall: { mae: 67000, mape: 14.2 } },
+  },
+  final_test_metrics: {
+    baseline: {
+      "station:A17": { mape: 16.0 },
+      "station:A18": { mape: 18.0 },
+      "station:A19": { mape: 15.0 },
+    },
+    hist_gradient_boosting: {
+      "station:A17": { mape: 14.0 },
+      "station:A18": { mape: 16.2 },
+      "station:A19": { mape: 14.5 },
+    },
+  },
+  feature_experiments: [
+    { name: "enhanced", selected_model: "hist_gradient_boosting",
+      metrics: { overall: { mae: 67000 }, "station:A18": { mape: 16.2 } } }
+  ],
+  backtests: [{
+    cutoff_date: "2026-06-12",
+    passed: true,
+    stations_within_limit: true,
+    candidate_metrics: {
+      overall: { mae: 67000 },
+      "station:A17": { mape: 14.0 },
+      "station:A18": { mape: 16.2 },
+      "station:A19": { mape: 14.5 },
+    },
+    baseline_metrics: { overall: { mae: 84000 } },
+  }],
+  release_checks: { overall_mae_improved: true, a18_improved: true, recommended: true }
+};
+assert.equal(admin.ablationRows(result)[0].name, "enhanced");
+assert.equal(admin.modelComparisonRows(result).length, 4);
+assert.equal(admin.modelComparisonRows(result).at(-1).selected, true);
+assert.equal(admin.stationRows(result)[1].station, "A18");
+assert.equal(admin.stationRows(result)[1].comparison, "improved");
+assert.equal(admin.backtestRows(result)[0].passed, true);
+assert.equal(admin.backtestRows(result)[0].a18_mape, 16.2);
+assert.equal(admin.releaseCheckRows(result).at(-1).code, "recommended");
+assert.deepEqual(admin.ablationRows({}), []);
 
 process.stdout.write("model admin contract passed\n");

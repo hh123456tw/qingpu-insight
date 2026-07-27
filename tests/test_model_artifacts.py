@@ -1,4 +1,5 @@
 import io
+import json
 from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import UUID
@@ -72,7 +73,9 @@ def manifest_fixture(run_id: str, artifact_hash: str, report_hash: str) -> Train
                 report_sha256={"resale-evaluation": report_hash},
             )
         ],
-    )
+)
+
+_TEST_SHA256 = "a" * 64
 
 
 def committed_store_fixture(tmp_path: Path) -> tuple[CandidateArtifactStore, TrainingManifest]:
@@ -209,6 +212,24 @@ class TestManifestHelpers:
         assert loaded.results[0].selected_profile == "quick"
         assert loaded.results[0].test_coverage == 0.9
 
+        mismatched = manifest.model_dump()
+        mismatched["results"][0]["profile_results"][0]["parameters"][
+            "hgb_max_iter"
+        ] = 999
+        with pytest.raises(ValueError, match="parameters must match snapshot"):
+            TrainingManifest.model_validate(mismatched)
+
+    def test_schema_v3_rejects_incomplete_tuning_evidence(self) -> None:
+        h = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        incomplete = manifest_fixture(
+            run_id="00000000-0000-4000-8000-000000000001",
+            artifact_hash=h,
+            report_hash=h,
+        ).model_copy(update={"schema_version": 3})
+
+        with pytest.raises(ValueError, match="schema v3"):
+            TrainingManifest.model_validate(incomplete.model_dump())
+
     def test_sha256_file(self, tmp_path: Path) -> None:
         f = tmp_path / "test.bin"
         f.write_bytes(b"hello")
@@ -272,9 +293,7 @@ class TestCommitIntegrity:
             artifact_hash=new_hash,
             report_hash=sha256_file(stage2 / "reports" / "resale-evaluation.json"),
         )
-        (stage2 / "manifest.json").write_text(
-            manifest2.model_dump_json(indent=2), encoding="utf-8"
-        )
+        (stage2 / "manifest.json").write_text(manifest2.model_dump_json(indent=2), encoding="utf-8")
 
         with pytest.raises((ValueError, TypeError)):
             store2.commit(rid, manifest2)
@@ -297,9 +316,112 @@ class TestCommitIntegrity:
             artifact_hash=sha256_file(artifact),
             report_hash=fake_hash,
         )
-        (stage / "manifest.json").write_text(
-            manifest.model_dump_json(indent=2), encoding="utf-8"
-        )
+        (stage / "manifest.json").write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
 
         with pytest.raises(ValueError, match="Hash mismatch"):
             store.commit("22222222-2222-4222-8222-222222222222", manifest)
+
+
+@pytest.fixture
+def schema_v1_manifest_json():
+    """A minimal schema-v1 manifest JSON string."""
+    return json.dumps(
+        {
+            "schema_version": 1,
+            "run_id": "33333333-3333-4333-8333-333333333333",
+            "created_at": "2024-06-15T12:00:00Z",
+            "markets": ["resale"],
+            "source_commit": "abc123",
+            "source_dirty": False,
+            "runtime_versions": {"python": "3.11"},
+            "data_snapshot": {
+                "sha256": _TEST_SHA256,
+                "raw_count": 100,
+                "usable_counts": {"resale": 80, "presale": 0},
+                "excluded_counts": {"resale": 20, "presale": 0},
+                "station_counts": {"A17": 30, "A18": 25, "A19": 25},
+                "min_date": "2024-01-01",
+                "max_date": "2024-12-31",
+            },
+            "results": [
+                {
+                    "market": "resale",
+                    "selected_model": "ridge",
+                    "recommended": True,
+                    "reason_codes": ["best_cv_score"],
+                    "selection_metrics": {"cv": {"mae": 1000.0}},
+                    "final_test_metrics": {"test": {"mae": 1200.0}},
+                    "artifact_file": "resale.joblib",
+                    "artifact_sha256": _TEST_SHA256,
+                    "report_files": {"resale-evaluation": "reports/resale-evaluation.json"},
+                    "report_sha256": {
+                        "resale-evaluation": _TEST_SHA256
+                    },
+                }
+            ],
+        }
+    )
+
+
+@pytest.fixture
+def manifest_v2():
+    return TrainingManifest(
+        schema_version=2,
+        run_id=UUID("44444444-4444-4444-8444-444444444444"),
+        created_at=datetime.now(UTC),
+        markets=["resale"],
+        source_commit="abc123",
+        source_dirty=False,
+        runtime_versions={"python": "3.11"},
+        data_snapshot=DataSnapshot(
+            sha256=_TEST_SHA256,
+            raw_count=100,
+            usable_counts={"resale": 80, "presale": 0},
+            excluded_counts={"resale": 20, "presale": 0},
+            station_counts={"A17": 30, "A18": 25, "A19": 25},
+            min_date=date(2024, 1, 1),
+            max_date=date(2024, 12, 31),
+        ),
+        results=[
+            MarketTrainingResult(
+                market="resale",
+                selected_model="ridge",
+                recommended=True,
+                reason_codes=["best_cv_score"],
+                selection_metrics={"cv": {"mae": 1000.0}},
+                final_test_metrics={"test": {"mae": 1200.0}},
+                artifact_file="resale.joblib",
+                artifact_sha256=_TEST_SHA256,
+                report_files={"resale-evaluation": "reports/resale-evaluation.json"},
+                report_sha256={
+                    "resale-evaluation": _TEST_SHA256
+                },
+                feature_contract_version=2,
+                feature_columns=["station_code", "station_distance_m"],
+                diagnostics={"station_counts": {"A18": 25}},
+                feature_experiments=[
+                    {"name": "enhanced", "selected_model": "hist_gradient_boosting"}
+                ],
+                backtests=[{"cutoff_date": "2026-06-12", "passed": True}],
+                release_checks={"a18_improved": True, "recommended": True},
+            )
+        ],
+    )
+
+
+class TestSchemaV2:
+    def test_schema_v1_manifest_loads_with_empty_analysis_fields(self, schema_v1_manifest_json):
+        manifest = TrainingManifest.model_validate_json(schema_v1_manifest_json)
+        result = manifest.results[0]
+        assert manifest.schema_version == 1
+        assert result.feature_columns == []
+        assert result.diagnostics == {}
+        assert result.feature_experiments == []
+        assert result.backtests == []
+        assert result.release_checks == {}
+
+    def test_schema_v2_manifest_round_trips_analysis(self, manifest_v2):
+        loaded = TrainingManifest.model_validate_json(manifest_v2.model_dump_json())
+        assert loaded.schema_version == 2
+        assert loaded.results[0].feature_contract_version == 2
+        assert loaded.results[0].release_checks["a18_improved"] is True

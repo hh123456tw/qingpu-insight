@@ -4,7 +4,6 @@ from typing import Any
 
 import numpy as np
 
-from qingpu_insight.model_features import FEATURE_COLUMNS
 from qingpu_insight.model_training import (
     ModelExperiment,
     TimeSplit,
@@ -14,22 +13,44 @@ from qingpu_insight.model_tuning import TrainingProfile
 from qingpu_insight.valuation import ValuationBundle
 
 
+def compute_interval_summary(
+    bundle: ValuationBundle,
+    evaluated: Any,
+    split: TimeSplit,
+) -> dict[str, float]:
+    test_pred = evaluated.estimator.predict(
+        split.test[list(bundle.feature_columns)]
+    )
+    actual = split.test["target_unit_price_twd"].to_numpy()
+    radius = bundle.interval_abs_residual_twd_per_ping
+    lows = np.maximum(0, test_pred - radius)
+    highs = test_pred + radius
+    return {
+        "test_coverage": float(((actual >= lows) & (actual <= highs)).mean()),
+        "average_interval_width_twd_per_ping": float(np.mean(highs - lows)),
+    }
+
+
 def write_evaluation(
     bundle: ValuationBundle,
     experiment: ModelExperiment,
     split: TimeSplit,
     report_dir: Path,
     selected_profile: TrainingProfile | None = None,
+    diagnostics: dict[str, object] | None = None,
+    feature_experiments: list[dict[str, object]] | None = None,
+    backtests: list[dict[str, object]] | None = None,
+    release_checks: dict[str, bool] | None = None,
+    reason_codes: list[str] | None = None,
 ) -> Path:
     leakage = leakage_audit(split)
-    test_pred = bundle.pipeline.predict(split.test[list(FEATURE_COLUMNS)])
-    test_actual = split.test["target_unit_price_twd"].values
-    radius = bundle.interval_abs_residual_twd_per_ping
-    lows = np.maximum(0, test_pred - radius)
-    highs = test_pred + radius
-    covered = (test_actual >= lows) & (test_actual <= highs)
-    test_coverage = float(covered.mean())
-    avg_interval_width = float(np.mean(highs - lows))
+    selected_name = getattr(
+        experiment,
+        "selected_name",
+        getattr(experiment, "selected_model", bundle.model_name),
+    )
+    evaluated = experiment.final_test_results[selected_name]
+    interval_summary = compute_interval_summary(bundle, evaluated, split)
 
     policy_counts = split.train["target_policy"].value_counts().to_dict()
 
@@ -40,7 +61,9 @@ def write_evaluation(
     else:
         for profile_eval in experiment.profile_results:
             for candidate in profile_eval.candidates:
-                selection_metrics[candidate.evaluation.name] = (
+                selection_metrics[
+                    f"{profile_eval.profile.name}:{candidate.evaluation.name}"
+                ] = (
                     candidate.evaluation.metrics.to_dict(orient="index")
                 )
 
@@ -55,19 +78,24 @@ def write_evaluation(
         "selection_metrics": selection_metrics,
         "final_test_metrics": final_test_metrics,
         "recommendation": {
-            "status": "recommended" if experiment.recommended else "not_recommended",
-            "reason_codes": list(experiment.reason_codes),
+            "status": (
+                "recommended"
+                if release_checks
+                and release_checks.get("recommended", False)
+                or not release_checks
+                and experiment.recommended
+                else "not_recommended"
+            ),
+            "reason_codes": (
+                reason_codes if reason_codes is not None else list(experiment.reason_codes)
+            ),
         },
         "grouped_metrics": bundle.metrics,
         "split": {
             "train_start": str(split.train["transaction_date"].min().date()),
             "train_end": str(split.train["transaction_date"].max().date()),
-            "calibration_start": str(
-                split.calibration["transaction_date"].min().date()
-            ),
-            "calibration_end": str(
-                split.calibration["transaction_date"].max().date()
-            ),
+            "calibration_start": str(split.calibration["transaction_date"].min().date()),
+            "calibration_end": str(split.calibration["transaction_date"].max().date()),
             "test_start": str(split.test["transaction_date"].min().date()),
             "test_end": str(split.test["transaction_date"].max().date()),
             "train_count": len(split.train),
@@ -76,20 +104,48 @@ def write_evaluation(
         },
         "leakage_audit": leakage,
         "target_policy_counts": policy_counts,
-        "calibration_quantile_twd_per_ping": radius,
-        "test_coverage": round(test_coverage, 4),
-        "average_interval_width_twd_per_ping": round(avg_interval_width, 2),
+        "calibration_quantile_twd_per_ping": (
+            bundle.interval_abs_residual_twd_per_ping
+        ),
+        "test_coverage": round(interval_summary["test_coverage"], 4),
+        "average_interval_width_twd_per_ping": round(
+            interval_summary["average_interval_width_twd_per_ping"],
+            2,
+        ),
         "feature_ranges": bundle.feature_ranges,
         "data_date": bundle.data_max_date,
     }
+    if diagnostics is not None:
+        report["diagnostics"] = diagnostics
+    if feature_experiments is not None:
+        report["feature_experiments"] = feature_experiments
+    if backtests is not None:
+        report["backtests"] = backtests
+    if release_checks is not None:
+        report["release_checks"] = release_checks
 
     if selected_profile is not None:
         report["selected_profile"] = selected_profile.name
-        report["profile_results"] = {
-            selected_profile.name: {
-                "parameters": selected_profile.snapshot(),
-            },
-        }
+        if hasattr(experiment, "profile_results"):
+            report["profile_results"] = {
+                profile_eval.profile.name: {
+                    "parameters": profile_eval.profile.snapshot(),
+                    "selection_metrics": {
+                        candidate.model_name: (
+                            candidate.evaluation.metrics.to_dict(orient="index")
+                        )
+                        for candidate in profile_eval.candidates
+                    },
+                    "candidate_errors": profile_eval.candidate_errors,
+                }
+                for profile_eval in experiment.profile_results
+            }
+        else:
+            report["profile_results"] = {
+                selected_profile.name: {
+                    "parameters": selected_profile.snapshot(),
+                },
+            }
         if (
             selected_profile.recency_half_life_months is not None
             and bundle.transaction_type == "resale"
@@ -110,6 +166,10 @@ def write_model_card(
     leakage: dict[str, Any],
     report_dir: Path,
     selected_profile: TrainingProfile | None = None,
+    feature_experiments: list[dict[str, object]] | None = None,
+    backtests: list[dict[str, object]] | None = None,
+    release_checks: dict[str, bool] | None = None,
+    reason_codes: list[str] | None = None,
 ) -> Path:
     lines = [
         f"# {bundle.transaction_type} 估價模型卡",
@@ -134,6 +194,45 @@ def write_model_card(
     for c in candidates:
         marker = " ✓" if c.name == bundle.model_name else ""
         lines.append(f"- {c.name}：MAE = {c.overall_mae:,.0f}{marker}")
+
+    if bundle.transaction_type == "resale":
+        lines.extend(
+            [
+                "",
+                "## 近期資料加權",
+                (
+                    "- 半衰期 "
+                    f"{selected_profile.recency_half_life_months if selected_profile else 48} "
+                    "個月，最低權重 0.10；評估指標不加權。"
+                ),
+                "",
+                "## 特徵實驗與消融",
+            ]
+        )
+        for item in feature_experiments or []:
+            metrics = item.get("metrics", {})
+            overall = metrics.get("overall", {}) if isinstance(metrics, dict) else {}
+            lines.append(
+                f"- {item.get('name', 'unknown')}："
+                f"{item.get('selected_model') or '無'}，"
+                f"MAE = {overall.get('mae', 'N/A')}"
+            )
+
+        lines.extend(["", "## 三期時間回測"])
+        for backtest in backtests or []:
+            candidate = backtest.get("candidate_metrics", {})
+            overall = candidate.get("overall", {}) if isinstance(candidate, dict) else {}
+            lines.append(
+                f"- {backtest.get('cutoff_date', 'unknown')}："
+                f"MAE = {overall.get('mae', 'N/A')}，"
+                f"{'通過' if backtest.get('passed') else '未通過'}"
+            )
+
+        lines.extend(["", "## 發布檢查"])
+        for check, passed in (release_checks or {}).items():
+            lines.append(f"- {check}：{'通過' if passed else '未通過'}")
+        if reason_codes:
+            lines.append(f"- 保留原因：{', '.join(reason_codes)}")
 
     lines.extend(
         [
@@ -184,7 +283,11 @@ def write_model_card(
         ]
     )
 
-    if selected_profile is not None and selected_profile.recency_half_life_months is not None:
+    if (
+        bundle.transaction_type == "resale"
+        and selected_profile is not None
+        and selected_profile.recency_half_life_months is not None
+    ):
         lines.append("## 近期交易權重")
         lines.append(
             f"- 近期交易加權半衰期：{selected_profile.recency_half_life_months} 個月"

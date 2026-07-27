@@ -1,5 +1,6 @@
 import hashlib
 import json
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -8,7 +9,13 @@ import joblib
 import numpy as np
 import pandas as pd
 
-from qingpu_insight.model_features import FEATURE_COLUMNS, ValuationInput, input_frame
+from qingpu_insight.model_features import (
+    BASE_FEATURE_COLUMNS,
+    FEATURE_COLUMNS,
+    ValuationInput,
+    input_frame,
+    parking_adjusted_target,
+)
 from qingpu_insight.model_training import recency_weights
 
 
@@ -27,6 +34,12 @@ class ValuationBundle:
     data_min_date: str
     data_max_date: str
     metrics: dict[str, Any]
+    feature_columns: tuple[str, ...] = BASE_FEATURE_COLUMNS
+
+    def __getattr__(self, name):
+        if name == "feature_columns":
+            return BASE_FEATURE_COLUMNS
+        raise AttributeError(f"ValuationBundle has no attribute {name!r}")
 
 
 class ModelUnavailableError(Exception):
@@ -72,9 +85,7 @@ class ModelRegistry:
                 )
 
             if not artifact_path.exists():
-                raise ModelUnavailableError(
-                    f"official artifact not found: {data['artifact_file']}"
-                )
+                raise ModelUnavailableError(f"official artifact not found: {data['artifact_file']}")
 
             actual_hash = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
             if actual_hash != data["artifact_sha256"]:
@@ -105,6 +116,11 @@ class ModelRegistry:
                 )
             self._bundles[transaction_type] = bundle
         return self._bundles[transaction_type]
+
+
+def model_age_days(bundle: ValuationBundle, latest_data_date: pd.Timestamp) -> int:
+    data_date = pd.Timestamp(bundle.data_max_date).normalize()
+    return (latest_data_date.normalize() - data_date).days
 
 
 def prediction_interval(bundle: ValuationBundle, unit_price: float) -> tuple[float, float]:
@@ -273,8 +289,13 @@ def valuate(
     input_: ValuationInput,
     registry: ModelRegistry,
     market: pd.DataFrame,
+    latest_data_date: pd.Timestamp | None = None,
+    stale_after_days: int = 180,
 ) -> dict[str, Any]:
+    from qingpu_insight.model_training import RecentMedianBaseline
+
     degraded = False
+    degraded_reason: str | None = None
     try:
         bundle = registry.get(input_.transaction_type)
     except ModelUnavailableError:
@@ -312,6 +333,7 @@ def valuate(
             "comparable_scope": "degraded",
             "data_date": str(data_date.date()),
             "degraded": True,
+            "degraded_reason": "artifact_unavailable",
             "asking_price_assessment": None,
             "model": {
                 "name": "recent_median_baseline",
@@ -319,6 +341,91 @@ def valuate(
                 "transaction_type": input_.transaction_type,
             },
         }
+
+    # Staleness check
+    stale = False
+    if input_.transaction_type == "resale" and latest_data_date is not None:
+        age = model_age_days(bundle, latest_data_date)
+        if age > stale_after_days:
+            stale = True
+            degraded = True
+            degraded_reason = "stale_model"
+
+    if stale:
+        recent = market.loc[market["transaction_type"] == input_.transaction_type].copy()
+        recent = recent.dropna(subset=["transaction_date", "unit_price_per_ping_twd"])
+        if recent.empty:
+            raise ModelUnavailableError("model artifact and market data are unavailable")
+        cutoff = latest_data_date.normalize() - pd.DateOffset(months=12)
+        recent = recent.loc[recent["transaction_date"] >= cutoff].copy()
+        if {
+            "building_area_ping",
+            "parking_area_sqm",
+            "parking_price_twd",
+            "total_price_twd",
+        } <= set(recent.columns):
+            recent["target_unit_price_twd"] = recent.apply(
+                lambda item: parking_adjusted_target(item)[0],
+                axis=1,
+            )
+        else:
+            recent["target_unit_price_twd"] = recent["unit_price_per_ping_twd"]
+        baseline = RecentMedianBaseline(months=12).fit(recent)
+        row = input_frame(input_, latest_data_date)
+        unit_price = float(baseline.predict(row)[0])
+        total_price = unit_price * input_.building_area_ping
+        fallback_predictions = baseline.predict(recent)
+        interval_radius = float(
+            np.quantile(
+                np.abs(recent["target_unit_price_twd"].to_numpy() - fallback_predictions),
+                0.90,
+            )
+        )
+        interval = (
+            max(0.0, unit_price - interval_radius),
+            unit_price + interval_radius,
+        )
+        factors = []
+        comparables_list: list[dict[str, Any]] = []
+        comparable_scope = "degraded"
+        confidence_reasons = [
+            "正式模型資料過舊",
+            "使用最新官方資料的近期中位數降級估價",
+        ]
+        result: dict[str, Any] = {
+            "transaction_type": input_.transaction_type,
+            "estimated_unit_price_per_ping_twd": round(unit_price),
+            "estimated_total_price_twd": round(total_price),
+            "interval_total_price_twd": (
+                round(interval[0] * input_.building_area_ping),
+                round(interval[1] * input_.building_area_ping),
+            ),
+            "confidence": "low",
+            "confidence_reasons": confidence_reasons,
+            "factors": factors,
+            "comparables": comparables_list,
+            "comparable_scope": comparable_scope,
+            "data_date": str(latest_data_date.normalize().date()),
+            "degraded": True,
+            "degraded_reason": degraded_reason,
+            "model": {
+                "name": "recent_median_baseline",
+                "version": "fallback",
+                "transaction_type": input_.transaction_type,
+            },
+        }
+        if input_.asking_total_price_twd is not None and input_.asking_total_price_twd > 0:
+            low, high = result["interval_total_price_twd"]
+            if input_.asking_total_price_twd < low:
+                assessment = "偏低"
+            elif input_.asking_total_price_twd <= high:
+                assessment = "合理區間"
+            else:
+                assessment = "偏高"
+            result["asking_price_assessment"] = assessment
+        else:
+            result["asking_price_assessment"] = None
+        return result
 
     data_date = pd.Timestamp(bundle.data_max_date)
     row = input_frame(input_, data_date)
@@ -349,6 +456,7 @@ def valuate(
         "comparable_scope": comparable_scope,
         "data_date": bundle.data_max_date,
         "degraded": False,
+        "degraded_reason": None,
         "model": {
             "name": bundle.model_name,
             "version": bundle.model_version,
@@ -381,21 +489,20 @@ def train_artifact(
     split: Any,
     bundle: ValuationBundle,
     artifact_dir: Path,
+    feature_columns: tuple[str, ...] = FEATURE_COLUMNS,
+    training_frame: pd.DataFrame | None = None,
     use_recency_weights: bool = False,
     recency_half_life_months: int = 48,
 ) -> Path:
+    from sklearn.base import clone
     from sklearn.inspection import permutation_importance
 
-    train_frame = split.train
-    _weights = (
-        recency_weights(
-            train_frame,
-            half_life_months=recency_half_life_months,
-        )
-        if use_recency_weights else None
+    from qingpu_insight.model_training import (
+        RecentMedianBaseline,
+        fit_candidate,
     )
 
-    calibration_pred = selected.estimator.predict(split.calibration[list(FEATURE_COLUMNS)])
+    calibration_pred = selected.estimator.predict(split.calibration[list(feature_columns)])
     radius = float(
         np.quantile(
             np.abs(split.calibration["target_unit_price_twd"].values - calibration_pred),
@@ -405,7 +512,7 @@ def train_artifact(
 
     imp = permutation_importance(
         selected.estimator,
-        split.calibration[list(FEATURE_COLUMNS)],
+        split.calibration[list(feature_columns)],
         split.calibration["target_unit_price_twd"],
         scoring="neg_mean_absolute_error",
         n_repeats=5,
@@ -413,19 +520,51 @@ def train_artifact(
     )
     importance_list = [
         {"feature": name, "importance": float(imp.importances_mean[i])}
-        for i, name in enumerate(FEATURE_COLUMNS)
+        for i, name in enumerate(feature_columns)
     ]
     importance_list.sort(key=lambda x: x["importance"], reverse=True)
 
-    contract_str = json.dumps(list(FEATURE_COLUMNS), sort_keys=True)
+    contract_str = json.dumps(list(feature_columns), sort_keys=True)
     contract_hash = hashlib.sha256(contract_str.encode()).hexdigest()
     version = _model_version(transaction_type, bundle.data_max_date, contract_hash)
 
+    train_frame = training_frame if training_frame is not None else split.train
+    deployed_estimator = selected.estimator
+    if training_frame is not None or use_recency_weights:
+        try:
+            deployed_estimator = clone(selected.estimator)
+        except TypeError:
+            deployed_estimator = deepcopy(selected.estimator)
+        if isinstance(deployed_estimator, RecentMedianBaseline):
+            deployed_estimator.fit(train_frame)
+        else:
+            weights = (
+                recency_weights(
+                    train_frame,
+                    half_life_months=recency_half_life_months,
+                )
+                if use_recency_weights
+                else None
+            )
+            fit_candidate(
+                deployed_estimator,
+                train_frame[list(feature_columns)],
+                train_frame["target_unit_price_twd"],
+                sample_weight=weights,
+            )
     feature_ranges: dict[str, tuple[float, float]] = {}
     feature_hard_ranges: dict[str, tuple[float, float]] = {}
     feature_medians: dict[str, float] = {}
-    for col in FEATURE_COLUMNS:
-        if col in ("station_code", "building_type", "parking_type"):
+    for col in feature_columns:
+        if col in (
+            "station_code",
+            "building_type",
+            "parking_type",
+            "station_building_type",
+            "building_age_band",
+            "area_band",
+            "floor_band",
+        ):
             continue
         values = train_frame[col].dropna()
         if len(values) > 0:
@@ -437,16 +576,17 @@ def train_artifact(
         transaction_type=transaction_type,
         model_name=selected.name,
         model_version=version,
-        pipeline=selected.estimator,
+        pipeline=deployed_estimator,
         interval_abs_residual_twd_per_ping=radius,
         feature_ranges=feature_ranges,
         feature_hard_ranges=feature_hard_ranges,
         feature_medians=feature_medians,
         global_importance=importance_list,
-        reference_rows=split.train,
-        data_min_date=str(split.train["transaction_date"].min().date()),
-        data_max_date=str(split.train["transaction_date"].max().date()),
+        reference_rows=train_frame,
+        data_min_date=str(train_frame["transaction_date"].min().date()),
+        data_max_date=str(train_frame["transaction_date"].max().date()),
         metrics=selected.metrics.to_dict(orient="index"),
+        feature_columns=feature_columns,
     )
 
     artifact_dir.mkdir(parents=True, exist_ok=True)

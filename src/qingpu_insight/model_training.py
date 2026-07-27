@@ -1,3 +1,4 @@
+import inspect
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -47,7 +48,7 @@ def split_by_time(
 
 
 class RecentMedianBaseline(BaseEstimator):
-    def __init__(self, months: int = 24):
+    def __init__(self, months: int = 12):
         self.months = months
         self._group_medians: pd.Series | None = None
         self._group_counts: pd.Series | None = None
@@ -99,9 +100,14 @@ def recency_weights(
 ) -> np.ndarray:
     if reference_date is None:
         reference_date = frame["transaction_date"].max()
-    days = (reference_date - frame["transaction_date"]).dt.days.values.astype(float)
-    half_life_days = half_life_months * 30.44
-    weights = np.exp2(-days / half_life_days)
+    reference_date = pd.Timestamp(reference_date)
+    dates = pd.to_datetime(frame["transaction_date"])
+    elapsed_months = (
+        (reference_date.year - dates.dt.year) * 12
+        + (reference_date.month - dates.dt.month)
+        + (reference_date.day - dates.dt.day) / 30.44
+    ).to_numpy(dtype=float)
+    weights = np.exp2(-elapsed_months / half_life_months)
     return np.maximum(weights, minimum)
 
 
@@ -204,11 +210,23 @@ class BaselineEvaluationError(Exception):
     pass
 
 
+def fit_candidate(est, X, y, sample_weight=None):
+    if sample_weight is None:
+        est.fit(X, y)
+    elif isinstance(est, Pipeline):
+        est.fit(X, y, model__sample_weight=sample_weight)
+    elif "sample_weight" in inspect.signature(est.fit).parameters:
+        est.fit(X, y, sample_weight=sample_weight)
+    else:
+        est.fit(X, y)
+
+
 def evaluate_candidate(
     name: str,
     estimator: Any,
     train_frame: pd.DataFrame,
     evaluation_frame: pd.DataFrame,
+    feature_columns=FEATURE_COLUMNS,
     use_recency_weights: bool = False,
     recency_half_life_months: int = 48,
 ) -> CandidateEvaluation:
@@ -219,20 +237,27 @@ def evaluate_candidate(
         )
         if use_recency_weights else None
     )
-    estimator.fit(
-        train_frame[list(FEATURE_COLUMNS)],
+    fit_candidate(
+        estimator,
+        train_frame[list(feature_columns)],
         train_frame["target_unit_price_twd"],
-        **(dict(model__sample_weight=weights) if weights is not None else {}),
+        sample_weight=weights,
     )
-    return evaluate_fitted_candidate(name, estimator, evaluation_frame)
+    return evaluate_fitted_candidate(
+        name,
+        estimator,
+        evaluation_frame,
+        feature_columns=feature_columns,
+    )
 
 
 def evaluate_fitted_candidate(
     name: str,
     estimator: Any,
     evaluation_frame: pd.DataFrame,
+    feature_columns=FEATURE_COLUMNS,
 ) -> CandidateEvaluation:
-    predicted = estimator.predict(evaluation_frame[list(FEATURE_COLUMNS)])
+    predicted = estimator.predict(evaluation_frame[list(feature_columns)])
     actual = evaluation_frame["target_unit_price_twd"].to_numpy()
     metrics = metric_rows(actual, predicted, evaluation_frame)
     return CandidateEvaluation(
@@ -261,11 +286,22 @@ NUMERIC_FEATURES = [
     "parking_area_ping",
     "transaction_year",
     "transaction_month",
+    "transaction_month_index",
 ]
-CATEGORICAL_FEATURES = ["station_code", "building_type", "parking_type"]
+CATEGORICAL_FEATURES = [
+    "station_code",
+    "building_type",
+    "parking_type",
+    "station_building_type",
+    "building_age_band",
+    "area_band",
+    "floor_band",
+]
 
 
-def make_preprocessor() -> ColumnTransformer:
+def make_preprocessor(feature_columns=FEATURE_COLUMNS) -> ColumnTransformer:
+    num = [c for c in NUMERIC_FEATURES if c in feature_columns]
+    cat = [c for c in CATEGORICAL_FEATURES if c in feature_columns]
     return ColumnTransformer(
         [
             (
@@ -283,7 +319,7 @@ def make_preprocessor() -> ColumnTransformer:
                         ("scale", StandardScaler()),
                     ]
                 ),
-                NUMERIC_FEATURES,
+                num,
             ),
             (
                 "categorical",
@@ -293,21 +329,27 @@ def make_preprocessor() -> ColumnTransformer:
                         ("onehot", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
                     ]
                 ),
-                CATEGORICAL_FEATURES,
+                cat,
             ),
         ]
     )
 
 
 def candidate_estimators(
+    feature_columns=FEATURE_COLUMNS,
     seed: int = 42,
     profile: TrainingProfile = BALANCED_PROFILE,
 ) -> dict[str, Pipeline]:
     return {
-        "ridge": Pipeline([("features", make_preprocessor()), ("model", Ridge(alpha=10.0))]),
+        "ridge": Pipeline(
+            [
+                ("features", make_preprocessor(feature_columns)),
+                ("model", Ridge(alpha=10.0)),
+            ]
+        ),
         "random_forest": Pipeline(
             [
-                ("features", make_preprocessor()),
+                ("features", make_preprocessor(feature_columns)),
                 (
                     "model",
                     RandomForestRegressor(
@@ -322,7 +364,7 @@ def candidate_estimators(
         ),
         "hist_gradient_boosting": Pipeline(
             [
-                ("features", make_preprocessor()),
+                ("features", make_preprocessor(feature_columns)),
                 (
                     "model",
                     HistGradientBoostingRegressor(
@@ -363,15 +405,24 @@ def select_release_candidate(results: list[CandidateEvaluation]) -> CandidateEva
 def run_model_experiment(
     split: TimeSplit,
     estimators: dict[str, Any] | None = None,
+    feature_columns=FEATURE_COLUMNS,
+    use_recency_weights: bool = True,
+    baseline_months: int = 12,
+    locked_candidate_name: str | None = None,
 ) -> ModelExperiment:
     if estimators is None:
-        estimators = candidate_estimators()
+        estimators = candidate_estimators(feature_columns=feature_columns)
 
-    baseline = RecentMedianBaseline()
+    baseline = RecentMedianBaseline(months=baseline_months)
 
     try:
         baseline.fit(split.train)
-        baseline_cal = evaluate_fitted_candidate("baseline", baseline, split.calibration)
+        baseline_cal = evaluate_fitted_candidate(
+            "baseline",
+            baseline,
+            split.calibration,
+            feature_columns=feature_columns,
+        )
     except Exception as exc:
         raise BaselineEvaluationError("baseline evaluation failed") from exc
 
@@ -380,22 +431,48 @@ def run_model_experiment(
 
     for name, est in estimators.items():
         try:
-            est.fit(split.train[list(FEATURE_COLUMNS)], split.train["target_unit_price_twd"])
-            result = evaluate_fitted_candidate(name, est, split.calibration)
+            w = recency_weights(split.train) if use_recency_weights else None
+            fit_candidate(
+                est,
+                split.train[list(feature_columns)],
+                split.train["target_unit_price_twd"],
+                sample_weight=w,
+            )
+            result = evaluate_fitted_candidate(
+                name,
+                est,
+                split.calibration,
+                feature_columns=feature_columns,
+            )
             calibration_results.append(result)
         except Exception:
             candidate_errors[name] = "candidate_failed"
 
-    selected = select_release_candidate(calibration_results)
+    if locked_candidate_name is not None:
+        selected = next(
+            result for result in calibration_results if result.name == locked_candidate_name
+        )
+    else:
+        selected = select_release_candidate(calibration_results)
     selected_name = selected.name
     selected_estimator = selected.estimator
 
     final_test_results: dict[str, CandidateEvaluation] = {}
-    final_baseline = evaluate_fitted_candidate("baseline", baseline, split.test)
+    final_baseline = evaluate_fitted_candidate(
+        "baseline",
+        baseline,
+        split.test,
+        feature_columns=feature_columns,
+    )
     final_test_results["baseline"] = final_baseline
 
     if selected_name != "baseline":
-        final_selected = evaluate_fitted_candidate(selected_name, selected_estimator, split.test)
+        final_selected = evaluate_fitted_candidate(
+            selected_name,
+            selected_estimator,
+            split.test,
+            feature_columns=feature_columns,
+        )
         final_test_results[selected_name] = final_selected
     else:
         final_selected = final_baseline
@@ -431,9 +508,15 @@ def run_tuned_model_experiment(
     on_profile_start: Callable[[str], None] | None = None,
 ) -> TunedModelExperiment:
     baseline = RecentMedianBaseline(months=baseline_months)
+    baseline_feature_columns = ("station_code", "building_type")
     try:
         baseline.fit(split.train)
-        evaluate_fitted_candidate("baseline", baseline, split.calibration)
+        evaluate_fitted_candidate(
+            "baseline",
+            baseline,
+            split.calibration,
+            feature_columns=baseline_feature_columns,
+        )
     except Exception as exc:
         raise BaselineEvaluationError("baseline evaluation failed") from exc
 
@@ -446,7 +529,11 @@ def run_tuned_model_experiment(
 
         candidate_errors: dict[str, str] = {}
         candidates: list[ProfileCandidateEvaluation] = []
-        estimators = candidate_estimators(profile=profile)
+        estimator_parameters = inspect.signature(candidate_estimators).parameters
+        estimator_kwargs: dict[str, Any] = {"profile": profile}
+        if "feature_columns" in estimator_parameters:
+            estimator_kwargs["feature_columns"] = feature_columns
+        estimators = candidate_estimators(**estimator_kwargs)
 
         for model_name, est in estimators.items():
             try:
@@ -455,13 +542,15 @@ def run_tuned_model_experiment(
                         split.train,
                         half_life_months=profile.recency_half_life_months,
                     )
-                    est.fit(
+                    fit_candidate(
+                        est,
                         split.train[list(feature_columns)],
                         split.train["target_unit_price_twd"],
-                        model__sample_weight=weights,
+                        sample_weight=weights,
                     )
                 else:
-                    est.fit(
+                    fit_candidate(
+                        est,
                         split.train[list(feature_columns)],
                         split.train["target_unit_price_twd"],
                     )
@@ -515,7 +604,12 @@ def run_tuned_model_experiment(
     selected_estimator = selected_evaluation.estimator
 
     final_test_results: dict[str, CandidateEvaluation] = {}
-    final_baseline = evaluate_fitted_candidate("baseline", baseline, split.test)
+    final_baseline = evaluate_fitted_candidate(
+        "baseline",
+        baseline,
+        split.test,
+        feature_columns=baseline_feature_columns,
+    )
     final_test_results["baseline"] = final_baseline
 
     if selected_name != "baseline":

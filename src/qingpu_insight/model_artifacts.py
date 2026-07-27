@@ -3,11 +3,11 @@ import os
 import shutil
 from datetime import date, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 import joblib
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from qingpu_insight.valuation import ValuationBundle
 
@@ -69,6 +69,12 @@ class MarketTrainingResult(BaseModel):
     profile_results: list[ProfileTrainingResult] = Field(default_factory=list)
     test_coverage: float | None = Field(default=None, ge=0.0, le=1.0)
     average_interval_width_twd_per_ping: float | None = Field(default=None, ge=0.0)
+    feature_contract_version: int = 0
+    feature_columns: list[str] = Field(default_factory=list)
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
+    feature_experiments: list[dict[str, Any]] = Field(default_factory=list)
+    backtests: list[dict[str, Any]] = Field(default_factory=list)
+    release_checks: dict[str, bool] = Field(default_factory=dict)
 
 
 class TrainingManifest(BaseModel):
@@ -84,6 +90,52 @@ class TrainingManifest(BaseModel):
     results: list[MarketTrainingResult]
     tuning_plan_version: int | None = Field(default=None, ge=1)
     profiles: list[TrainingProfileSnapshot] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def require_complete_v3_evidence(self) -> "TrainingManifest":
+        if self.schema_version != 3:
+            return self
+        if self.tuning_plan_version is None or not self.profiles:
+            raise ValueError("schema v3 requires tuning plan and profile snapshots")
+        profile_names = [profile.name for profile in self.profiles]
+        if len(profile_names) != len(set(profile_names)):
+            raise ValueError("schema v3 profile snapshots must be unique")
+        profile_snapshots = {profile.name: profile for profile in self.profiles}
+        for result in self.results:
+            if (
+                result.selected_profile is None
+                or not result.profile_results
+                or result.test_coverage is None
+                or result.average_interval_width_twd_per_ping is None
+            ):
+                raise ValueError("schema v3 requires complete market tuning evidence")
+            result_profile_names = [
+                profile_result.profile_name
+                for profile_result in result.profile_results
+            ]
+            if result_profile_names != profile_names:
+                raise ValueError(
+                    "schema v3 market profile evidence must match requested profiles"
+                )
+            if result.selected_profile not in profile_snapshots:
+                raise ValueError(
+                    "schema v3 selected profile must exist in requested profiles"
+                )
+            for profile_result in result.profile_results:
+                snapshot = profile_snapshots[profile_result.profile_name]
+                expected_parameters = {
+                    "hgb_learning_rate": snapshot.hgb_learning_rate,
+                    "hgb_max_iter": snapshot.hgb_max_iter,
+                    "rf_n_estimators": snapshot.rf_n_estimators,
+                    "recency_half_life_months": (
+                        snapshot.recency_half_life_months
+                    ),
+                }
+                if profile_result.parameters != expected_parameters:
+                    raise ValueError(
+                        "schema v3 profile result parameters must match snapshot"
+                    )
+        return self
 
 
 class CandidateArtifactStore:
@@ -110,9 +162,7 @@ class CandidateArtifactStore:
     def commit(self, run_id: str, manifest: TrainingManifest) -> Path:
         normalized = self._normalize(run_id)
         if str(manifest.run_id) != normalized:
-            raise ValueError(
-                f"manifest.run_id {manifest.run_id} does not match run_id {run_id}"
-            )
+            raise ValueError(f"manifest.run_id {manifest.run_id} does not match run_id {run_id}")
 
         stage = self._root / f".tmp-{normalized}"
         final = self._root / normalized
@@ -141,9 +191,7 @@ class CandidateArtifactStore:
                 except Exception:
                     raise ValueError(f"{result.artifact_file} is not a valid joblib file") from None
                 if not isinstance(bundle, ValuationBundle):
-                    raise TypeError(
-                        f"{result.artifact_file} is not a ValuationBundle"
-                    )
+                    raise TypeError(f"{result.artifact_file} is not a ValuationBundle")
                 if bundle.transaction_type != result.market:
                     raise ValueError(
                         f"Market mismatch for {result.artifact_file}: "
@@ -157,9 +205,7 @@ class CandidateArtifactStore:
                 expected_hash = result.report_sha256[report_key]
                 actual_hash = sha256_file(report_path)
                 if actual_hash != expected_hash:
-                    raise ValueError(
-                        f"Hash mismatch for report {report_rel}"
-                    )
+                    raise ValueError(f"Hash mismatch for report {report_rel}")
 
         os.replace(str(stage), str(final))
         return final

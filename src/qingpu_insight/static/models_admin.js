@@ -44,12 +44,17 @@
         include_custom: includeCustom,
       };
       if (includeCustom && custom) {
-        tuning.custom = {
-          hgb_learning_rate: parseFloat(custom.hgb_learning_rate),
-          hgb_max_iter: parseInt(custom.hgb_max_iter, 10),
-          rf_n_estimators: parseInt(custom.rf_n_estimators, 10),
-          recency_half_life_months: parseInt(custom.recency_half_life_months, 10),
+        var customPayload = {
+          hgb_learning_rate: Number(custom.hgb_learning_rate),
+          hgb_max_iter: Number(custom.hgb_max_iter),
+          rf_n_estimators: Number(custom.rf_n_estimators),
         };
+        if (value !== "presale") {
+          customPayload.recency_half_life_months = Number(
+            custom.recency_half_life_months
+          );
+        }
+        tuning.custom = customPayload;
       }
       payload.tuning = tuning;
     }
@@ -107,6 +112,12 @@
     candidate_rejected: "候選模型被拒絕",
     not_recommended: "未通過發布門檻",
     baseline_selected: "基準模型表現最佳，未產生可發布的新模型",
+    overall_mae_not_improved: "整體 MAE 未改善至少 2%",
+    station_regression: "A17–A19 有生活圈退步超過 10%",
+    a18_not_improved: "A18 MAPE 未優於基準模型",
+    backtest_insufficient: "三期回測中優於基準模型的期數不足",
+    backtest_station_regression: "回測生活圈退步超過 10%",
+    candidate_stale: "候選模型資料落後最新官方資料超過 180 天",
     artifact_missing: "模型檔案遺失",
     sha256_mismatch: "模型檔案驗證失敗",
     corrupt_artifact: "模型檔案無法讀取",
@@ -174,23 +185,28 @@
 
   function validateCustomTuning(market, custom) {
     var errors = {};
-    var lr = parseFloat(custom.hgb_learning_rate);
-    if (isNaN(lr) || lr < 0.01 || lr > 0.20) {
+    var lr = Number(custom.hgb_learning_rate);
+    if (!Number.isFinite(lr) || lr < 0.01 || lr > 0.20) {
       errors.hgb_learning_rate = true;
     }
-    var maxIter = parseInt(custom.hgb_max_iter, 10);
-    if (isNaN(maxIter) || maxIter < 100 || maxIter > 1000) {
+    var maxIter = Number(custom.hgb_max_iter);
+    if (!Number.isInteger(maxIter) || maxIter < 100 || maxIter > 1000) {
       errors.hgb_max_iter = true;
     }
-    var nEst = parseInt(custom.rf_n_estimators, 10);
-    if (isNaN(nEst) || nEst < 100 || nEst > 1000) {
+    var nEst = Number(custom.rf_n_estimators);
+    if (!Number.isInteger(nEst) || nEst < 100 || nEst > 1000) {
       errors.rf_n_estimators = true;
     }
     if (market === "presale") {
-      errors.recency_half_life_months = "not_applicable";
+      if (
+        custom.recency_half_life_months != null
+        && custom.recency_half_life_months !== ""
+      ) {
+        errors.recency_half_life_months = "not_applicable";
+      }
     } else {
-      var halfLife = parseInt(custom.recency_half_life_months, 10);
-      if (isNaN(halfLife) || halfLife < 12 || halfLife > 84) {
+      var halfLife = Number(custom.recency_half_life_months);
+      if (!Number.isInteger(halfLife) || halfLife < 12 || halfLife > 84) {
         errors.recency_half_life_months = true;
       }
     }
@@ -204,23 +220,86 @@
   }
 
   function metricCards(result) {
-    var fmetrics = result.final_test_metrics;
-    var locked = fmetrics.locked_winner;
-    var profile = fmetrics.profiles[locked];
+    var fmetrics = (result && result.final_test_metrics) || {};
+    var profile = fmetrics[result && result.selected_model];
+    var overall = profile && (profile.overall || profile);
     return [
-      { key: "mape", label: "MAPE", value: profile.mape + "%" },
-      { key: "mae", label: "MAE", value: (profile.mae / 10000).toFixed(2) + " 萬元／坪" },
-      { key: "coverage", label: "測試覆蓋率", value: (result.test_coverage * 100).toFixed(1) + "%" },
+      {
+        key: "mape",
+        label: "MAPE",
+        value: overall && overall.mape != null ? overall.mape + "%" : "—",
+      },
+      {
+        key: "mae",
+        label: "MAE",
+        value: overall && overall.mae != null
+          ? (overall.mae / 10000).toFixed(2) + " 萬元／坪"
+          : "—",
+      },
+      {
+        key: "coverage",
+        label: "測試覆蓋率",
+        value: result && result.test_coverage != null
+          ? (result.test_coverage * 100).toFixed(1) + "%"
+          : "—",
+      },
     ];
   }
 
   function profileComparisonRows(result) {
-    return result.profile_results;
+    var profiles = (result && result.profile_results) || [];
+    var rows = [];
+    if (Array.isArray(profiles)) {
+      if (profiles.length === 0 || !profiles[0].profile_name) return profiles;
+      profiles.forEach(function (profile) {
+        var metrics = profile.selection_metrics || {};
+        Object.keys(metrics).forEach(function (modelName) {
+          var overall = metrics[modelName] && metrics[modelName].overall;
+          rows.push({
+            name: profile.profile_name + ":" + modelName,
+            profile: profile.profile_name,
+            model: modelName,
+            params: profile.parameters || {},
+            mae: overall && overall.mae,
+            mape: overall && overall.mape,
+            metrics: overall || {},
+            selected:
+              profile.profile_name === result.selected_profile
+              && modelName === result.selected_model,
+          });
+        });
+      });
+      return rows;
+    }
+    Object.keys(profiles).forEach(function (profileName) {
+      var profile = profiles[profileName] || {};
+      var metrics = profile.selection_metrics || {};
+      Object.keys(metrics).forEach(function (modelName) {
+        var overall = metrics[modelName] && metrics[modelName].overall;
+        rows.push({
+          name: profileName + ":" + modelName,
+          profile: profileName,
+          model: modelName,
+          params: profile.parameters || {},
+          mae: overall && overall.mae,
+          mape: overall && overall.mape,
+          metrics: overall || {},
+          selected:
+            profileName === result.selected_profile
+            && modelName === result.selected_model,
+        });
+      });
+    });
+    return rows;
   }
 
   function trainingRecordState(manifest) {
     if (manifest.schema_version < 3) {
-      return { legacy: true, notice: "舊版未保存調參快照" };
+      return {
+        legacy: true,
+        notice:
+          "舊版未保存調參快照；部分舊版模型未包含特徵實驗與時間回測。",
+      };
     }
     return { legacy: false, notice: null };
   }
@@ -248,13 +327,94 @@
       mae: mae != null ? (mae / 10000).toFixed(2) + " 萬元／坪" : "—",
       coverage: coverage != null ? (coverage * 100).toFixed(1) + "%" : "—",
       baselineMaeDelta: baselineMae != null && mae != null ? mae - baselineMae : null,
+      stationWarnings: stationRows(result).filter(function (row) {
+        return row.comparison === "regressed";
+      }).map(function (row) {
+        return row.station;
+      }),
       readingOrder: [
         "先看是否通過發布門檻",
         "再看 MAPE 與 MAE",
         "最後確認各站與年度回測沒有明顯退步",
       ],
-      state: trainingRecordState(result || {}),
     };
+  }
+
+  function modelComparisonRows(result) {
+    var out = [];
+    var metrics = (result && result.selection_metrics) || {};
+    var names = Object.keys(metrics);
+    for (var i = 0; i < names.length; i++) {
+      var overall = metrics[names[i]] && metrics[names[i]].overall;
+      out.push({
+        name: names[i],
+        mae: overall && overall.mae != null ? overall.mae : null,
+        mape: overall && overall.mape != null ? overall.mape : null,
+        selected:
+          names[i] === result.selected_model
+          || names[i] === result.selected_profile + ":" + result.selected_model,
+      });
+    }
+    return out;
+  }
+
+  function stationRows(result) {
+    var out = [];
+    if (!result) return out;
+    var finalMetrics = result.final_test_metrics || {};
+    var baseline = finalMetrics.baseline || {};
+    var candidate = finalMetrics[result.selected_model] || {};
+    var stations = ["A17", "A18", "A19"];
+    for (var i = 0; i < stations.length; i++) {
+      var key = "station:" + stations[i];
+      var candidateMape = candidate[key] && candidate[key].mape;
+      var baselineMape = baseline[key] && baseline[key].mape;
+      var comparison = null;
+      if (candidateMape != null && baselineMape != null) {
+        comparison = candidateMape < baselineMape
+          ? "improved"
+          : candidateMape > baselineMape ? "regressed" : "same";
+      }
+      out.push({
+        station: stations[i],
+        mape: candidateMape != null ? candidateMape : null,
+        baselineMape: baselineMape != null ? baselineMape : null,
+        comparison: comparison,
+      });
+    }
+    return out;
+  }
+
+  function ablationRows(result) {
+    return (result && result.feature_experiments) || [];
+  }
+
+  function backtestRows(result) {
+    var rows = (result && result.backtests) || [];
+    return rows.map(function (row) {
+      var candidate = row.candidate_metrics || {};
+      var baseline = row.baseline_metrics || {};
+      return {
+        cutoff_date: row.cutoff_date,
+        passed: row.passed === true,
+        stations_within_limit: row.stations_within_limit === true,
+        candidate_mae: candidate.overall && candidate.overall.mae,
+        baseline_mae: baseline.overall && baseline.overall.mae,
+        a17_mape: candidate["station:A17"] && candidate["station:A17"].mape,
+        a18_mape: candidate["station:A18"] && candidate["station:A18"].mape,
+        a19_mape: candidate["station:A19"] && candidate["station:A19"].mape,
+      };
+    });
+  }
+
+  function releaseCheckRows(result) {
+    var checks = (result && result.release_checks) || {};
+    var names = Object.keys(checks);
+    var out = [];
+    for (var i = 0; i < names.length; i++) {
+      out.push({ code: names[i], passed: checks[names[i]] });
+    }
+    return out;
   }
 
   return {
@@ -278,5 +438,10 @@
     profileComparisonRows: profileComparisonRows,
     trainingRecordState: trainingRecordState,
     trainingOverview: trainingOverview,
+    modelComparisonRows: modelComparisonRows,
+    stationRows: stationRows,
+    ablationRows: ablationRows,
+    backtestRows: backtestRows,
+    releaseCheckRows: releaseCheckRows,
   };
 });

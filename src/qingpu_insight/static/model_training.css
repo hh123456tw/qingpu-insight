@@ -75,9 +75,15 @@
 }
 
 /* Field errors */
-.ma-custom-grid input.ma-field-error {
+.ma-custom-grid input[aria-invalid="true"] {
   border-color: #cc0000;
   background: #fff5f5;
+}
+.ma-custom-grid .ma-field-error {
+  color: #a40000;
+  font-size: 0.78rem;
+  min-height: 1.1em;
+  margin-top: 0.15rem;
 }
 
 /* Summary strip */
