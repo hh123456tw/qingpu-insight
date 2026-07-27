@@ -6,6 +6,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Protocol
 
+CONVERSATION_IMPORT = "conversation_import"
+CONVERSATION_REFRESH = "conversation_refresh"
+CONVERSATION_REPLY = "conversation_reply"
+
 JobStatus = Literal[
     "pending", "running", "succeeded", "retry_wait", "skipped", "failed",
     "needs_attention",
@@ -130,6 +134,9 @@ class JobService:
 
     def get(self, run_id: str) -> JobRun | None:
         return self._repository.get(run_id)
+
+    def list_active(self, job_type: str) -> list[JobRun]:
+        return self._repository.list_active(job_type)
 
     def list_recent(
         self, limit: int = 20, job_type: str | None = None
