@@ -1037,9 +1037,11 @@ class StubListingUpdateService:
     def __init__(self, job_service) -> None:
         self.job_service = job_service
         self.handoffs: list[str] = []
+        self.requests = []
         self.handoff_error: Exception | None = None
 
     def submit(self, request):
+        self.requests.append(request)
         identity = f"{request.types!r}:{request.max_pages}:{request.trigger}"
         return self.job_service.create("listing_update", identity, request.trigger)
 
@@ -1091,7 +1093,7 @@ def test_listing_update_returns_202_without_waiting(
     _, _, service, executor = admin_app
     response = admin_client.post(
         "/api/admin/listing-updates",
-        json={"types": ["sale", "newhouse", "rental"], "max_pages": 1},
+        json={"types": ["sale", "newhouse"], "max_pages": 1},
         headers={"X-Qingpu-CSRF": "test-token"},
     )
     assert response.status_code == 202
@@ -1106,7 +1108,7 @@ def test_exact_active_duplicate_returns_existing_run_without_second_handoff(
 ) -> None:
     _, _, service, executor = admin_app
     request = {
-        "json": {"types": ["sale", "newhouse", "rental"], "max_pages": 1},
+        "json": {"types": ["sale", "newhouse"], "max_pages": 1},
         "headers": {"X-Qingpu-CSRF": "test-token"},
     }
     first = admin_client.post("/api/admin/listing-updates", **request)
@@ -1117,6 +1119,35 @@ def test_exact_active_duplicate_returns_existing_run_without_second_handoff(
     assert duplicate.json["created"] is False
     assert service.handoffs == [first.json["run_id"]]
     assert executor.submitted == [first.json["run_id"]]
+
+
+def test_listing_update_defaults_to_sale_and_newhouse(
+    admin_app, admin_client: FlaskClient,
+) -> None:
+    _, _, service, _ = admin_app
+    response = admin_client.post(
+        "/api/admin/listing-updates",
+        json={},
+        headers={"X-Qingpu-CSRF": "test-token"},
+    )
+    assert response.status_code == 202
+    assert service.requests[-1].types == ("sale", "newhouse")
+
+
+def test_listing_update_rejects_rental_before_job_creation(
+    admin_app, admin_client: FlaskClient,
+) -> None:
+    _, repo, service, executor = admin_app
+    response = admin_client.post(
+        "/api/admin/listing-updates",
+        json={"types": ["rental"], "max_pages": 1},
+        headers={"X-Qingpu-CSRF": "test-token"},
+    )
+    assert response.status_code == 400
+    assert response.get_json()["error"]["fields"]["types"] == "supported_values"
+    assert service.requests == []
+    assert executor.submitted == []
+    assert repo.list_recent(limit=10) == []
 
 
 def test_admin_update_rejects_non_loopback(admin_client: FlaskClient) -> None:
@@ -1964,14 +1995,14 @@ def test_real_executor_web_flow_starts_once_and_shuts_down(
                 sess["_csrf_token"] = "test-token"
             first = client.post(
                 "/api/admin/listing-updates",
-                json={"types": ["sale", "newhouse", "rental"], "max_pages": 1},
+                json={"types": ["sale", "newhouse"], "max_pages": 1},
                 headers={"X-Qingpu-CSRF": "test-token"},
             )
             assert first.status_code == 202
             assert started.wait(5), "executor did not enter preparation"
             duplicate = client.post(
                 "/api/admin/listing-updates",
-                json={"types": ["sale", "newhouse", "rental"], "max_pages": 1},
+                json={"types": ["sale", "newhouse"], "max_pages": 1},
                 headers={"X-Qingpu-CSRF": "test-token"},
             )
             assert duplicate.json["run_id"] == first.json["run_id"]
@@ -1983,8 +2014,8 @@ def test_real_executor_web_flow_starts_once_and_shuts_down(
             assert detail.status_code == 200
             assert detail.json["status"] == "succeeded"
             assert detail.json["output_version"]
-            assert detail.json["summary"]["rows"] == 3
-            assert preparation.calls == ["sale", "newhouse", "rental"]
+            assert detail.json["summary"]["rows"] == 2
+            assert preparation.calls == ["sale", "newhouse"]
     finally:
         release.set()
         app.extensions["qingpu_admin_shutdown"]()

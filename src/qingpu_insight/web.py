@@ -303,12 +303,10 @@ def _create_admin_dashboard_service(
 
         probes["mysql"] = _mysql_probe
 
-    for binary_name, code in (
-        ("chromedriver", "chrome"),
-        ("ollama", "ollama"),
-        ("mysqldump", "mysqldump"),
-        ("mysql", "mysql_client"),
-    ):
+    # Only show dependencies that are part of the normal project workflow.
+    # Selenium manages ChromeDriver on demand, while the MySQL command-line
+    # tools are optional implementation details of backup/restore operations.
+    for binary_name, code in (("ollama", "ollama"),):
 
         def _make_binary_probe(
             name: str = binary_name, probe_code: str = code
@@ -529,7 +527,7 @@ def _parse_listing_update_request() -> ListingUpdateRequest:
         raise ApiInputError("Request body must be a JSON object.", {"body": "object"})
 
     fields: dict[str, str] = {}
-    types = payload.get("types", ["sale", "newhouse", "rental"])
+    types = payload.get("types", ["sale", "newhouse"])
     if not isinstance(types, list):
         fields["types"] = "array"
     elif not types:
@@ -538,7 +536,7 @@ def _parse_listing_update_request() -> ListingUpdateRequest:
         fields["types"] = "string_items"
     elif len(set(types)) != len(types):
         fields["types"] = "unique"
-    elif any(item not in {"sale", "newhouse", "rental"} for item in types):
+    elif any(item not in {"sale", "newhouse"} for item in types):
         fields["types"] = "supported_values"
 
     max_pages = payload.get("max_pages", 10)
