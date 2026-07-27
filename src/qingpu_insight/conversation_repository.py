@@ -485,9 +485,21 @@ class MySQLConversationRepository:
             revision=int(row["revision"]),
             generated_at=row["generated_at"],
             facts=json.loads(row["facts"]) if isinstance(row["facts"], str) else row["facts"],
-            valuation=json.loads(row["valuation"]) if isinstance(row.get("valuation"), str) and row["valuation"] is not None else row.get("valuation"),
-            comparables=json.loads(row["comparables"]) if isinstance(row["comparables"], str) else row["comparables"],
-            limitations=json.loads(row["limitations"]) if isinstance(row["limitations"], str) else row["limitations"],
+            valuation=(
+                json.loads(row["valuation"])
+                if isinstance(row.get("valuation"), str) and row["valuation"] is not None
+                else row.get("valuation")
+            ),
+            comparables=(
+                json.loads(row["comparables"])
+                if isinstance(row["comparables"], str)
+                else row["comparables"]
+            ),
+            limitations=(
+                json.loads(row["limitations"])
+                if isinstance(row["limitations"], str)
+                else row["limitations"]
+            ),
         )
 
     def activate_evidence(

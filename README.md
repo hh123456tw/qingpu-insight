@@ -22,7 +22,7 @@
   - 訓練結果寫入 `artifacts/candidates/<run_id>/`
   - 絕不取代 `artifacts/resale.joblib` 或 `artifacts/presale.joblib`
   - 需要 `QINGPU_SECRET_KEY`、MySQL 與本機存取
-- 完整測試：**999 tests passed**。
+- 完整測試：**1004 tests passed**（含 Conversation Assistant 釋出閘門）。
 - 靜態檢查：**Ruff passed**。
 - Rule Provider 真實 CLI smoke：`success=true`、Fact Accuracy `1.0`、Coverage `1.0`。
 - 正式使用方式是 **Windows 本機執行**；公開雲端部署不在目前必要範圍。
@@ -174,6 +174,29 @@ python -m venv .venv
 - 估價由已評估的模型負責；LLM 只負責依 Evidence Pack 整理說明。
 - 報告中的數字必須引用現有 fact ID；無效報告不會被 benchmark/smoke 判為成功。
 - 買方報告目前一次只分析 **一個物件**，避免多物件證據交叉引用。
+
+## AI 購屋助理
+
+### 快速開始
+
+1. 打開首頁，在「貼上 591 物件，開始分析」輸入框貼上 591 詳細頁網址
+2. 選擇 Provider（Ollama / Gemini / Rule）與模型名稱
+3. 點擊「分析這個物件」
+4. 系統以可見 Chrome 開啟 591 頁面、建立物件快照與估價證據
+5. 自動導向雙欄工作台，左側顯示物件資訊與證據，右側可開始對話
+6. 輸入問題後按 Enter 或點擊「送出」，AI 回答會引用證據 fact ID
+7. 需要更新資料時按「重新擷取」建立新版快照
+8. 舊對話可從首頁「最近對話」恢復
+
+### 進階功能
+
+- **Rule 模式**：顯示固定物件摘要與建議問題，不使用 LLM
+- **Ollama**：本機模型，設定 `OLLAMA_BASE_URL` 環境變數
+- **Gemini**：Google Gemini，設定 `GEMINI_API_KEY` 環境變數
+
+### 技術說明
+
+詳細操作說明請見 `docs/operations/listing-conversation-assistant.md`
 
 ## 資料來源
 
