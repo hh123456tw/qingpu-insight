@@ -44,7 +44,9 @@ from qingpu_insight.listing_update import (
 )
 from qingpu_insight.local_secrets import LocalSecretsStore
 from qingpu_insight.market_metrics import (
+    MapBounds,
     MarketFilters,
+    market_map_points,
     market_summary,
     market_trends,
     recent_transactions,
@@ -415,6 +417,34 @@ def parse_filters(args: MultiDict[str, str]) -> MarketFilters:
             fields["area_ping_min"] = "must_not_exceed_area_ping_max"
             fields["area_ping_max"] = "must_not_be_less_than_area_ping_min"
         raise ApiInputError("篩選條件無效。", fields or {"filters": "invalid"}) from None
+
+
+def _parse_map_view(args: MultiDict[str, str]) -> tuple[int, MapBounds | None]:
+    raw_zoom = args.get("zoom", "14")
+    try:
+        zoom = int(raw_zoom)
+    except (TypeError, ValueError):
+        raise ApiInputError(
+            "地圖縮放層級格式不正確。", {"zoom": "integer_10_to_19"}
+        ) from None
+    if str(zoom) != raw_zoom or not 10 <= zoom <= 19:
+        raise ApiInputError(
+            "地圖縮放層級無效。", {"zoom": "integer_10_to_19"}
+        )
+
+    names = ("south", "west", "north", "east")
+    values = [args.get(name) for name in names]
+    if not any(value not in (None, "") for value in values):
+        return zoom, None
+    if any(value in (None, "") for value in values):
+        raise ApiInputError("地圖邊界不完整。", {"bounds": "all_or_none"})
+    try:
+        bounds = MapBounds(*(float(value) for value in values if value is not None))
+    except (TypeError, ValueError):
+        raise ApiInputError(
+            "地圖邊界無效。", {"bounds": "ordered_finite_numbers"}
+        ) from None
+    return zoom, bounds
 
 
 def _json_default(obj: Any) -> Any:
@@ -806,6 +836,19 @@ def create_app(
     def trends_api():
         filters = parse_filters(request.args)
         return jsonify({"items": market_trends(ds.load(filters), filters)})
+
+    @app.get("/api/market/map-points")
+    def map_points_api():
+        filters = parse_filters(request.args)
+        zoom, bounds = _parse_map_view(request.args)
+        return jsonify(
+            market_map_points(
+                ds.load(filters),
+                filters,
+                zoom=zoom,
+                bounds=bounds,
+            )
+        )
 
     @app.get("/api/transactions")
     def transactions_api():

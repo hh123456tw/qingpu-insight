@@ -488,6 +488,70 @@ class TestMarketApi:
         for field in private_fields:
             assert field not in raw
 
+    def test_map_points_reports_complete_counts_and_public_groups(
+        self, client: FlaskClient,
+    ) -> None:
+        response = client.get(
+            "/api/market/map-points?transaction_type=resale&station=A18&zoom=14"
+        )
+
+        assert response.status_code == 200
+        payload = response.get_json()
+        assert payload["total_records"] == 2
+        assert payload["located_records"] <= payload["total_records"]
+        assert payload["unlocated_records"] == (
+            payload["total_records"] - payload["located_records"]
+        )
+        assert payload["group_count"] == len(payload["items"])
+        assert set(payload["items"][0]) == {
+            "latitude",
+            "longitude",
+            "record_count",
+            "median_unit_price_per_ping_twd",
+            "latest_transaction_date",
+        }
+
+    def test_map_points_bounds_do_not_change_complete_filtered_count(
+        self, client: FlaskClient,
+    ) -> None:
+        base = client.get(
+            "/api/market/map-points?transaction_type=resale&station=A18&zoom=14"
+        ).get_json()
+        bounded = client.get(
+            "/api/market/map-points"
+            "?transaction_type=resale&station=A18&zoom=14"
+            "&south=24&west=120&north=24.1&east=120.1"
+        ).get_json()
+
+        assert bounded["total_records"] == base["total_records"]
+        assert bounded["items"] == []
+
+    @pytest.mark.parametrize(
+        ("query", "fields"),
+        [
+            ("zoom=9", {"zoom": "integer_10_to_19"}),
+            ("zoom=14.5", {"zoom": "integer_10_to_19"}),
+            ("zoom=14&south=24", {"bounds": "all_or_none"}),
+            (
+                "zoom=14&south=25&west=121&north=24&east=122",
+                {"bounds": "ordered_finite_numbers"},
+            ),
+            (
+                "zoom=14&south=nan&west=121&north=25&east=122",
+                {"bounds": "ordered_finite_numbers"},
+            ),
+        ],
+    )
+    def test_map_points_rejects_invalid_view_parameters(
+        self, client: FlaskClient, query: str, fields: dict[str, str]
+    ) -> None:
+        response = client.get(
+            f"/api/market/map-points?transaction_type=resale&{query}"
+        )
+
+        assert response.status_code == 400
+        assert response.get_json()["error"]["fields"] == fields
+
 
 # --- Listing API tests (M3) ---
 
