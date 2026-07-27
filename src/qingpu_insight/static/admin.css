@@ -288,6 +288,46 @@ details summary {
   background: #fafafa;
 }
 
+.mr-candidate-content {
+  display: grid;
+  gap: 0.28rem;
+  min-width: 0;
+}
+
+.mr-candidate-model,
+.mr-candidate-metrics,
+.mr-candidate-decision {
+  font-size: 0.86rem;
+}
+
+.mr-candidate-metrics {
+  color: #555;
+}
+
+.mr-candidate-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-shrink: 0;
+}
+
+.mr-detail-btn {
+  background: #fff;
+  color: #234;
+  border: 1px solid #9aa7b2;
+}
+
+@media (max-width: 760px) {
+  .mr-candidate {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .mr-candidate-actions {
+    justify-content: flex-end;
+  }
+}
+
 .ma-stale-badge {
   background: #fff3cd;
   border: 1px solid #e5c07b;

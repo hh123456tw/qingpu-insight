@@ -385,4 +385,42 @@ assert.equal(admin.backtestRows(result)[0].a18_mape, 16.2);
 assert.equal(admin.releaseCheckRows(result).at(-1).code, "recommended");
 assert.deepEqual(admin.ablationRows({}), []);
 
+// Candidate cards must expose the evidence needed before publishing.
+var candidateRun = {
+  run_id: "f61915ba-a08a-4f18-a284-64e2d4efa6eb",
+  manifest: {
+    schema_version: 2,
+    results: [{
+      market: "resale",
+      selected_model: "hist_gradient_boosting",
+      selected_profile: null,
+      recommended: true,
+      test_coverage: null,
+      final_test_metrics: {
+        hist_gradient_boosting: {
+          overall: { mae: 62798.38, mape: 18.304861243 },
+          "station:A18": { mape: 22.91 },
+        },
+        baseline: {
+          overall: { mae: 84120.00, mape: 22.01 },
+          "station:A18": { mape: 18.30 },
+        },
+      },
+      backtests: [
+        { passed: true },
+        { passed: false },
+        { passed: true },
+      ],
+    }],
+  },
+};
+var candidateSummary = admin.candidateDecisionSummary(candidateRun, "resale");
+assert.equal(candidateSummary.model, "HistGradientBoosting");
+assert.equal(candidateSummary.mae, "6.28 萬元／坪");
+assert.equal(candidateSummary.mape, "18.3%");
+assert.equal(candidateSummary.coverage, "—");
+assert.equal(candidateSummary.backtests, "2 / 3 通過");
+assert.equal(candidateSummary.baselineComparison, "改善 25.3%");
+assert.deepEqual(candidateSummary.stationWarnings, ["A18"]);
+
 process.stdout.write("model admin contract passed\n");

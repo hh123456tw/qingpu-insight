@@ -287,13 +287,65 @@
             var marketInfo = run.markets && run.markets[market];
             var publishable = marketInfo && marketInfo.publishable;
             var blockers = (marketInfo && marketInfo.release_blockers) || [];
+            var summary = ma.candidateDecisionSummary(run, market);
             var el = document.createElement("div");
             el.className = "mr-candidate";
-            var label = document.createElement("span");
+            var content = document.createElement("div");
+            content.className = "mr-candidate-content";
+            var label = document.createElement("strong");
             label.textContent =
               (market === "resale" ? "中古屋" : "預售屋") +
               " — " + (run.run_id ? run.run_id.slice(0, 8) : "");
-            el.appendChild(label);
+            content.appendChild(label);
+            if (summary) {
+              var model = document.createElement("div");
+              model.className = "mr-candidate-model";
+              model.textContent =
+                "模型：" + summary.model + "｜調參：" + summary.profile;
+              content.appendChild(model);
+
+              var metrics = document.createElement("div");
+              metrics.className = "mr-candidate-metrics";
+              metrics.textContent =
+                "MAPE " + summary.mape +
+                "｜MAE " + summary.mae +
+                "｜相較 baseline " + summary.baselineComparison +
+                "｜覆蓋率 " + summary.coverage +
+                "｜回測 " + summary.backtests;
+              content.appendChild(metrics);
+
+              var decision = document.createElement("div");
+              decision.className = summary.recommended
+                ? "mr-candidate-decision ma-gate-pass"
+                : "mr-candidate-decision ma-gate-fail";
+              decision.textContent = summary.recommended
+                ? "模型評估：符合發布門檻"
+                : "模型評估：未通過發布門檻";
+              if (summary.stationWarnings.length > 0) {
+                decision.textContent +=
+                  "｜站點退步：" + summary.stationWarnings.join("、");
+              }
+              content.appendChild(decision);
+            }
+            el.appendChild(content);
+
+            var actions = document.createElement("div");
+            actions.className = "mr-candidate-actions";
+            var detailBtn = document.createElement("button");
+            detailBtn.className = "admin-btn mr-detail-btn";
+            detailBtn.textContent = "查看完整報告";
+            detailBtn.dataset.runId = run.run_id;
+            detailBtn.addEventListener("click", function (e) {
+              var detailRun = details.find(function (item) {
+                return item.run_id === e.currentTarget.dataset.runId;
+              });
+              if (detailRun) renderTrainingDetail(detailRun);
+              var detailSection = document.getElementById("ma-detail");
+              if (detailSection) {
+                detailSection.scrollIntoView({ behavior: "smooth", block: "start" });
+              }
+            });
+            actions.appendChild(detailBtn);
             if (publishable) {
               var btn = document.createElement("button");
               btn.className = "mutation-btn admin-btn mr-publish-btn";
@@ -303,14 +355,15 @@
               btn.addEventListener("click", function (e) {
                 startPublishPreview(e.currentTarget.dataset.runId, e.currentTarget.dataset.market);
               });
-              el.appendChild(btn);
+              actions.appendChild(btn);
             } else if (blockers.length > 0) {
               var reason = document.createElement("span");
               reason.className = "mr-blocker";
               reason.textContent =
                 "（" + blockers.map(ma.reasonLabel).join("、") + "）";
-              el.appendChild(reason);
+              content.appendChild(reason);
             }
+            el.appendChild(actions);
             container.appendChild(el);
             rendered += 1;
           }

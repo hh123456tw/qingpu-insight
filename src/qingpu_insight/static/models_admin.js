@@ -417,6 +417,64 @@
     return out;
   }
 
+  function candidateDecisionSummary(run, market) {
+    var results = (run && run.manifest && run.manifest.results) || [];
+    var result = null;
+    for (var i = 0; i < results.length; i++) {
+      if (results[i].market === market) {
+        result = results[i];
+        break;
+      }
+    }
+    if (!result) return null;
+
+    var overview = trainingOverview(result);
+    var finalMetrics = result.final_test_metrics || {};
+    var selectedOverall =
+      finalMetrics[result.selected_model]
+      && finalMetrics[result.selected_model].overall;
+    var baselineOverall = finalMetrics.baseline && finalMetrics.baseline.overall;
+    var baselineComparison = "無 baseline 資料";
+    if (
+      selectedOverall
+      && selectedOverall.mae != null
+      && baselineOverall
+      && baselineOverall.mae > 0
+    ) {
+      var changePercent =
+        (selectedOverall.mae - baselineOverall.mae)
+        / baselineOverall.mae
+        * 100;
+      baselineComparison =
+        (changePercent <= 0 ? "改善 " : "退步 ")
+        + Math.abs(changePercent).toFixed(1)
+        + "%";
+    }
+    var backtests = backtestRows(result);
+    var passedBacktests = backtests.filter(function (row) {
+      return row.passed;
+    }).length;
+
+    return {
+      model: overview.selectedModelLabel,
+      profile:
+        result.selected_profile
+          ? overview.selectedProfileLabel
+          : "舊版未記錄",
+      mae: overview.mae,
+      mape: overview.mape,
+      coverage: overview.coverage,
+      baselineComparison: baselineComparison,
+      backtests:
+        backtests.length > 0
+          ? passedBacktests + " / " + backtests.length + " 通過"
+          : "不適用或未記錄",
+      stationWarnings: overview.stationWarnings,
+      recommended: result.recommended === true,
+      result: result,
+    };
+  }
+
   return {
     MARKET_PAYLOADS: MARKET_PAYLOADS,
     PROFILE_LABELS: PROFILE_LABELS,
@@ -443,5 +501,6 @@
     ablationRows: ablationRows,
     backtestRows: backtestRows,
     releaseCheckRows: releaseCheckRows,
+    candidateDecisionSummary: candidateDecisionSummary,
   };
 });
