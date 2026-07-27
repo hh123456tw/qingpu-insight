@@ -167,6 +167,138 @@
         return meta ? meta.getAttribute("content") : "";
       }
 
+      var METRIC_INFO = {
+        mae: ["MAE", "平均每坪估錯多少元", "money"],
+        mape: ["MAPE", "平均百分比誤差", "percent"],
+        rmse: ["RMSE", "對較大誤差更敏感", "money"],
+        r2: ["R²", "模型解釋價格差異的程度", "decimal"],
+      };
+
+      var FEATURE_LABELS = {
+        station_distance_m: "距離捷運站",
+        building_age_years: "屋齡",
+        total_floors: "總樓層",
+        station_building_type: "生活圈 × 建物類型",
+        parking_area_ping: "車位面積",
+        transaction_year: "交易年份",
+        transaction_month_index: "交易月份",
+        station_code: "生活圈",
+        building_type: "建物類型",
+        bedrooms: "房數",
+      };
+
+      function metricValue(value, format) {
+        if (value == null || Number.isNaN(Number(value))) return "—";
+        var number = Number(value);
+        if (format === "money") {
+          return new Intl.NumberFormat("zh-TW", {
+            maximumFractionDigits: 0,
+          }).format(number) + " 元／坪";
+        }
+        if (format === "percent") return number.toFixed(2) + "%";
+        return number.toFixed(3);
+      }
+
+      function appendOfficialReport(card, model) {
+        var report = model && model.report;
+        if (!report) return;
+
+        var details = document.createElement("details");
+        details.className = "official-model-report";
+        var summary = document.createElement("summary");
+        summary.textContent = "查看詳細數據";
+        details.appendChild(summary);
+
+        var meta = document.createElement("div");
+        meta.className = "official-report-meta";
+        var metaLines = [
+          "資料期間：" + (report.data_min_date || "—") + " ～ " + (report.data_max_date || "—"),
+          "測試筆數：" + (report.test_count == null ? "—" : report.test_count),
+          "發布狀態：目前正式使用中",
+          "發布時間：" + (model.activated_at ? ma.formatDatetime(model.activated_at) : "—"),
+          "來源訓練 ID：" + (model.source_run_id || "—"),
+        ];
+        for (var i = 0; i < metaLines.length; i++) {
+          var metaLine = document.createElement("div");
+          metaLine.textContent = metaLines[i];
+          meta.appendChild(metaLine);
+        }
+        details.appendChild(meta);
+
+        var metricGrid = document.createElement("div");
+        metricGrid.className = "official-metric-grid";
+        var overall = report.overall || {};
+        Object.keys(METRIC_INFO).forEach(function (key) {
+          var info = METRIC_INFO[key];
+          var metric = document.createElement("div");
+          metric.className = "official-metric";
+          var label = document.createElement("strong");
+          label.textContent = info[0];
+          var value = document.createElement("span");
+          value.textContent = metricValue(overall[key], info[2]);
+          var help = document.createElement("small");
+          help.textContent = info[1];
+          metric.appendChild(label);
+          metric.appendChild(value);
+          metric.appendChild(help);
+          metricGrid.appendChild(metric);
+        });
+        details.appendChild(metricGrid);
+
+        var stationTitle = document.createElement("h4");
+        stationTitle.textContent = "分站誤差";
+        details.appendChild(stationTitle);
+        var stationTable = document.createElement("table");
+        stationTable.className = "official-station-table";
+        var stationHead = document.createElement("thead");
+        stationHead.innerHTML = "<tr><th>生活圈</th><th>MAE</th><th>MAPE</th><th>筆數</th></tr>";
+        stationTable.appendChild(stationHead);
+        var stationBody = document.createElement("tbody");
+        ["A17", "A18", "A19"].forEach(function (station) {
+          var rowData = (report.stations && report.stations[station]) || {};
+          var row = document.createElement("tr");
+          [
+            station,
+            metricValue(rowData.mae, "money"),
+            metricValue(rowData.mape, "percent"),
+            rowData.count == null ? "—" : String(rowData.count),
+          ].forEach(function (text) {
+            var cell = document.createElement("td");
+            cell.textContent = text;
+            row.appendChild(cell);
+          });
+          stationBody.appendChild(row);
+        });
+        stationTable.appendChild(stationBody);
+        details.appendChild(stationTable);
+
+        var featureTitle = document.createElement("h4");
+        featureTitle.textContent = "重要特徵（前五項）";
+        details.appendChild(featureTitle);
+        var featureList = document.createElement("ol");
+        featureList.className = "official-feature-list";
+        var features = report.top_features || [];
+        if (features.length === 0) {
+          var emptyFeature = document.createElement("li");
+          emptyFeature.textContent = "無可用資料";
+          featureList.appendChild(emptyFeature);
+        } else {
+          features.forEach(function (item) {
+            var feature = document.createElement("li");
+            feature.textContent = FEATURE_LABELS[item.feature] || item.feature;
+            featureList.appendChild(feature);
+          });
+        }
+        details.appendChild(featureList);
+
+        var limitation = document.createElement("p");
+        limitation.className = "official-report-limitation";
+        limitation.textContent =
+          "限制：指標來自歷史測試集，不代表未來價格；重要特徵表示模型依賴程度，不代表因果關係。";
+        details.appendChild(limitation);
+        card.appendChild(details);
+      }
+
       function renderOfficialCards(data) {
         var container = document.getElementById("mr-official-cards");
         container.innerHTML = "";
@@ -205,6 +337,7 @@
             line.textContent = lines[j];
             card.appendChild(line);
           }
+          appendOfficialReport(card, m);
           container.appendChild(card);
         }
       }

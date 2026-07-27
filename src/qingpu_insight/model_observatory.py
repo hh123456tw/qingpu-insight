@@ -26,6 +26,58 @@ def _project_result(r: Any) -> dict[str, Any]:
     return data
 
 
+def _public_number(value: Any, *, integer: bool = False) -> int | float | None:
+    if value is None:
+        return None
+    try:
+        return int(value) if integer else float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _official_model_report(bundle: ValuationBundle) -> dict[str, Any]:
+    metrics = bundle.metrics if isinstance(bundle.metrics, dict) else {}
+    overall = metrics.get("overall", {})
+    if not isinstance(overall, dict):
+        overall = {}
+
+    stations: dict[str, dict[str, int | float | None]] = {}
+    for station in ("A17", "A18", "A19"):
+        row = metrics.get(f"station:{station}", {})
+        if not isinstance(row, dict):
+            row = {}
+        stations[station] = {
+            "mae": _public_number(row.get("mae")),
+            "mape": _public_number(row.get("mape")),
+            "count": _public_number(row.get("count"), integer=True),
+        }
+
+    top_features: list[dict[str, str | float]] = []
+    importance = bundle.global_importance
+    if isinstance(importance, list):
+        for item in importance[:5]:
+            if not isinstance(item, dict) or not isinstance(item.get("feature"), str):
+                continue
+            score = _public_number(item.get("importance"))
+            if score is None:
+                continue
+            top_features.append({"feature": item["feature"], "importance": score})
+
+    return {
+        "data_min_date": str(bundle.data_min_date),
+        "data_max_date": str(bundle.data_max_date),
+        "test_count": _public_number(overall.get("count"), integer=True),
+        "overall": {
+            "mae": _public_number(overall.get("mae")),
+            "mape": _public_number(overall.get("mape")),
+            "rmse": _public_number(overall.get("rmse")),
+            "r2": _public_number(overall.get("r2")),
+        },
+        "stations": stations,
+        "top_features": top_features,
+    }
+
+
 class ModelObservatory:
     def __init__(
         self,
@@ -61,6 +113,7 @@ class ModelObservatory:
             "version": bundle.model_version,
             "role": "legacy_fallback",
             "data_max_date": bundle.data_max_date,
+            "report": _official_model_report(bundle),
             "warning": "official_manifest_missing",
         }
 
@@ -79,6 +132,10 @@ class ModelObservatory:
                             "role": "official",
                             "data_max_date": bundle.data_max_date,
                             "version_id": current.version_id,
+                            "source_run_id": current.source_run_id,
+                            "activated_at": current.activated_at.isoformat(),
+                            "artifact_sha256": current.artifact_sha256,
+                            "report": _official_model_report(bundle),
                         }
                     except Exception:
                         official_models[market] = {
@@ -109,6 +166,7 @@ class ModelObservatory:
                         "version": bundle.model_version,
                         "role": "official",
                         "data_max_date": bundle.data_max_date,
+                        "report": _official_model_report(bundle),
                     }
                 except Exception:
                     official_models[market] = {

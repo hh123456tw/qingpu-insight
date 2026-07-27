@@ -230,6 +230,55 @@ def observatory_fixture(
 
 
 class TestModelObservatoryStatus:
+    def test_official_model_projects_saved_report_data(self, tmp_path: Path) -> None:
+        bundle = bundle_fixture(model_name="hist_gradient_boosting")
+        bundle.metrics = {
+            "overall": {
+                "mae": 55_646.8,
+                "mape": 18.16,
+                "rmse": 75_256.9,
+                "r2": 0.635,
+                "count": 696.0,
+            },
+            "station:A17": {"mae": 50_000, "mape": 16.2, "count": 80.0},
+            "station:A18": {"mae": 56_000, "mape": 18.4, "count": 400.0},
+            "station:A19": {"mae": 57_000, "mape": 18.8, "count": 216.0},
+        }
+        bundle.global_importance = [
+            {"feature": "station_distance_m", "importance": 42_804.1},
+            {"feature": "building_age_years", "importance": 15_178.9},
+        ]
+        status = observatory_fixture(
+            tmp_path,
+            official_models={"resale": bundle},
+        ).status()
+
+        model = status["official_models"]["resale"]
+        assert model["source_run_id"]
+        assert model["activated_at"]
+        assert model["artifact_sha256"]
+        assert model["report"] == {
+            "data_min_date": "2023-01-01",
+            "data_max_date": "2024-01-01",
+            "test_count": 696,
+            "overall": {
+                "mae": 55_646.8,
+                "mape": 18.16,
+                "rmse": 75_256.9,
+                "r2": 0.635,
+            },
+            "stations": {
+                "A17": {"mae": 50_000.0, "mape": 16.2, "count": 80},
+                "A18": {"mae": 56_000.0, "mape": 18.4, "count": 400},
+                "A19": {"mae": 57_000.0, "mape": 18.8, "count": 216},
+            },
+            "top_features": [
+                {"feature": "station_distance_m", "importance": 42_804.1},
+                {"feature": "building_age_years", "importance": 15_178.9},
+            ],
+        }
+        json.dumps(status)
+
     def test_official_model_separated_from_candidate_runs(self, tmp_path: Path) -> None:
         observatory = observatory_fixture(
             tmp_path,
