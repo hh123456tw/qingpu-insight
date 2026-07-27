@@ -726,7 +726,12 @@ def test_train_artifact_half_life(tmp_path, monkeypatch):
 
 
 class TestModelRegistryOfficialPreference:
-    def test_registry_prefers_official_manifest_over_legacy_file(self, tmp_path: Path) -> None:
+    def test_registry_prefers_official_manifest_over_legacy_file(
+        self,
+        tmp_path: Path,
+        market: pd.DataFrame,
+        valid_resale_input: ValuationInput,
+    ) -> None:
         from datetime import UTC, date, datetime
         from uuid import uuid4
 
@@ -809,3 +814,13 @@ class TestModelRegistryOfficialPreference:
 
         bundle = ModelRegistry(tmp_path).load("resale")
         assert bundle.model_version == "official-v2"
+
+        (tmp_path / "resale.joblib").unlink()
+        result = valuate(
+            valid_resale_input,
+            ModelRegistry(tmp_path),
+            market,
+            latest_data_date=pd.Timestamp("2024-12-31"),
+        )
+        assert result["model"]["version"] == "official-v2"
+        assert result["model"]["version"] != "fallback"

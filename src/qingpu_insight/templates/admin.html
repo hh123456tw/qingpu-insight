@@ -146,14 +146,19 @@
         <div id="smoke-result" class="admin-od-status"></div>
         <h3>LLM Benchmark</h3>
         <div class="admin-field-row">
-          <select id="benchmark-provider-select" class="admin-input">
-            <option value="ollama">Ollama</option>
-            <option value="gemini">Gemini</option>
+          <label for="benchmark-model-select">模型</label>
+          <select id="benchmark-model-select" class="admin-input" disabled>
+            <option value="">正在載入模型清單…</option>
           </select>
-          <input type="text" id="benchmark-model-input" class="admin-input" placeholder="輸入模型名稱" style="width:200px">
-          <button id="benchmark-run-btn" class="mutation-btn admin-btn">執行 Benchmark</button>
+          <button type="button" id="benchmark-model-refresh" class="admin-btn">
+            重新整理模型清單
+          </button>
+          <button type="button" id="benchmark-run-btn" class="mutation-btn admin-btn" disabled>
+            執行 Benchmark
+          </button>
+          <p id="benchmark-model-help" class="admin-help" aria-live="polite"></p>
+          <div id="benchmark-result" aria-live="polite"></div>
         </div>
-        <div id="benchmark-result" class="admin-od-status"></div>
       </div></section>
     <section id="admin-backups"><h2>備份</h2><div class="admin-content">
         <div class="admin-field-row">

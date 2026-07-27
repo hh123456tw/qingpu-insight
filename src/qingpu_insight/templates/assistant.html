@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="csrf-token" content="{{ csrf_token }}">
+<title>物件分析</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='assistant.css') }}">
+</head>
+<body>
+  <div class="workbench" id="app" data-conversation-id="{{ conversation_id }}">
+    <header class="workbench-header">
+      <a href="/" class="back-home">&larr; 首頁</a>
+      <h1 class="conversation-title">新的物件分析</h1>
+      <div class="header-actions">
+        <span class="provider-badge" aria-label="本對話固定回答模型"></span>
+        <span id="stage-indicator" class="stage-indicator"></span>
+        <button id="refresh-btn" class="btn-secondary">重新擷取</button>
+        <button id="delete-btn" class="btn-danger">刪除</button>
+      </div>
+    </header>
+    <div class="workbench-body">
+      <aside class="evidence-panel" id="evidence-panel">
+        <p class="loading-evidence">載入中...</p>
+      </aside>
+      <main class="chat-panel">
+        <button id="load-older-btn" class="btn-secondary load-older" hidden>
+          載入較早訊息
+        </button>
+        <div class="messages" id="messages-container">
+          <p class="loading-messages">載入中...</p>
+        </div>
+        <div class="composer" id="composer">
+          <div class="suggested-questions" id="suggested-questions"></div>
+          <div class="composer-row">
+            <textarea id="question-input" placeholder="問關於這個物件的問題..." rows="2"></textarea>
+            <button id="send-btn" disabled>送出</button>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+  <script src="{{ url_for('static', filename='job_polling.js') }}"></script>
+  <script src="{{ url_for('static', filename='assistant.js') }}"></script>
+</body>
+</html>

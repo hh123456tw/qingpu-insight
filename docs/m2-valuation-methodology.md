@@ -171,6 +171,37 @@ Schema v2（及更早）的訓練不會有調參快照；頁面上會標示「�
 | 中 | 未達「高」且僅 1 項條件未滿足 |
 | 低 | 2+ 項條件未滿足，或任一輸入超出 1st–99th 百分位，或使用降級模型 |
 
+## 對話證據 (Conversation Evidence)
+
+M5 Conversation Assistant 的 Evidence Pack 包含以下來源：
+
+1. **591 詳細頁快照**：標題、總價、單價、坪數、格局、地址、社區、建商、建材、樓層、屋齡、車位、座標
+2. **官方成交估價**：M2 模型預測點估計、區間、信心等級（如可用）
+3. **相似成交**：最近 36 個月同站點、同類型的前 5 筆相似成交
+4. **限制說明**：遺漏座標、估值不可用、樓層不一致、相似成交不足等
+
+### Fact ID 命名規則
+
+- `listing.title`、`listing.price`、`listing.unit_price` — 591 詳細頁資料
+- `listing.area`、`listing.layout`、`listing.address` — 物件基本資訊
+- `listing.community`、`listing.builder`、`listing.building_type` — 社區與建商
+- `listing.floor`、`listing.age`、`listing.parking` — 樓層屋齡車位
+- `listing.location` — 座標 (latitude, longitude)
+- `valuation.point`、`valuation.low`、`valuation.high` — 模型估值
+- `valuation.confidence` — 信心等級
+- `comparable.N.price`、`comparable.N.distance`、`comparable.N.date` — 第 N 筆相似成交
+
+### 接地驗證
+
+AI 回答中的 property claim 必須引用至少一個事實 fact ID，且 fact ID 必須存在於
+啟用的 Evidence Pack 中。驗證在 `validate_chat_answer()` 完成：
+- 拒絕不存在的 fact ID
+- 拒絕空的 fact_ids
+- 拒絕 claim 內重複的 fact ID
+- 拒絕 guidance 中包含數字
+
+兩次驗證失敗時 assistant message 不會被儲存，工作轉為 `validation_failed`。
+
 ## 限制與不適用情境
 
 - 僅使用官方成交資料，無法反映社區生活機能、學區、景觀等軟性因素

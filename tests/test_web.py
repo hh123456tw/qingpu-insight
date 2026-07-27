@@ -57,6 +57,140 @@ class FailingMarketDataSource:
         raise RuntimeError("database connection failed")
 
 
+def test_conversation_model_catalog_tracks_secret_changes(
+    tmp_path: Path,
+) -> None:
+    from qingpu_insight.local_secrets import LocalSecretsStore
+    from qingpu_insight.web import create_app
+
+    app = create_app(root=tmp_path)
+    client = app.test_client()
+    secret_store = LocalSecretsStore(tmp_path / "instance" / "secrets.env")
+
+    assert client.get("/api/conversation-models").get_json()[
+        "gemini_configured"
+    ] is False
+
+    secret_store.set_gemini_key("test-dynamic-key")
+
+    assert client.get("/api/conversation-models").get_json()[
+        "gemini_configured"
+    ] is True
+
+
+def test_conversation_schema_applies_fallback_metadata_migration(
+    tmp_path: Path,
+) -> None:
+    from qingpu_insight.web import _ensure_conversation_schema
+
+    database = tmp_path / "database"
+    database.mkdir()
+    (database / "008_conversation_assistant_schema.sql").write_text(
+        "CREATE TABLE conversation_messages (id INT);",
+        encoding="utf-8",
+    )
+    (database / "009_conversation_fallback_metadata.sql").write_text(
+        "ALTER TABLE conversation_messages "
+        "ADD COLUMN fallback_reason VARCHAR(64);",
+        encoding="utf-8",
+    )
+    executed: list[str] = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def execute(self, statement: str) -> None:
+            executed.append(statement)
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+        def commit(self) -> None:
+            pass
+
+        def rollback(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    _ensure_conversation_schema(tmp_path, Connection)
+
+    assert any("CREATE TABLE conversation_messages" in sql for sql in executed)
+    assert any("fallback_reason" in sql for sql in executed)
+
+
+def test_conversation_valuation_uses_official_model_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from qingpu_insight import web
+
+    market = pd.DataFrame(
+        [
+            {
+                "transaction_type": "resale",
+                "transaction_date": pd.Timestamp("2026-06-13"),
+                "latitude": 25.01,
+                "longitude": 121.21,
+                "building_area_ping": 30.0,
+                "total_price_twd": 15000000,
+                "unit_price_per_ping_twd": 500000,
+                "station_code": "A18",
+                "station_distance_m": 420.0,
+            }
+        ]
+    )
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        web,
+        "build_model_frame",
+        lambda frame, transaction_type: frame,
+    )
+
+    def fake_valuate(input_, registry, frame, latest_data_date):
+        captured["input"] = input_
+        return {
+            "estimated_total_price_twd": 16000000,
+            "interval_total_price_twd": (14500000, 17500000),
+            "confidence": "medium",
+            "confidence_reasons": ["comparable_count"],
+            "asking_price_assessment": "合理區間",
+            "data_date": "2026-06-13",
+            "model": {"version": "official-v3"},
+        }
+
+    monkeypatch.setattr(web, "valuate", fake_valuate)
+    result = web._conversation_valuation(
+        InMemoryMarketDataSource(market),
+        object(),  # type: ignore[arg-type]
+        {
+            "listing_type": "sale",
+            "area_ping": 30,
+            "layout": "3房2廳2衛",
+            "building_type": "住宅大樓",
+            "floor": "12F/15F",
+            "total_floors": 15,
+            "age_years": 5,
+            "parking_type": "無車位",
+            "total_price_twd": 15800000,
+            "latitude": 25.01,
+            "longitude": 121.21,
+        },
+    )
+
+    assert captured["input"].station_code == "A18"
+    assert captured["input"].bedrooms == 3
+    assert result["point_estimate_twd"] == 16000000
+    assert result["model_version"] == "official-v3"
+    assert result["dataset_version"] == "2026-06-13"
+
+
 @pytest.fixture
 def client(market_frame: pd.DataFrame) -> FlaskClient:
     from qingpu_insight.web import create_app
@@ -1138,6 +1272,7 @@ def admin_app(market_frame: pd.DataFrame):
     app.extensions["qingpu_admin_runtime"] = replace(
         app.extensions["qingpu_admin_runtime"],
         dashboard_service=StubDashboardService(),
+        llm_model_catalog=FakeLlmModelCatalog(),
     )
     return app, repo, listing_service, executor
 
@@ -1149,6 +1284,17 @@ def admin_client(admin_app) -> FlaskClient:
         with client.session_transaction() as sess:
             sess["_csrf_token"] = "test-token"
         yield client
+
+
+def test_web_app_wires_catalog_and_benchmark_runner(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    from qingpu_insight.web import create_app
+
+    app = create_app(root=tmp_path)
+    runtime = app.extensions["qingpu_admin_runtime"]
+
+    assert runtime.llm_model_catalog is not None
+    assert runtime.provider_ops_service._benchmark_runner is not None
 
 
 def test_listing_update_returns_202_without_waiting(
@@ -3706,6 +3852,99 @@ class TestProductionRestoreApi:
         assert response.status_code == 403
 
     # ------------------------------------------------------------------
+    # Admin LLM Model Catalog tests (Task 3)
+    # ------------------------------------------------------------------
+
+    def test_admin_llm_models_returns_only_safe_catalog(
+        self, admin_client,
+    ) -> None:
+        response = admin_client.get("/api/admin/llm-models")
+
+        assert response.status_code == 200
+        assert response.get_json()["items"][0]["id"] == "ollama:gemma4:e2b"
+        assert "api_key" not in response.get_data(as_text=True).lower()
+        assert "digest" not in response.get_data(as_text=True).lower()
+
+    def test_admin_benchmark_accepts_only_catalog_model_id(
+        self, admin_app, admin_client,
+    ) -> None:
+        from dataclasses import replace
+
+        from qingpu_insight.provider_ops import ProviderOpsService
+
+        class _Rule:
+            def generate(self, pack, repair_codes=()):
+                return type("R", (), {"provider": "rule", "model": "rule"})()
+
+        svc = ProviderOpsService(
+            rule_provider=_Rule(),
+            provider_factory=lambda n: None,
+            env={"QINGPU_OLLAMA_MODEL": "test"},
+        )
+        runner = _StubBenchmarkRunner()
+        svc.set_benchmark_runner(runner)
+        app, _, _, _ = admin_app
+        app.extensions["qingpu_admin_runtime"] = replace(
+            app.extensions["qingpu_admin_runtime"],
+            provider_ops_service=svc,
+            llm_model_catalog=FakeLlmModelCatalog(),
+        )
+        response = admin_client.post(
+            "/api/admin/llm-benchmark-runs",
+            json={"model_id": "ollama:gemma4:e2b"},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+
+        assert response.status_code == 202
+        assert response.get_json()["provider"] == "ollama"
+        assert response.get_json()["model"] == "gemma4:e2b"
+
+    def test_admin_benchmark_rejects_unknown_or_spoofed_model(
+        self, admin_app, admin_client,
+    ) -> None:
+        from dataclasses import replace
+
+        from qingpu_insight.provider_ops import ProviderOpsService
+
+        class _Rule:
+            def generate(self, pack, repair_codes=()):
+                return type("R", (), {"provider": "rule", "model": "rule"})()
+
+        svc = ProviderOpsService(
+            rule_provider=_Rule(),
+            provider_factory=lambda n: None,
+            env={"QINGPU_OLLAMA_MODEL": "test"},
+        )
+        runner = _StubBenchmarkRunner()
+        svc.set_benchmark_runner(runner)
+        app, _, _, _ = admin_app
+        app.extensions["qingpu_admin_runtime"] = replace(
+            app.extensions["qingpu_admin_runtime"],
+            provider_ops_service=svc,
+            llm_model_catalog=FakeLlmModelCatalog(),
+        )
+
+        unknown = admin_client.post(
+            "/api/admin/llm-benchmark-runs",
+            json={"model_id": "ollama:not-installed"},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        spoofed = admin_client.post(
+            "/api/admin/llm-benchmark-runs",
+            json={
+                "model_id": "ollama:gemma4:e2b",
+                "provider": "gemini",
+                "model": "gemma-4-31b-it",
+            },
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+
+        assert unknown.status_code == 400
+        assert unknown.get_json()["error"]["fields"] == {"model_id": "unsupported"}
+        assert spoofed.status_code == 400
+        assert set(spoofed.get_json()["error"]["fields"]) == {"provider", "model"}
+
+    # ------------------------------------------------------------------
     # LLM Benchmark tests (Task 15)
     # ------------------------------------------------------------------
 
@@ -3729,6 +3968,7 @@ class TestProductionRestoreApi:
         app.extensions["qingpu_admin_runtime"] = replace(
             app.extensions["qingpu_admin_runtime"],
             provider_ops_service=svc,
+            llm_model_catalog=FakeLlmModelCatalog(),
         )
         return app, repo
 
@@ -3736,46 +3976,86 @@ class TestProductionRestoreApi:
         self._setup_benchmark(admin_app, monkeypatch, tmp_path)
         response = admin_client.post(
             "/api/admin/llm-benchmark-runs",
-            json={"provider": "ollama", "model": "llama3"},
+            json={"model_id": "ollama:gemma4:e2b"},
             headers={"X-Qingpu-CSRF": "test-token"},
         )
         assert response.status_code == 202
         body = response.get_json()
         assert body["provider"] == "ollama"
-        assert body["model"] == "llama3"
+        assert body["model"] == "gemma4:e2b"
         assert body["status"] == "pending"
 
     def test_benchmark_submit_rejects_extra_fields(self, admin_app, admin_client) -> None:
         response = admin_client.post(
             "/api/admin/llm-benchmark-runs",
-            json={"provider": "ollama", "model": "llama3", "cases": ["custom"]},
+            json={"model_id": "ollama:gemma4:e2b", "cases": ["custom"]},
             headers={"X-Qingpu-CSRF": "test-token"},
         )
         assert response.status_code == 400
         assert "cases" in response.get_json()["error"]["fields"]
 
-    def test_benchmark_submit_rejects_invalid_provider(self, admin_app, admin_client) -> None:
-        response = admin_client.post(
-            "/api/admin/llm-benchmark-runs",
-            json={"provider": "rule", "model": "test"},
-            headers={"X-Qingpu-CSRF": "test-token"},
-        )
-        assert response.status_code == 400
-        assert response.get_json()["error"]["fields"]["provider"] == "ollama_or_gemini"
+    def test_benchmark_submit_rejects_unknown_model_id(self, admin_app, admin_client) -> None:
+        app, _, _, _ = admin_app
+        from dataclasses import replace
 
-    def test_benchmark_submit_rejects_missing_model(self, admin_app, admin_client) -> None:
+        from qingpu_insight.provider_ops import ProviderOpsService
+
+        class _Rule:
+            def generate(self, pack, repair_codes=()):
+                return type("R", (), {"provider": "rule", "model": "rule"})()
+
+        svc = ProviderOpsService(
+            rule_provider=_Rule(),
+            provider_factory=lambda n: None,
+            env={"QINGPU_OLLAMA_MODEL": "test"},
+        )
+        runner = _StubBenchmarkRunner()
+        svc.set_benchmark_runner(runner)
+        app.extensions["qingpu_admin_runtime"] = replace(
+            app.extensions["qingpu_admin_runtime"],
+            provider_ops_service=svc,
+        )
         response = admin_client.post(
             "/api/admin/llm-benchmark-runs",
-            json={"provider": "ollama"},
+            json={"model_id": "unknown:model"},
             headers={"X-Qingpu-CSRF": "test-token"},
         )
         assert response.status_code == 400
-        assert "model" in response.get_json()["error"]["fields"]
+        assert response.get_json()["error"]["fields"]["model_id"] == "unsupported"
+
+    def test_benchmark_submit_rejects_missing_model_id(self, admin_app, admin_client) -> None:
+        app, _, _, _ = admin_app
+        from dataclasses import replace
+
+        from qingpu_insight.provider_ops import ProviderOpsService
+
+        class _Rule:
+            def generate(self, pack, repair_codes=()):
+                return type("R", (), {"provider": "rule", "model": "rule"})()
+
+        svc = ProviderOpsService(
+            rule_provider=_Rule(),
+            provider_factory=lambda n: None,
+            env={"QINGPU_OLLAMA_MODEL": "test"},
+        )
+        runner = _StubBenchmarkRunner()
+        svc.set_benchmark_runner(runner)
+        app.extensions["qingpu_admin_runtime"] = replace(
+            app.extensions["qingpu_admin_runtime"],
+            provider_ops_service=svc,
+        )
+        response = admin_client.post(
+            "/api/admin/llm-benchmark-runs",
+            json={},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+        assert "model_id" in response.get_json()["error"]["fields"]
 
     def test_benchmark_submit_requires_csrf(self, admin_app, admin_client) -> None:
         response = admin_client.post(
             "/api/admin/llm-benchmark-runs",
-            json={"provider": "ollama", "model": "llama3"},
+            json={"model_id": "ollama:gemma4:e2b"},
         )
         assert response.status_code == 403
 
@@ -3862,8 +4142,36 @@ class TestProductionRestoreApi:
         assert response.get_json() == expected_data
 
 
+class FakeLlmModelCatalog:
+    def public_catalog(self):
+        return {
+            "items": [{
+                "id": "ollama:gemma4:e2b",
+                "provider": "ollama",
+                "model": "gemma4:e2b",
+                "label": "Ollama｜gemma4:e2b",
+                "ready": True,
+                "note": "本機已安裝",
+            }],
+            "warnings": [],
+        }
+
+    def resolve(self, model_id):
+        if model_id != "ollama:gemma4:e2b":
+            raise ValueError("unknown_model_id")
+        from qingpu_insight.llm_model_catalog import BenchmarkModelOption
+        return BenchmarkModelOption(
+            id=model_id,
+            provider="ollama",
+            model="gemma4:e2b",
+            label="Ollama｜gemma4:e2b",
+            ready=True,
+            note="本機已安裝",
+        )
+
+
 class _StubBenchmarkRunner:
-    def run(self, model: str, cases: list, output_dir) -> dict:
+    def run(self, provider: str, model: str, cases: list, output_dir) -> dict:
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "benchmark_results.json").write_text('{"result": "ok"}')
         (output_dir / "benchmark_results.md").write_text("# Benchmark")

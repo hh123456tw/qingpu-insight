@@ -245,6 +245,10 @@ document.addEventListener("DOMContentLoaded", async function () {
       return;
     }
     payload.items.forEach(function (item) {
+      var unitPrice = (
+        typeof item.median_unit_price_per_ping_twd === "number"
+        && Number.isFinite(item.median_unit_price_per_ping_twd)
+      ) ? formatWan(item.median_unit_price_per_ping_twd) : "—";
       L.circleMarker([item.latitude, item.longitude], {
         radius: marketMapUi.markerRadius(item.record_count),
         color: "#0b5f55",
@@ -254,7 +258,7 @@ document.addEventListener("DOMContentLoaded", async function () {
       })
         .bindPopup(
           "成交 " + item.record_count + " 筆<br>" +
-          "中位單價 " + formatWan(item.median_unit_price_per_ping_twd) + "<br>" +
+          "中位單價 " + unitPrice + "<br>" +
           "最近成交 " + (item.latest_transaction_date || "—")
         )
         .addTo(markerLayer);
@@ -277,6 +281,7 @@ document.addEventListener("DOMContentLoaded", async function () {
     fetchImpl: fetch,
     render: renderMap,
     showError: function (message) {
+      markerLayer.clearLayers();
       mapStatus.textContent = message;
     },
   });

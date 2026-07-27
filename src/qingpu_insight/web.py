@@ -42,6 +42,7 @@ from qingpu_insight.listing_update import (
     ListingUpdateRequest,
     ListingUpdateService,
 )
+from qingpu_insight.llm_model_catalog import LlmModelCatalog
 from qingpu_insight.local_secrets import LocalSecretsStore
 from qingpu_insight.market_metrics import (
     MapBounds,
@@ -62,6 +63,7 @@ from qingpu_insight.report_composition import create_report_runtime
 from qingpu_insight.report_repository import CorruptReportError
 from qingpu_insight.valuation import ModelRegistry, valuate
 from qingpu_insight.valuation_store import FileValuationStore
+from qingpu_insight.web_benchmark_runner import ConfiguredWebBenchmarkRunner
 
 
 def _parse_mysql_url_to_config() -> SimpleNamespace:
@@ -684,6 +686,232 @@ def _safe_public_value(value):
     return value
 
 
+def _conversation_market_comparables(
+    data_source: MarketDataSource,
+    payload: dict[str, Any],
+) -> list[dict[str, Any]]:
+    transaction_type = (
+        "presale"
+        if payload.get("listing_type") == "newhouse"
+        else "resale"
+    )
+    area = pd.to_numeric(payload.get("area_ping"), errors="coerce")
+    filters = MarketFilters(
+        transaction_type=transaction_type,
+        area_ping_min=float(area * 0.7) if pd.notna(area) else None,
+        area_ping_max=float(area * 1.3) if pd.notna(area) else None,
+    )
+    frame = data_source.load(filters).copy()
+    if frame.empty:
+        return []
+
+    latitude = pd.to_numeric(payload.get("latitude"), errors="coerce")
+    longitude = pd.to_numeric(payload.get("longitude"), errors="coerce")
+    frame["_distance_m"] = np.nan
+    if pd.notna(latitude) and pd.notna(longitude):
+        target_lat = np.radians(float(latitude))
+        target_lon = np.radians(float(longitude))
+        row_lat = np.radians(
+            pd.to_numeric(frame["latitude"], errors="coerce")
+        )
+        row_lon = np.radians(
+            pd.to_numeric(frame["longitude"], errors="coerce")
+        )
+        delta_lat = row_lat - target_lat
+        delta_lon = row_lon - target_lon
+        haversine = (
+            np.sin(delta_lat / 2) ** 2
+            + np.cos(target_lat)
+            * np.cos(row_lat)
+            * np.sin(delta_lon / 2) ** 2
+        )
+        frame["_distance_m"] = (
+            6_371_000
+            * 2
+            * np.arctan2(
+                np.sqrt(haversine),
+                np.sqrt(1 - haversine),
+            )
+        )
+
+    frame["_transaction_date"] = pd.to_datetime(
+        frame["transaction_date"],
+        errors="coerce",
+    )
+    frame = frame.sort_values(
+        ["_distance_m", "_transaction_date"],
+        ascending=[True, False],
+        na_position="last",
+    ).head(10)
+
+    comparables: list[dict[str, Any]] = []
+    for rank, (_, row) in enumerate(frame.iterrows(), start=1):
+        date = row.get("_transaction_date")
+        distance = row.get("_distance_m")
+        comparables.append({
+            "rank": rank,
+            "price_twd": (
+                int(row["total_price_twd"])
+                if pd.notna(row.get("total_price_twd"))
+                else None
+            ),
+            "unit_price_per_ping_twd": (
+                int(row["unit_price_per_ping_twd"])
+                if pd.notna(row.get("unit_price_per_ping_twd"))
+                else None
+            ),
+            "distance_m": (
+                int(round(float(distance)))
+                if pd.notna(distance)
+                else None
+            ),
+            "transaction_date": (
+                date.date().isoformat()
+                if pd.notna(date)
+                else None
+            ),
+            "station_code": row.get("station_code"),
+            "station_distance_m": (
+                float(row["station_distance_m"])
+                if pd.notna(row.get("station_distance_m"))
+                else None
+            ),
+            "selection_reason": "面積相近，依距離與日期排序",
+        })
+    return comparables
+
+
+_CONVERSATION_LAYOUT_RE = re.compile(
+    r"(?P<bedrooms>\d+)\s*房.*?"
+    r"(?P<living_rooms>\d+)\s*廳.*?"
+    r"(?P<bathrooms>\d+)\s*衛"
+)
+_CONVERSATION_FLOOR_RE = re.compile(r"(?P<floor>\d+)\s*[Ff]")
+
+
+def _conversation_valuation(
+    data_source: MarketDataSource,
+    registry: ModelRegistry,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    transaction_type = (
+        "presale"
+        if payload.get("listing_type") == "newhouse"
+        else "resale"
+    )
+    layout = _CONVERSATION_LAYOUT_RE.search(str(payload.get("layout") or ""))
+    floor_match = _CONVERSATION_FLOOR_RE.search(
+        str(payload.get("floor") or "")
+    )
+    comparables = _conversation_market_comparables(data_source, payload)
+    nearest = next(
+        (
+            item
+            for item in comparables
+            if item.get("station_code") in {"A17", "A18", "A19"}
+            and item.get("station_distance_m") is not None
+            and item.get("distance_m") is not None
+        ),
+        None,
+    )
+    if layout is None or floor_match is None or nearest is None:
+        raise ValueError("listing lacks required valuation features")
+    if int(nearest["distance_m"]) > 300:
+        raise ValueError("no nearby transaction for station inference")
+
+    total_floors = int(payload["total_floors"])
+    floor = int(floor_match.group("floor"))
+    area = float(payload["area_ping"])
+    building_type = str(payload.get("building_type") or "").strip()
+    if not building_type:
+        raise ValueError("building type unavailable")
+    age = (
+        None
+        if transaction_type == "presale"
+        else float(payload["age_years"])
+    )
+    valuation_input = ValuationInput(
+        transaction_type=transaction_type,
+        station_code=str(nearest["station_code"]),
+        station_distance_m=float(nearest["station_distance_m"]),
+        building_area_ping=area,
+        building_type=building_type,
+        bedrooms=int(layout.group("bedrooms")),
+        living_rooms=int(layout.group("living_rooms")),
+        bathrooms=int(layout.group("bathrooms")),
+        building_age_years=age,
+        floor=floor,
+        total_floors=total_floors,
+        parking_type=str(payload.get("parking_type") or ""),
+        parking_area_ping=0,
+        asking_total_price_twd=(
+            int(payload["total_price_twd"])
+            if payload.get("total_price_twd") is not None
+            else None
+        ),
+    )
+    market = data_source.load(
+        MarketFilters(transaction_type=transaction_type)
+    )
+    if market.empty:
+        raise ValueError("market data unavailable")
+    latest_data_date = pd.Timestamp(market["transaction_date"].max())
+    model_frame = build_model_frame(market, transaction_type)
+    result = valuate(
+        valuation_input,
+        registry,
+        model_frame,
+        latest_data_date=latest_data_date,
+    )
+    low, high = result["interval_total_price_twd"]
+    model = result.get("model") or {}
+    limitations = [
+        "捷運生活圈與距離由最近一筆實價登錄推定"
+        f"（該成交距物件約 {nearest['distance_m']} 公尺）"
+    ]
+    if payload.get("parking_type"):
+        limitations.append("591 未提供可驗證車位坪數，正式估值以 0 坪計入")
+    return {
+        "point_estimate_twd": result["estimated_total_price_twd"],
+        "low_estimate_twd": low,
+        "high_estimate_twd": high,
+        "confidence": result["confidence"],
+        "confidence_reasons": result.get("confidence_reasons", []),
+        "asking_price_assessment": result.get("asking_price_assessment"),
+        "model_version": model.get("version", "unknown"),
+        "dataset_version": result.get("data_date", "unknown"),
+        "limitations": limitations,
+    }
+
+
+def _ensure_conversation_schema(
+    root: Path,
+    connection_factory,
+) -> None:
+    migration_paths = (
+        root / "database" / "008_conversation_assistant_schema.sql",
+        root / "database" / "009_conversation_fallback_metadata.sql",
+    )
+    connection = connection_factory()
+    try:
+        with connection.cursor() as cursor:
+            for migration_path in migration_paths:
+                sql = migration_path.read_text(encoding="utf-8")
+                statements = [
+                    statement.strip()
+                    for statement in sql.split(";")
+                    if statement.strip()
+                ]
+                for statement in statements:
+                    cursor.execute(statement)
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
 def create_app(
     data_source: MarketDataSource | None = None,
     root: Path | None = None,
@@ -698,6 +926,8 @@ def create_app(
     report_services: ReportServices | None = None,
     report_service: object | None = None,
     report_repository: object | None = None,
+    conversation_service: object | None = None,
+    conversation_repository: object | None = None,
 ) -> Flask:
     app = Flask(__name__)
     app.json.default = _json_default
@@ -738,6 +968,7 @@ def create_app(
 
     shutdown_lock = Lock()
     shutdown_complete = False
+    conversation_owned_executor: LocalJobExecutor | None = None
 
     def shutdown_admin() -> None:
         nonlocal shutdown_complete
@@ -747,12 +978,15 @@ def create_app(
             shutdown_complete = True
         if admin_services is not None:
             admin_services.executor.shutdown(wait=True)
+        if conversation_owned_executor is not None:
+            conversation_owned_executor.shutdown(wait=True)
 
     app.extensions["qingpu_admin_services"] = admin_services
     app.extensions["qingpu_admin_shutdown"] = shutdown_admin
 
     secrets_store: LocalSecretsStore | None = None
     provider_ops_service: ProviderOpsService | None = None
+    resolved_env = dict(os.environ)
     if root is not None:
         secrets_store = LocalSecretsStore(root / "instance" / "secrets.env")
         from qingpu_insight.report_composition import create_dynamic_provider_resolver
@@ -767,6 +1001,41 @@ def create_app(
             env=resolved_env,
         )
 
+    def get_runtime_env(name: str, default: str = "") -> str:
+        current = (
+            secrets_store.merged_env(os.environ)
+            if secrets_store is not None
+            else dict(os.environ)
+        )
+        return current.get(name, default)
+
+    def get_ollama_base_url() -> str:
+        return get_runtime_env(
+            "QINGPU_OLLAMA_BASE_URL",
+            "http://127.0.0.1:11434",
+        )
+
+    llm_model_catalog = LlmModelCatalog(
+        ollama_base_url_getter=get_ollama_base_url,
+        gemini_configured_getter=lambda: bool(
+            get_runtime_env("QINGPU_GEMINI_API_KEY")
+        ),
+    )
+    if provider_ops_service is not None:
+        provider_ops_service.set_benchmark_runner(ConfiguredWebBenchmarkRunner(
+            ollama_base_url_getter=get_ollama_base_url,
+            gemini_api_key_getter=lambda: get_runtime_env(
+                "QINGPU_GEMINI_API_KEY"
+            ),
+        ))
+
+    def get_gemini_api_key() -> str | None:
+        if secrets_store is None:
+            return os.environ.get("QINGPU_GEMINI_API_KEY")
+        return secrets_store.merged_env(os.environ).get(
+            "QINGPU_GEMINI_API_KEY"
+        )
+
     if admin_services is not None:
         admin_runtime = AdminRuntime(
             job_service=admin_services.job_service,
@@ -779,6 +1048,7 @@ def create_app(
             backup_service=admin_services.backup_job_service,
             provider_ops_service=provider_ops_service,
             secrets_store=secrets_store,
+            llm_model_catalog=llm_model_catalog,
             root=root,
         )
     else:
@@ -787,9 +1057,151 @@ def create_app(
             executor=None,
             provider_ops_service=provider_ops_service,
             secrets_store=secrets_store,
+            llm_model_catalog=llm_model_catalog,
             root=root,
         )
     app.register_blueprint(create_admin_blueprint(admin_runtime))
+
+    from qingpu_insight.conversation_web import create_conversation_blueprint
+
+    conv_repo = conversation_repository
+    conv_service = conversation_service
+    conversation_job_service = (
+        admin_services.job_service if admin_services is not None else None
+    )
+    if (
+        root is not None
+        and os.environ.get("QINGPU_DATABASE_URL")
+        and (conv_repo is None or conv_service is None)
+    ):
+        try:
+            from qingpu_insight.cli import create_mysql_connection_factory
+            from qingpu_insight.conversation_evidence import (
+                ConversationEvidenceBuilder,
+            )
+            from qingpu_insight.conversation_fallback import (
+                ConversationFallbackExecutor,
+            )
+            from qingpu_insight.conversation_import import (
+                ConversationImportService,
+            )
+            from qingpu_insight.conversation_listing_capture import (
+                DetailPageBrowser,
+            )
+            from qingpu_insight.conversation_providers import (
+                ConversationProviderRegistry,
+                GeminiConversationProvider,
+                OllamaConversationProvider,
+                RuleConversationProvider,
+            )
+            from qingpu_insight.conversation_repository import MySQLConversationRepository
+            from qingpu_insight.conversation_service import ConversationService
+            from qingpu_insight.conversation_validation import (
+                validate_chat_answer,
+            )
+            from qingpu_insight.job_repository import MySQLJobRepository
+            from qingpu_insight.listing_capture import (
+                ChromeConfig,
+                create_chrome,
+            )
+
+            connection_factory = create_mysql_connection_factory()
+            _ensure_conversation_schema(root, connection_factory)
+            conv_repo = conv_repo or MySQLConversationRepository(
+                connection_factory
+            )
+            conversation_jobs = (
+                admin_services.job_service
+                if admin_services is not None
+                else JobService(MySQLJobRepository(connection_factory))
+            )
+            conversation_job_service = conversation_jobs
+            if admin_services is not None:
+                conversation_executor = admin_services.executor
+            else:
+                conversation_owned_executor = LocalJobExecutor(
+                    conversation_jobs
+                )
+                conversation_executor = conversation_owned_executor
+            browser = DetailPageBrowser(
+                driver_factory=lambda: create_chrome(
+                    ChromeConfig(headless=False)
+                )
+            )
+            market_service = (
+                (
+                    lambda payload: _conversation_market_comparables(
+                        ds, payload
+                    )
+                )
+                if ds is not None
+                else None
+            )
+            valuation_service = (
+                (
+                    lambda payload: _conversation_valuation(
+                        ds,
+                        registry,
+                        payload,
+                    )
+                )
+                if ds is not None
+                else None
+            )
+            evidence_builder = ConversationEvidenceBuilder(
+                valuation_service=valuation_service,
+                market_service=market_service,
+            )
+            import_service = ConversationImportService(
+                repository=conv_repo,
+                browser=browser,
+                evidence_builder=evidence_builder,
+            )
+            providers = ConversationProviderRegistry()
+            providers.register("rule", RuleConversationProvider())
+            providers.register(
+                "ollama",
+                OllamaConversationProvider(get_ollama_base_url()),
+            )
+            providers.register(
+                "gemini",
+                GeminiConversationProvider(get_gemini_api_key),
+            )
+            reply_executor = ConversationFallbackExecutor(
+                provider_registry=providers,
+                validator=validate_chat_answer,
+            )
+            conv_service = conv_service or ConversationService(
+                repository=conv_repo,
+                import_service=import_service,
+                provider_registry=providers,
+                reply_executor=reply_executor,
+                validator=validate_chat_answer,
+                job_service=conversation_jobs,
+                executor=conversation_executor,
+            )
+        except Exception:
+            app.logger.error("conversation runtime unavailable")
+            conv_repo = None
+            conv_service = None
+
+    app.extensions["qingpu_conversation_service"] = conv_service
+    app.extensions["qingpu_conversation_repository"] = conv_repo
+    app.extensions["qingpu_conversation_job_service"] = (
+        conversation_job_service
+    )
+    from qingpu_insight.conversation_models import public_model_catalog
+
+    app.register_blueprint(
+        create_conversation_blueprint(
+            conv_service,
+            conv_repo,
+            catalog_getter=lambda: public_model_catalog(
+                gemini_configured=bool(get_runtime_env("QINGPU_GEMINI_API_KEY")),
+                ollama_ready=llm_model_catalog.ollama_model_ready("gemma4:e2b"),
+            ),
+        )
+    )
 
     @app.before_request
     def ensure_session():
@@ -1004,7 +1416,14 @@ def create_app(
     def get_job(run_id: str):
         if not _is_trusted_local_request():
             return jsonify({"error": {"code": "forbidden", "message": "僅允許本機存取。"}}), 403
-        if admin_services is None:
+        effective_job_service = (
+            admin_services.job_service
+            if admin_services is not None
+            else app.extensions.get(
+                "qingpu_conversation_job_service"
+            )
+        )
+        if effective_job_service is None:
             err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
             return jsonify({"error": err}), 503
         try:
@@ -1012,7 +1431,7 @@ def create_app(
         except (ValueError, AttributeError):
             return _invalid_request({"run_id": "invalid_uuid"})
         try:
-            run = admin_services.job_service.get(run_id)
+            run = effective_job_service.get(run_id)
         except Exception:
             return jsonify(
                 {"error": {"code": "job_unavailable", "message": "工作狀態暫時無法取得。"}}

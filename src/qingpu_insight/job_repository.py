@@ -8,10 +8,21 @@ from typing import Any, cast
 
 import pymysql
 
-from qingpu_insight.jobs import JobRun, JobStatus
+from qingpu_insight.jobs import (
+    CONVERSATION_IMPORT,
+    CONVERSATION_REFRESH,
+    CONVERSATION_REPLY,
+    JobRun,
+    JobStatus,
+)
 
 ConnectionFactory = Callable[[], pymysql.Connection]
 _CREATE_ATTEMPTS = 3
+_DURABLE_IDEMPOTENCY_JOB_TYPES = {
+    CONVERSATION_IMPORT,
+    CONVERSATION_REFRESH,
+    CONVERSATION_REPLY,
+}
 
 
 class DuplicateActiveJobRuns(RuntimeError):
@@ -188,6 +199,24 @@ class MySQLJobRepository:
     def create_or_get(self, run: JobRun) -> tuple[JobRun, bool]:
         with self._connection() as connection:
             for attempt in range(_CREATE_ATTEMPTS):
+                if run.job_type in _DURABLE_IDEMPOTENCY_JOB_TYPES:
+                    try:
+                        with connection.cursor(
+                            pymysql.cursors.DictCursor
+                        ) as cursor:
+                            cursor.execute(
+                                "SELECT * FROM job_runs"
+                                " WHERE idempotency_key = %s"
+                                " ORDER BY created_at ASC LIMIT 1",
+                                (run.idempotency_key,),
+                            )
+                            existing = cursor.fetchone()
+                        connection.commit()
+                    except Exception:
+                        connection.rollback()
+                        raise
+                    if existing is not None:
+                        return self._row_to_run(existing), False
                 try:
                     with connection.cursor() as cursor:
                         self._insert(cursor, run)
@@ -204,11 +233,21 @@ class MySQLJobRepository:
 
                 try:
                     with connection.cursor(pymysql.cursors.DictCursor) as cursor:
-                        cursor.execute(
-                            "SELECT * FROM job_runs WHERE idempotency_key = %s"
-                            " AND status IN ('pending', 'running', 'retry_wait') FOR UPDATE",
-                            (run.idempotency_key,),
-                        )
+                        if run.job_type in _DURABLE_IDEMPOTENCY_JOB_TYPES:
+                            cursor.execute(
+                                "SELECT * FROM job_runs"
+                                " WHERE idempotency_key = %s"
+                                " ORDER BY created_at ASC LIMIT 1 FOR UPDATE",
+                                (run.idempotency_key,),
+                            )
+                        else:
+                            cursor.execute(
+                                "SELECT * FROM job_runs WHERE idempotency_key = %s"
+                                " AND status IN"
+                                " ('pending', 'running', 'retry_wait')"
+                                " FOR UPDATE",
+                                (run.idempotency_key,),
+                            )
                         row = cursor.fetchone()
                     connection.commit()
                 except Exception:

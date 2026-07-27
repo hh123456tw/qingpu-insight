@@ -15,6 +15,7 @@ from flask import Blueprint, current_app, jsonify, render_template, request, ses
 from qingpu_insight.local_secrets import SecretValidationError
 from qingpu_insight.official_data import _season_key
 from qingpu_insight.operation_previews import OperationPreview
+from qingpu_insight.provider_ops import BenchmarkRequest
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,7 @@ class AdminRuntime:
     preview_service: object | None = None
     provider_ops_service: object | None = None
     secrets_store: object | None = None
+    llm_model_catalog: object | None = None
     root: object | None = None
     restore_service: object | None = None
 
@@ -82,6 +84,34 @@ def _complete_provider_smoke_job(
         run_id,
         "provider_smoke_failed",
         str(result.get("error") or "provider smoke test failed"),
+    )
+
+
+def _complete_llm_benchmark_job(
+    runtime: AdminRuntime,
+    run_id: str,
+    benchmark_request: BenchmarkRequest,
+) -> None:
+    result = runtime.provider_ops_service.execute_benchmark(
+        run_id,
+        benchmark_request,
+    )
+    if result.get("status") == "succeeded":
+        summary = {
+            key: value
+            for key, value in result.items()
+            if key not in {"run_id", "status"}
+        }
+        runtime.job_service.succeed(
+            run_id,
+            f"{benchmark_request.provider}:{benchmark_request.model}",
+            summary,
+        )
+        return
+    runtime.job_service.fail(
+        run_id,
+        "llm_benchmark_failed",
+        str(result.get("error") or "LLM benchmark failed"),
     )
 
 
@@ -821,10 +851,22 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
         return jsonify(body), 202 if submission.created else 200
 
     # ------------------------------------------------------------------
-    # LLM Benchmark (Task 15)
+    # LLM Model Catalog (Task 3)
     # ------------------------------------------------------------------
 
-    _BENCHMARK_ALLOWED = frozenset({"provider", "model"})
+    @bp.get("/api/admin/llm-models")
+    def admin_llm_models():
+        rt = current_app.extensions.get("qingpu_admin_runtime")
+        if rt is None or rt.llm_model_catalog is None:
+            return jsonify({"error": {
+                "code": "model_catalog_unavailable",
+                "message": "模型清單暫時無法取得。",
+            }}), 503
+        return jsonify(rt.llm_model_catalog.public_catalog())
+
+    # ------------------------------------------------------------------
+    # LLM Benchmark (Task 15 / Task 3)
+    # ------------------------------------------------------------------
 
     @bp.post("/api/admin/llm-benchmark-runs")
     def admin_llm_benchmark():
@@ -841,60 +883,78 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
                    "fields": {"body": "object"}}
             return jsonify({"error": err}), 400
 
-        extra = set(payload.keys()) - _BENCHMARK_ALLOWED
+        extra = sorted(set(payload) - {"model_id"})
         if extra:
-            fields = {k: "not_allowed" for k in extra}
+            fields = {field: "unsupported" for field in extra}
             err = {"code": "invalid_request", "message": "Request validation failed.",
                    "fields": fields}
             return jsonify({"error": err}), 400
 
-        fields: dict[str, str] = {}
-        provider = payload.get("provider", "")
-        if provider not in {"ollama", "gemini"}:
-            fields["provider"] = "ollama_or_gemini"
-
-        model = payload.get("model", "")
-        if not isinstance(model, str) or not model:
-            fields["model"] = "required"
-
-        if fields:
+        model_id = payload.get("model_id")
+        if not isinstance(model_id, str) or not model_id:
             err = {"code": "invalid_request", "message": "Request validation failed.",
-                   "fields": fields}
+                   "fields": {"model_id": "required"}}
             return jsonify({"error": err}), 400
 
         rt = current_app.extensions.get("qingpu_admin_runtime")
-        if rt is None or rt.provider_ops_service is None:
+        if (
+            rt is None
+            or rt.llm_model_catalog is None
+            or rt.provider_ops_service is None
+            or rt.job_service is None
+            or rt.executor is None
+        ):
             err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
             return jsonify({"error": err}), 503
 
-        providers = rt.provider_ops_service.status()
-        found = any(p["name"] == provider and p["ready"] for p in providers)
-        if not found:
-            err = {"code": "provider_not_ready", "message": "提供者未就緒。"}
+        try:
+            option = rt.llm_model_catalog.resolve(model_id)
+        except ValueError:
+            err = {"code": "invalid_request", "message": "Request validation failed.",
+                   "fields": {"model_id": "unsupported"}}
             return jsonify({"error": err}), 400
 
-        from qingpu_insight.provider_ops import BenchmarkRequest
-
-        request_obj = BenchmarkRequest(provider=provider, model=model)  # type: ignore[arg-type]
+        benchmark_request = BenchmarkRequest(
+            provider=option.provider,
+            model=option.model,
+        )
 
         try:
-            submission = rt.provider_ops_service.submit_benchmark(request_obj)
+            submission = rt.job_service.create(
+                "llm_benchmark",
+                f"llm_benchmark:{option.id}:active",
+                "web",
+                input_version=option.id,
+            )
         except Exception:
             err = {"code": "admin_unavailable", "message": "管理功能暫時無法使用。"}
             return jsonify({"error": err}), 503
 
-        if rt.executor is not None:
+        if submission.created:
             try:
                 rt.executor.submit(
-                    submission["run_id"],
-                    lambda sid=submission["run_id"], req=request_obj: (
-                        rt.provider_ops_service.execute_benchmark(sid, req)
+                    submission.run.run_id,
+                    lambda sid=submission.run.run_id, req=benchmark_request: (
+                        _complete_llm_benchmark_job(rt, sid, req)
                     ),
                 )
             except Exception:
-                pass
+                try:
+                    rt.job_service.fail(
+                        submission.run.run_id,
+                        "enqueue_failed",
+                        "LLM benchmark could not be queued",
+                    )
+                except Exception:
+                    pass
+                err = {"code": "enqueue_failed", "message": "工作無法啟動。"}
+                return jsonify({"error": err}), 503
 
-        return jsonify(submission), 202
+        body = _admin_public_job(submission.run)
+        body["created"] = submission.created
+        body["provider"] = option.provider
+        body["model"] = option.model
+        return jsonify(body), 202 if submission.created else 200
 
     @bp.get("/api/admin/llm-benchmark-runs/<run_id>/reports/<report_type>")
     def admin_llm_benchmark_report(run_id: str, report_type: str):

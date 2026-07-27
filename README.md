@@ -114,6 +114,303 @@ py -3.11 -m venv .venv
 
 ```powershell
 .\.venv\Scripts\qingpu-data.exe run --start-season 110S3 --end-season 115S2
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\qingpu-data.exe llm-smoke --provider rule --model rule `
+  --output-dir outputs/m44-benchmark
+```
+
+Rule smoke 不需要 MySQL、Ollama 或 Gemini。成功時輸出 JSON 內的 `success`、
+`schema_success` 應為 `true`，Fact Accuracy 與 Coverage 應為 `1.0`。
+
+若看到 NumPy C-extension 的 `cp311`／`cp312` 不相容訊息，代表 `.venv` 曾被另一個
+Python 版本覆寫。確認沒有程式正在使用環境後，刪除並以同一版本乾淨重建：
+
+```powershell
+Remove-Item -Recurse -Force .venv
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+```
+
+## 系統流程
+
+```text
+官方實價登錄 + 桃園門牌
+        │
+        ▼
+下載 → 清理／定位 → 市場資料集 → 中古屋／預售屋估價模型
+                              │
+591 公開刊登 → 正規化／定位 ──┼→ MySQL 版本發布 → Flask Web
+                              │
+                              └→ Evidence Pack → Rule／Ollama／Gemini 報告
+```
+
+重要設計：
+
+- 中古屋（`resale`）與預售屋（`presale`）始終分開分析與建模。
+- 刊登價不會冒充成交價；租屋資料不會混入買賣實價比較。
+- 估價由已評估的模型負責；LLM 只負責依 Evidence Pack 整理說明。
+- 報告中的數字必須引用現有 fact ID；無效報告不會被 benchmark/smoke 判為成功。
+- 買方報告目前一次只分析 **一個物件**，避免多物件證據交叉引用。
+
+## AI 購屋助理
+
+### 快速開始
+
+1. 打開首頁，在「貼上 591 物件，開始分析」輸入框貼上 591 詳細頁網址
+2. 從固定清單選擇回答模型：Google Gemini 3.5 Flash-Lite、Google Gemma 4
+   31B、本機 Ollama Gemma 4 或 Rule
+3. 點擊「分析這個物件」
+4. 系統以可見 Chrome 開啟 591 頁面、建立物件快照與估價證據
+5. 自動導向雙欄工作台，左側顯示物件資訊與證據，右側可開始對話
+6. 輸入問題後按 Enter 或點擊「送出」，AI 回答會引用證據 fact ID
+7. 需要更新資料時按「重新擷取」建立新版快照
+8. 舊對話可從首頁「最近對話」恢復
+
+### 進階功能
+
+- **模型固定**：模型在建立對話時選定，後續回覆不能由瀏覽器覆寫 provider
+- **Google 模型**：使用管理中心儲存的 `QINGPU_GEMINI_API_KEY`；金鑰更新後
+  下一次請求立即生效，不必重啟 Web
+- **自動備援**：Google 失敗時依序嘗試本機 `gemma4:e2b` 與 Rule；本機模型失敗
+  時使用 Rule。回答會標示實際模型與安全化的切換原因
+- **Ollama**：預設連線 `http://127.0.0.1:11434`，可用
+  `QINGPU_OLLAMA_BASE_URL` 覆寫；模型目錄、Benchmark 與首頁對話共用此設定
+- **Rule 模式**：完全離線，使用證據資料產生固定摘要與建議
+
+### 技術說明
+
+詳細操作說明請見 `docs/operations/listing-conversation-assistant.md`
+
+### LLM 模型與 Benchmark
+
+- 首頁物件助理固定提供兩個 Gemini 模型、本機 `gemma4:e2b` 與 Rule。
+- 管理中心的 Benchmark 模型清單會即時讀取 Ollama `/api/tags`，並固定列出
+  `gemini-3.5-flash-lite`、`gemma-4-31b-it`；不接受任意模型名稱。
+- 安裝或刪除 Ollama 模型後，按「重新整理模型清單」即可，不必重啟 Web。
+- Gemini API Key 由管理中心儲存；不得把 Key 寫進 README、命令列或 Git。
+
+### 地圖相容模式
+
+正式地圖使用 `/api/market/map-points` 顯示完整聚合資料。若頁面顯示
+「相容模式」，表示瀏覽器已讀到新版 JavaScript，但執行中的 Flask process
+仍是舊版；此時只顯示最近 100 筆有效座標。停止舊 process 並重新啟動
+`qingpu-web` 後，即可恢復完整群組地圖。
+
+## 資料來源
+
+- 內政部不動產交易實價登錄：https://data.gov.tw/dataset/77051
+- 桃園市門牌資料：https://data.gov.tw/dataset/157689
+- 桃園捷運 A17、A18、A19 車站地址
+
+環境設定與原始資料以 `data/raw/` 管理，不提交 Git。
+
+## Windows 環境
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -e ".[dev]"
+```
+
+## M0 工作流程
+
+```powershell
+# 下載 110 年第 3 季～115 年第 2 季 MOI 歷史與當期資料及門牌
+.\.venv\Scripts\qingpu-data acquire --start-season 110S3 --end-season 115S2
+
+# 以本機檔案進行地址定位與可行性分析
+.\.venv\Scripts\qingpu-data analyse
+
+# 一鍵完成以上兩步驟
+.\.venv\Scripts\qingpu-data run --start-season 110S3 --end-season 115S2
+```
+
+輸出成果：
+
+- `data/processed/transactions.parquet`
+- `outputs/reports/m0-data-feasibility.md`
+- `outputs/reports/m0-station-summary.csv`
+
+`GO` 表示資料量與座標覆蓋率達門檻，可進入模型開發階段；`NO-GO` 表示需調整範圍或定位方法，重複執行 analyse 即可重新評估。
+
+## M1 市場分析工作流程
+
+### 建立市場資料集
+
+```powershell
+# 從 M0 定位結果建立市場分析資料集與品質報告
+.\.venv\Scripts\qingpu-data market-build
+```
+
+輸出成果：
+
+- `data/processed/market_transactions.parquet` — 市場分析用清理後交易資料
+- `outputs/reports/m1-market-quality.json` — 品質報告（含 output_records、output_by_type、maximum_date）
+
+### 無資料庫 Portfolio Demo
+
+```powershell
+# 直接從 Parquet 啟動網頁伺服器
+.\.venv\Scripts\qingpu-web
+```
+
+### 選用 MySQL 8 路徑
+
+```powershell
+# 設定連線字串
+$env:QINGPU_DATABASE_URL = "mysql+pymysql://<user>:<url-encoded-password>@127.0.0.1:3306/qingpu_insight"
+
+# 僅建立 M1 市場表格；完整 M4 migration 請見後文
+$env:MYSQL_PWD = Read-Host "MySQL password"
+Get-Content -Raw -Encoding UTF8 database/001_market_schema.sql |
+  mysql -h 127.0.0.1 -u <user> qingpu_insight
+Remove-Item Env:MYSQL_PWD
+
+# 載入市場資料到 MySQL
+.\.venv\Scripts\qingpu-data.exe mysql-load
+
+# 啟動網頁伺服器（自動使用 MySQL 資料源）
+.\.venv\Scripts\qingpu-web.exe
+```
+
+### 環境變數
+
+| 變數 | 用途 | 預設值 |
+|------|------|--------|
+| `QINGPU_DATABASE_URL` | MySQL 連線字串（mysql+pymysql://user:pass@host:port/db） | —（無，未設定時使用 Parquet） |
+
+### 生成檔案說明
+
+| 檔案 | 階段 | 說明 |
+|------|------|------|
+| `data/raw/manifest.json` | acquire | 下載記錄清單 |
+| `data/processed/transactions.parquet` | analyse (M0) | 地址定位後完整交易資料 |
+| `data/processed/market_transactions.parquet` | market-build (M1) | 清理後市場分析用交易資料 |
+| `outputs/reports/m0-data-feasibility.md` | analyse (M0) | 資料可行性報告 |
+| `outputs/reports/m0-station-summary.csv` | analyse (M0) | 各站交易量摘要 |
+| `outputs/reports/m1-market-quality.json` | market-build (M1) | 市場資料品質報告 |
+
+### 官方資料來源
+
+- 內政部不動產交易實價登錄（含歷史每季 ZIP 與當期 CSV）：https://plvr.land.moi.gov.tw
+- 桃園市門牌資料：桃園市政府資料開放平台
+- 桃園機場捷運車站地址：桃園捷運公司官方網站
+
+### 更新日期行為
+
+- `acquire` 會重新下載指定季範圍的所有歷史 ZIP 與當期 CSV，覆蓋既有檔案。
+- `analyse` 總是重新處理 `data/raw/` 下的所有原始 CSVs，輸出新的 `transactions.parquet`。
+- `market-build` 讀取 `data/processed/transactions.parquet`，產出新的 `market_transactions.parquet`。
+- 若 MySQL 已載入資料，`qingpu-web` 會自動使用 MySQL 資料源；否則回退到 Parquet。
+
+### 中古屋（resale）與預售屋（presale）分離
+
+中古屋與預售屋因價格形成機制、單價計算方式與市場行為不同，在本專案中**始終分開分析**，不會合併為單一價格指標。
+
+## M2 AI 估價工作流程
+
+### 模型訓練
+
+```powershell
+# 建立已驗證的 M1 特徵來源
+.\.venv\Scripts\qingpu-data market-build
+
+# 訓練並產出中古屋與預售屋各自獨立的 artifact
+.\.venv\Scripts\qingpu-data model-train
+```
+
+輸出成果：
+
+| 檔案 | 階段 | 說明 |
+|------|------|------|
+| `artifacts/resale.joblib` | model-train | 中古屋估價 artifact（不提交 Git） |
+| `artifacts/presale.joblib` | model-train | 預售屋估價 artifact（不提交 Git） |
+| `outputs/reports/resale-evaluation.json` | model-train | 中古屋候選模型評估報告 |
+| `outputs/reports/presale-evaluation.json` | model-train | 預售屋候選模型評估報告 |
+| `outputs/reports/resale-model-card.md` | model-train | 中古屋模型卡 |
+| `outputs/reports/presale-model-card.md` | model-train | 預售屋模型卡 |
+
+Web 操作頁支援三組固定調參設定（快速／平衡／精細）及選用自訂設定，
+自動在校準集比較各 profile 結果、鎖定最佳候選，並在測試集隔離驗證。
+訓練結果以摘要卡片（MAE、MAPE、覆蓋率、baseline delta）優先呈現，
+完整指標與模型比較收合在可展開的進階區塊。
+
+### 啟用估價產品
+
+```powershell
+.\.venv\Scripts\qingpu-web
+```
+
+首頁新增「AI 條件估價」面板，支援中古屋與預售屋估價。估價結果包含合理區間、可信度、影響因素、相似成交與開價評估。
+
+- 成交地圖依目前篩選條件涵蓋全部有效座標資料，並依縮放層級聚合為最多
+  500 個群組；地圖狀態會揭露總筆數、有座標筆數與未定位筆數。
+- 「近期成交」獨立顯示最新 100 筆，不代表地圖或市場摘要的資料上限。
+
+### 方法論文件
+
+請參閱 [docs/m2-valuation-methodology.md](docs/m2-valuation-methodology.md)。
+
+### 中古屋模型證據工作流程
+
+中古屋（resale）估價模型在訓練與發布時，會額外執行完整的證據檢查，確保模型符合最低品質門檻。
+
+**資料狀態**
+- 資料範圍：訓練資料的時間區間（min_date～max_date）、各站點（A17/A18/A19）與類型（resale/presale）的可用交易筆數
+- 日期語義：`data_max_date` 是訓練資料最後一筆交易的日期，也是模型「知道」的最後日期
+
+**候選模型家族**
+現有候選模型為 `Ridge`、`RandomForest`、`HistGradientBoosting` 及 `RecentMedianBaseline`（僅作為基準線，不作為正式模型發布）。**XGBoost 被刻意排除**：本專案的資料規模（數千筆）不需要 XGBoost 的分散式加速優勢，且 `HistGradientBoostingRegressor` 在相同資料上已達到可比或更好的表現，同時減少相依套件數量。
+
+**衍生特徵**
+在中古屋基本特徵（車站距離、坪數、類型、樓層、車位等 15 個欄位）之上，新增五個衍生特徵：
+- `transaction_month_index`：交易年月數值，捕獲長期時間趨勢
+- `station_building_type`：車站與建物類型交互項
+- `building_age_band`：屋齡分群（0–5、5–10、10–20、20+ 年）
+- `area_band`：坪數分群（small ≤ 20、standard > 20 且 ≤ 50、large > 50 坪）
+- `floor_band`：樓層比三分群（low、middle、high）
+
+中古屋訓練使用所選 profile 的**近期交易半衰期權重**（內建預設為 48 個月），愈近期的交易權重愈高，權重下限為 0.10；預售屋維持原本不加權流程。
+
+**嚴格時間切割**
+所有評估使用嚴格的時間順序切割：
+- 訓練集：最新日期往前推 18 個月以前的所有交易
+- 校準集：訓練集結束後 6 個月
+- 測試集：最後 12 個月
+
+三組各自至少 100 筆交易，否則訓練失敗。
+
+**三次年度回溯測試**
+中古屋模型自動執行三次年度回溯測試：以最後資料日期為基準，逐年往過去推移三個不同的截止日期，每次重新訓練並驗證候選模型是否能通過發布閘門。每次回溯記錄 `passed`（候選是否勝過基準線）與 `stations_within_limit`（各站 MAPE 是否在基準線 110% 以內）。
+
+**發布閘門（Release Gate）**
+候選模型要獲得 `recommended` 狀態，必須同時滿足以下六項條件：
+1. **MAE 改善 ≥ 2%**：整體 MAE ≤ 基準線 MAE × 0.98
+2. **各站 MAPE < 10% 倒退**：所有已發布車站的 MAPE ≤ 基準線 × 1.10
+3. **A18 嚴格不倒退**：A18 車站的 MAPE 必須嚴格低於基準線（`<`，而非 `≤`）
+4. **回溯測試通過 ≥ 2/3**：三次年度回溯中至少兩次 `passed = true`
+5. **回溯各站皆在限制內**：所有回溯的 `stations_within_limit` 皆為 `true`
+6. **資料新鮮度**：`data_max_date` 距最新官方資料日期不超過 180 天
+
+以上六項全部通過，`recommended` 設為 `true`，管理端才允許發布。
+
+**過期降級（Stale Fallback）**
+正式模型若超過 **180 天**未更新，`valuate()` 自動切換至降級模式：
+- 使用最近 12 個月交易計算 `RecentMedianBaseline` 作為估價主體
+- 區間與相似成交仍參考原模型的校準參數
+- 估價結果標記為 `degraded = true`、`degraded_reason = "stale_model"`
+- 信賴度強制設為 `low`，並附加「正式模型資料過舊」說明
+
+若模型 artifact 完全無法載入，則退而使用最近 24 個月的中位數作為估價。
+
+**五分鐘操作流程**
+從資料更新到發布確認的典型操作：
+
+```powershell
+# 1. 更新官方交易資料（指定季度範圍）
+.\.venv\Scripts\qingpu-data.exe run --start-season 115S1 --end-season 115S2
+
+# 2. 建立市場資料集並訓練中古屋模型
 .\.venv\Scripts\qingpu-data.exe market-build
 .\.venv\Scripts\qingpu-data.exe model-train
 .\.venv\Scripts\qingpu-web.exe
@@ -229,6 +526,69 @@ LLM 不是資料清理、刊登發布或模型估價的必要條件。
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\python.exe -m ruff check .
+# 執行本機健康檢查（MySQL 連線、資料集、備份等）
+.\.venv\Scripts\qingpu-data.exe health-run
+
+# 建立 MySQL dump 備份
+.\.venv\Scripts\qingpu-data.exe backup-create
+
+# 在隔離資料庫驗證備份
+.\.venv\Scripts\qingpu-data.exe backup-restore-drill --backup-id <uuid>
+```
+
+### 環境變數
+
+| 變數 | 用途 | 預設值 |
+|------|------|--------|
+| `QINGPU_DATABASE_URL` | MySQL 連線字串（mysql+pymysql://user:pass@host:port/db） | —（必要） |
+
+`backup-create` 產出 `.sql` 檔案至 `outputs/backups/`，僅透過 child process 環境傳遞密碼。
+
+### Web 維運端點
+
+| 路由 | 方法 | 說明 |
+|------|------|------|
+| `/api/ops/health` | GET | 執行健康檢查（限本機） |
+| `/api/ops/backups?limit=N` | GET | 列出最近備份記錄（限本機） |
+
+兩個 GET 端點沿用 M4.2 的 loopback + trusted Host 保護。無任何 backup／restore HTTP mutation route。
+
+### M4.4 Reports 工作流程
+
+M4.4 報告以已發布的 MySQL 刊登與市場資料建立 Evidence Pack，目前每次只接受一個
+candidate listing ID。這是刻意的產品限制，用來避免多物件的事實與數字交叉引用。
+
+```powershell
+# 更新刊登資料（最少 1 頁）
+.\.venv\Scripts\qingpu-data.exe listing-update --types sale newhouse rental --max-pages 1
+
+# 執行健康檢查
+.\.venv\Scripts\qingpu-data.exe health-run
+
+# 取得一個有效的刊登 ID
+$listingId = mysql -h 127.0.0.1 -u root -p --batch --skip-column-names qingpu_insight -e "SELECT source_listing_id FROM listing_current WHERE active = TRUE LIMIT 1"
+
+# 用 Rule（無 LLM 需求）產生買方報告
+.\.venv\Scripts\qingpu-data.exe report-generate --candidate $listingId --provider rule --intended-use self_use
+
+# 啟動網頁（含報告 API /api/reports）
+.\.venv\Scripts\qingpu-web.exe
+```
+
+Ollama 與 Gemini 為可選的 LLM report provider。未設定時 Web UI 與 CLI 可選 provider `rule`，
+以 RuleReportProvider 產生規則式報告。指定 Ollama／Gemini 但缺少必要設定時會明確失敗，
+不會以 Rule 結果冒充指定模型成功。設定方式：
+
+```powershell
+$env:QINGPU_OLLAMA_MODEL = "gemma4:e2b"
+$env:QINGPU_GEMINI_API_KEY = "<your-key>"
+$env:QINGPU_GEMINI_MODEL = "<available-model-id>"
+```
+
+### Smoke 與 Benchmark
+
+```powershell
+# Rule smoke（不需 LLM）
 .\.venv\Scripts\qingpu-data.exe llm-smoke --provider rule --model rule --output-dir outputs/m44-benchmark
 ```
 

@@ -3,9 +3,14 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime
 from threading import Event
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
+from qingpu_insight.conversation_fallback import ReplyExecution
+from qingpu_insight.conversation_service import ConversationService
+from qingpu_insight.conversation_validation import ValidatedChatAnswer
 from qingpu_insight.job_executor import LocalJobExecutor
 from qingpu_insight.jobs import ACTIVE_STATUSES, InvalidJobTransition, JobRun, JobService, JobStatus
 from qingpu_insight.listing_update import ListingUpdateRequest, ListingUpdateService
@@ -29,8 +34,32 @@ class FakeJobRepository:
         return next((run for run in self._runs.values() if run.idempotency_key == idempotency_key
                      and run.status in ACTIVE_STATUSES), None)
 
-    def list_recent(self, limit: int = 20) -> list[JobRun]:
-        return list(self._runs.values())[-limit:][::-1]
+    def list_recent(
+        self, limit: int = 20, job_type: str | None = None
+    ) -> list[JobRun]:
+        runs = list(self._runs.values())
+        if job_type is not None:
+            runs = [run for run in runs if run.job_type == job_type]
+        return runs[-limit:][::-1]
+
+    def list_active(self, job_type: str) -> list[JobRun]:
+        return [
+            run
+            for run in self._runs.values()
+            if run.job_type == job_type and run.status in ACTIVE_STATUSES
+        ]
+
+    def update_summary(
+        self,
+        run_id: str,
+        expected_status: JobStatus,
+        summary: dict[str, object],
+    ) -> bool:
+        run = self._runs.get(run_id)
+        if run is None or run.status != expected_status:
+            return False
+        self._runs[run_id] = replace(run, summary=summary)
+        return True
 
     def transition(
         self, run_id: str, current_status: JobStatus, target_status: JobStatus,
@@ -69,6 +98,86 @@ def test_executor_starts_once_and_invokes_callable() -> None:
     future.result(timeout=1)
     assert repo.get(run.run_id).status == "running"  # type: ignore[union-attr]
     executor.shutdown()
+
+
+def test_conversation_commands_use_executor_owned_start_transition() -> None:
+    repo = FakeJobRepository()
+    job_service = JobService(repo)
+    executor = LocalJobExecutor(job_service)
+    conversation_repository = MagicMock()
+    import_service = MagicMock()
+    import_service.import_initial_listing.return_value = SimpleNamespace(
+        outcome="needs_attention"
+    )
+    import_service.refresh_listing.return_value = SimpleNamespace(
+        outcome="needs_attention"
+    )
+    conversation_repository.get_conversation.return_value = SimpleNamespace(
+        active_evidence_revision=1,
+        rolling_summary=None,
+        default_provider="gemini",
+        default_model="gemini-3.5-flash-lite",
+    )
+    conversation_repository.get_evidence_pack.return_value = SimpleNamespace(
+        facts=[],
+        limitations=[],
+    )
+    conversation_repository.get_messages.return_value = []
+    provider_registry = MagicMock()
+    provider_registry.get.return_value.reply.return_value = MagicMock()
+    validator = MagicMock(
+        return_value=ValidatedChatAnswer(
+            answer="一般建議",
+            citations=[],
+            evidence_revision=1,
+            general_guidance=["一般建議"],
+            suggested_questions=[],
+        )
+    )
+    reply_executor = MagicMock()
+    reply_executor.execute.return_value = ReplyExecution(
+        validated=validator.return_value,
+        actual_provider="rule",
+        actual_model="rule",
+        fallback_reason="cloud_unavailable",
+    )
+    service = ConversationService(
+        repository=conversation_repository,
+        import_service=import_service,
+        provider_registry=provider_registry,
+        reply_executor=reply_executor,
+        validator=validator,
+        job_service=job_service,
+        executor=executor,
+    )
+
+    imported = service.start_import(
+        conversation_id="conv-1",
+        raw_url="https://sale.591.com.tw/home/house/detail/1/2.html",
+        idempotency_key="conversation-import",
+    )
+    executor.shutdown(wait=True)
+    assert repo.get(imported.run_id).status == "needs_attention"  # type: ignore[union-attr]
+
+    executor = LocalJobExecutor(job_service)
+    service._executor = executor
+    refreshed = service.start_refresh(
+        conversation_id="conv-1",
+        idempotency_key="conversation-refresh",
+    )
+    executor.shutdown(wait=True)
+    assert repo.get(refreshed.run_id).status == "needs_attention"  # type: ignore[union-attr]
+
+    executor = LocalJobExecutor(job_service)
+    service._executor = executor
+    replied = service.start_reply(
+        conversation_id="conv-1",
+        question="值得買嗎？",
+        evidence_revision=1,
+        idempotency_key="conversation-reply",
+    )
+    executor.shutdown(wait=True)
+    assert repo.get(replied.run_id).status == "succeeded"  # type: ignore[union-attr]
 
 
 def test_executor_sanitizes_uncaught_failure_and_removes_completed_future(

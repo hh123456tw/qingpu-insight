@@ -52,6 +52,30 @@ assert.equal(admin.canConfirmDangerousAction("abc", "def"), false);
 
 assert.deepEqual(admin.DEFAULT_LISTING_TYPES, ["sale", "newhouse"]);
 
+assert.deepEqual(
+  admin.buildBenchmarkPayload("ollama:gemma4:e2b"),
+  { model_id: "ollama:gemma4:e2b" }
+);
+assert.equal(
+  admin.benchmarkModelHelp({
+    provider: "ollama",
+    ready: true,
+    note: "本機已安裝",
+  }),
+  "本機已安裝"
+);
+assert.equal(
+  admin.benchmarkModelHelp(
+    { provider: "gemini", ready: true, note: "可使用" },
+    "無法連線本機 Ollama；Gemini 模型仍可使用。"
+  ),
+  "無法連線本機 Ollama；Gemini 模型仍可使用。 可使用"
+);
+assert.equal(admin.canRunBenchmark({ ready: true }, true), true);
+assert.equal(admin.canRunBenchmark({ ready: true }, false), false);
+assert.equal(admin.canRunBenchmark({ ready: false }, true), false);
+assert.equal(admin.canRunBenchmark(null, true), false);
+
 async function testListingSequenceUsesOnlyWebListingTypes() {
   var submitted = [];
   var result = await admin.runListingSequence({

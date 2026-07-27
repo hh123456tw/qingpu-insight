@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
-from qingpu_insight.provider_ops import ProviderOpsService
+from qingpu_insight.provider_ops import BenchmarkRequest, ProviderOpsService
 
 
 class _MockProvider:
@@ -108,7 +109,7 @@ class _BenchmarkRunner:
             "reports": {"json": "benchmark_results.json", "markdown": "benchmark_results.md"},
         }
 
-    def run(self, model: str, cases: list, output_dir) -> dict:
+    def run(self, provider: str, model: str, cases: list, output_dir) -> dict:
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "benchmark_results.json").write_text('{"result": "ok"}')
         (output_dir / "benchmark_results.md").write_text("# Benchmark")
@@ -166,6 +167,57 @@ def test_benchmark_uses_fixed_cases_and_run_directory(tmp_path, monkeypatch) -> 
     assert result["provider"] == "ollama"
     assert result["model"] == "llama3"
     assert "reports" in result
+
+
+def test_execute_benchmark_passes_provider_and_exact_model_to_runner(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.chdir(tmp_path)
+    cases = Path("benchmarks")
+    cases.mkdir()
+    (cases / "m44_cases.json").write_text("[]", encoding="utf-8")
+    calls = []
+
+    class Runner:
+        def run(self, provider, model, evidence_cases, output_dir):
+            calls.append((provider, model, evidence_cases, output_dir))
+            return {"case_count": 0, "models": []}
+
+    service = ProviderOpsService(
+        rule_provider=object(),
+        provider_factory=lambda _name: None,
+        env={},
+    )
+    service.set_benchmark_runner(Runner())
+    request = BenchmarkRequest(provider="ollama", model="gemma4:e2b")
+
+    result = service.execute_benchmark("run-1", request)
+
+    assert result["status"] == "succeeded"
+    assert calls[0][0:3] == ("ollama", "gemma4:e2b", [])
+    assert calls[0][3] == Path("outputs/m44-benchmark/run-1")
+
+
+def test_execute_benchmark_does_not_expose_runner_error(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    Path("benchmarks").mkdir()
+    Path("benchmarks/m44_cases.json").write_text("[]", encoding="utf-8")
+
+    class Runner:
+        def run(self, provider, model, evidence_cases, output_dir):
+            raise ConnectionError("http://private-host/?key=secret-value")
+
+    service = ProviderOpsService(object(), lambda _name: None, {})
+    service.set_benchmark_runner(Runner())
+
+    result = service.execute_benchmark(
+        "run-2",
+        BenchmarkRequest(provider="gemini", model="gemma-4-31b-it"),
+    )
+
+    assert result["status"] == "failed"
+    assert result["error"] == "benchmark_execution_failed"
+    assert "private-host" not in repr(result)
 
 
 def test_provider_smoke_failure_redacts_key() -> None:

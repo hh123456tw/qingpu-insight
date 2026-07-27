@@ -9,6 +9,22 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 </head>
 <body>
+<section id="assistant-starter" class="hero" aria-labelledby="assistant-heading">
+  <h2 id="assistant-heading">貼上 591 物件，開始分析</h2>
+  <p class="supported-urls">支援 sale.591.com.tw 與 newhouse.591.com.tw 的詳細頁</p>
+  <form id="assistant-form">
+    <input type="url" id="assistant-url" placeholder="https://sale.591.com.tw/home/house/detail/..." required>
+    <label class="assistant-model-field" for="assistant-model">分析模型
+      <select id="assistant-model" required disabled>
+        <option value="">正在載入模型…</option>
+      </select>
+      <small id="assistant-model-help" class="model-status" aria-live="polite"></small>
+    </label>
+    <button type="submit" id="assistant-start" disabled>分析這個物件</button>
+  </form>
+  <div id="assistant-status" class="status" hidden></div>
+  <div id="recent-conversations"></div>
+</section>
 <main>
   <header class="hero">
     <p class="eyebrow">桃園機場捷運 A17–A19</p>
@@ -225,6 +241,7 @@
 </main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="{{ url_for('static', filename='home_assistant.js') }}" defer></script>
 <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>
