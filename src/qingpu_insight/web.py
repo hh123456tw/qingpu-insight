@@ -886,22 +886,22 @@ def _ensure_conversation_schema(
     root: Path,
     connection_factory,
 ) -> None:
-    migration_path = (
-        root
-        / "database"
-        / "008_conversation_assistant_schema.sql"
+    migration_paths = (
+        root / "database" / "008_conversation_assistant_schema.sql",
+        root / "database" / "009_conversation_fallback_metadata.sql",
     )
-    sql = migration_path.read_text(encoding="utf-8")
-    statements = [
-        statement.strip()
-        for statement in sql.split(";")
-        if statement.strip()
-    ]
     connection = connection_factory()
     try:
         with connection.cursor() as cursor:
-            for statement in statements:
-                cursor.execute(statement)
+            for migration_path in migration_paths:
+                sql = migration_path.read_text(encoding="utf-8")
+                statements = [
+                    statement.strip()
+                    for statement in sql.split(";")
+                    if statement.strip()
+                ]
+                for statement in statements:
+                    cursor.execute(statement)
         connection.commit()
     except Exception:
         connection.rollback()
@@ -999,6 +999,13 @@ def create_app(
             env=resolved_env,
         )
 
+    def get_gemini_api_key() -> str | None:
+        if secrets_store is None:
+            return os.environ.get("QINGPU_GEMINI_API_KEY")
+        return secrets_store.merged_env(os.environ).get(
+            "QINGPU_GEMINI_API_KEY"
+        )
+
     if admin_services is not None:
         admin_runtime = AdminRuntime(
             job_service=admin_services.job_service,
@@ -1039,6 +1046,9 @@ def create_app(
             from qingpu_insight.cli import create_mysql_connection_factory
             from qingpu_insight.conversation_evidence import (
                 ConversationEvidenceBuilder,
+            )
+            from qingpu_insight.conversation_fallback import (
+                ConversationFallbackExecutor,
             )
             from qingpu_insight.conversation_import import (
                 ConversationImportService,
@@ -1126,16 +1136,19 @@ def create_app(
                     )
                 ),
             )
-            gemini_key = resolved_env.get("GEMINI_API_KEY")
-            if gemini_key:
-                providers.register(
-                    "gemini",
-                    GeminiConversationProvider(gemini_key),
-                )
+            providers.register(
+                "gemini",
+                GeminiConversationProvider(get_gemini_api_key),
+            )
+            reply_executor = ConversationFallbackExecutor(
+                provider_registry=providers,
+                validator=validate_chat_answer,
+            )
             conv_service = conv_service or ConversationService(
                 repository=conv_repo,
                 import_service=import_service,
                 provider_registry=providers,
+                reply_executor=reply_executor,
                 validator=validate_chat_answer,
                 job_service=conversation_jobs,
                 executor=conversation_executor,
@@ -1150,8 +1163,16 @@ def create_app(
     app.extensions["qingpu_conversation_job_service"] = (
         conversation_job_service
     )
+    from qingpu_insight.conversation_models import public_model_catalog
+
     app.register_blueprint(
-        create_conversation_blueprint(conv_service, conv_repo)
+        create_conversation_blueprint(
+            conv_service,
+            conv_repo,
+            catalog_getter=lambda: public_model_catalog(
+                gemini_configured=bool(get_gemini_api_key())
+            ),
+        )
     )
 
     @app.before_request

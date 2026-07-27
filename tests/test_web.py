@@ -57,6 +57,74 @@ class FailingMarketDataSource:
         raise RuntimeError("database connection failed")
 
 
+def test_conversation_model_catalog_tracks_secret_changes(
+    tmp_path: Path,
+) -> None:
+    from qingpu_insight.local_secrets import LocalSecretsStore
+    from qingpu_insight.web import create_app
+
+    app = create_app(root=tmp_path)
+    client = app.test_client()
+    secret_store = LocalSecretsStore(tmp_path / "instance" / "secrets.env")
+
+    assert client.get("/api/conversation-models").get_json()[
+        "gemini_configured"
+    ] is False
+
+    secret_store.set_gemini_key("test-dynamic-key")
+
+    assert client.get("/api/conversation-models").get_json()[
+        "gemini_configured"
+    ] is True
+
+
+def test_conversation_schema_applies_fallback_metadata_migration(
+    tmp_path: Path,
+) -> None:
+    from qingpu_insight.web import _ensure_conversation_schema
+
+    database = tmp_path / "database"
+    database.mkdir()
+    (database / "008_conversation_assistant_schema.sql").write_text(
+        "CREATE TABLE conversation_messages (id INT);",
+        encoding="utf-8",
+    )
+    (database / "009_conversation_fallback_metadata.sql").write_text(
+        "ALTER TABLE conversation_messages "
+        "ADD COLUMN fallback_reason VARCHAR(64);",
+        encoding="utf-8",
+    )
+    executed: list[str] = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def execute(self, statement: str) -> None:
+            executed.append(statement)
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+        def commit(self) -> None:
+            pass
+
+        def rollback(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    _ensure_conversation_schema(tmp_path, Connection)
+
+    assert any("CREATE TABLE conversation_messages" in sql for sql in executed)
+    assert any("fallback_reason" in sql for sql in executed)
+
+
 def test_conversation_valuation_uses_official_model_adapter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
