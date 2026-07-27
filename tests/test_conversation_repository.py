@@ -246,7 +246,7 @@ def test_append_snapshot_increments_revision(fake_conn: FakeConnection) -> None:
 
 
 def test_append_evidence_pack_first_revision(fake_conn: FakeConnection) -> None:
-    fake_conn.cursor_instance.fetch_rows = [None]
+    fake_conn.cursor_instance.fetch_rows = [{"conversation_id": "conv-1"}, None]
     repo = MySQLConversationRepository(fake_conn)
     pack = dict(
         facts={"area": 30.0},
@@ -267,7 +267,7 @@ def test_append_evidence_pack_first_revision(fake_conn: FakeConnection) -> None:
 
 
 def test_append_evidence_pack_increments_revision(fake_conn: FakeConnection) -> None:
-    fake_conn.cursor_instance.fetch_rows = [{"rev": 5}]
+    fake_conn.cursor_instance.fetch_rows = [{"conversation_id": "conv-1"}, {"rev": 5}]
     repo = MySQLConversationRepository(fake_conn)
     pack = dict(facts={}, valuation=None, comparables=[], limitations=[])
     result = repo.append_evidence_pack(conversation_id="conv-1", snapshot_id="snap-1", pack=pack)
