@@ -235,6 +235,17 @@ section > h2 {
   color: var(--muted);
 }
 
+#assistant-starter .supported-urls a {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+#assistant-starter .supported-urls a:hover {
+  color: var(--ink);
+}
+
 #assistant-form {
   display: flex;
   flex-wrap: wrap;
