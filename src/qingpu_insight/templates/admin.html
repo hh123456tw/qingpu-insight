@@ -441,8 +441,8 @@
               var detailRun = details.find(function (item) {
                 return item.run_id === e.currentTarget.dataset.runId;
               });
-              if (detailRun) renderTrainingDetail(detailRun);
-              var detailSection = document.getElementById("ma-detail");
+              if (detailRun) renderTrainingDetail(detailRun, true);
+              var detailSection = document.getElementById("ma-detail-content");
               if (detailSection) {
                 detailSection.scrollIntoView({ behavior: "smooth", block: "start" });
               }
@@ -782,7 +782,7 @@
         container.appendChild(wrap);
       }
 
-      function renderTrainingDetail(detail) {
+      function renderTrainingDetail(detail, expandFullReport) {
         var container = document.getElementById("ma-detail-content");
         container.innerHTML = "";
         if (!detail || detail.error) {
@@ -882,6 +882,7 @@
 
         // Advanced details in <details>
         var detailsWrapper = document.createElement("details");
+        detailsWrapper.open = expandFullReport === true;
         var detailsSummary = document.createElement("summary");
         detailsSummary.textContent = "完整指標與模型比較";
         detailsWrapper.appendChild(detailsSummary);

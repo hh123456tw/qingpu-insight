@@ -2675,6 +2675,8 @@ class TestModelAdminPage:
         assert "查看詳細數據" in html
         assert "平均每坪估錯多少元" in html
         assert "重要特徵（前五項）" in html
+        assert "renderTrainingDetail(detailRun, true)" in html
+        assert 'var detailSection = document.getElementById("ma-detail-content")' in html
         js_pos = html.index('job_polling.js')
         ma_pos = html.index('models_admin.js')
         assert js_pos < ma_pos, "job_polling.js must load before models_admin.js"
