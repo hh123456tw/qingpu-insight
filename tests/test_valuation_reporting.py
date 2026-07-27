@@ -6,6 +6,7 @@ from qingpu_insight.model_training import (
     TimeSplit,
     run_model_experiment,
 )
+from qingpu_insight.model_tuning import TrainingProfile
 from qingpu_insight.valuation import ValuationBundle
 from qingpu_insight.valuation_reporting import write_evaluation, write_model_card
 
@@ -171,3 +172,75 @@ def test_write_evaluation_creates_json(tmp_path, trained_bundle, experiment):
     assert "leakage_audit" in payload
     assert "test_coverage" in payload
     assert payload["data_date"] == "2026-06-01"
+
+
+def test_write_evaluation_with_selected_profile(tmp_path, trained_bundle, experiment):
+    import json
+    from dataclasses import replace
+
+    split = _build_experiment_frame(300, 100, 200, seed=99)
+    exp = run_model_experiment(split)
+    exp = replace(exp, recommended=True, reason_codes=())
+
+    profile = TrainingProfile("custom", "custom", 0.05, 420, 520, 36)
+    path = write_evaluation(
+        trained_bundle, exp, split, tmp_path, selected_profile=profile
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["selected_profile"] == "custom"
+    assert payload["recency_weighting"]["half_life_months"] == 36
+    assert payload["profile_results"]["custom"]["parameters"]["hgb_max_iter"] == 420
+
+
+def test_write_evaluation_presale_omits_recency_weighting(
+    tmp_path, trained_bundle, experiment
+):
+    import json
+    from dataclasses import replace
+
+    split = _build_experiment_frame(300, 100, 200, seed=99)
+    exp = run_model_experiment(split)
+    exp = replace(exp, recommended=True, reason_codes=())
+
+    profile = TrainingProfile("custom", "custom", 0.05, 420, 520, None)
+    path = write_evaluation(
+        trained_bundle, exp, split, tmp_path, selected_profile=profile
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert "recency_weighting" not in payload
+
+
+def test_write_evaluation_presale_omits_recency_weighting_actual_presale(
+    tmp_path, trained_bundle, experiment
+):
+    import json
+    from dataclasses import replace
+
+    split = _build_experiment_frame(300, 100, 200, seed=99)
+    exp = run_model_experiment(split)
+    exp = replace(exp, recommended=True, reason_codes=())
+
+    presale_bundle = replace(trained_bundle, transaction_type="presale")
+    profile = TrainingProfile("custom", "custom", 0.05, 420, 520, 36)
+    path = write_evaluation(
+        presale_bundle, exp, split, tmp_path, selected_profile=profile
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert "recency_weighting" not in payload
+
+
+def test_model_card_with_profile_uses_exact_half_life(
+    tmp_path, trained_bundle, experiment, leakage
+):
+    from dataclasses import replace
+
+    split = _build_experiment_frame(300, 100, 200, seed=99)
+    exp = run_model_experiment(split)
+    exp = replace(exp, recommended=True, reason_codes=())
+
+    profile = TrainingProfile("custom", "custom", 0.05, 420, 520, 36)
+    path = write_model_card(
+        trained_bundle, exp, leakage, tmp_path, selected_profile=profile
+    )
+    text = path.read_text(encoding="utf-8")
+    assert "24 個月" not in text

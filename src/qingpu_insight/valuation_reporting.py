@@ -5,7 +5,12 @@ from typing import Any
 import numpy as np
 
 from qingpu_insight.model_features import FEATURE_COLUMNS
-from qingpu_insight.model_training import ModelExperiment, TimeSplit, leakage_audit
+from qingpu_insight.model_training import (
+    ModelExperiment,
+    TimeSplit,
+    leakage_audit,
+)
+from qingpu_insight.model_tuning import TrainingProfile
 from qingpu_insight.valuation import ValuationBundle
 
 
@@ -14,6 +19,7 @@ def write_evaluation(
     experiment: ModelExperiment,
     split: TimeSplit,
     report_dir: Path,
+    selected_profile: TrainingProfile | None = None,
 ) -> Path:
     leakage = leakage_audit(split)
     test_pred = bundle.pipeline.predict(split.test[list(FEATURE_COLUMNS)])
@@ -70,6 +76,21 @@ def write_evaluation(
         "data_date": bundle.data_max_date,
     }
 
+    if selected_profile is not None:
+        report["selected_profile"] = selected_profile.name
+        report["profile_results"] = {
+            selected_profile.name: {
+                "parameters": selected_profile.snapshot(),
+            },
+        }
+        if (
+            selected_profile.recency_half_life_months is not None
+            and bundle.transaction_type == "resale"
+        ):
+            report["recency_weighting"] = {
+                "half_life_months": selected_profile.recency_half_life_months,
+            }
+
     report_dir.mkdir(parents=True, exist_ok=True)
     path = report_dir / f"{bundle.transaction_type}-evaluation.json"
     path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -81,6 +102,7 @@ def write_model_card(
     experiment: ModelExperiment,
     leakage: dict[str, Any],
     report_dir: Path,
+    selected_profile: TrainingProfile | None = None,
 ) -> Path:
     lines = [
         f"# {bundle.transaction_type} 估價模型卡",
@@ -144,6 +166,18 @@ def write_model_card(
             "- 交易類型與模型類型不符",
             "- 缺乏附近站點近期交易資料",
             "",
+        ]
+    )
+
+    if selected_profile is not None and selected_profile.recency_half_life_months is not None:
+        lines.append("## 近期交易權重")
+        lines.append(
+            f"- 近期交易加權半衰期：{selected_profile.recency_half_life_months} 個月"
+        )
+        lines.append("")
+
+    lines.extend(
+        [
             "## 版本狀態",
             "- 此版本為未發布候選模型，不會替換網站正式估價模型。",
             "",
