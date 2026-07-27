@@ -194,7 +194,7 @@ asst.renderEvidencePanel({
   revision: 2,
   generated_at: "2025-06-15T10:00:00",
   facts: { title: "測試", total_price_twd: 10000000 },
-  valuation: { estimated_total_price_twd: 9800000, interval_total_price_twd: [9000000, 10500000] },
+  valuation: { estimated_total_price_twd: 9800000, interval_total_price_twd: [9000000, 10500000], confidence: "high" },
   comparables: [
     { address: "青埔一路", total_price_twd: 12000000, area_ping: "40", unit_price_twd_per_ping: 300000 },
   ],
@@ -203,6 +203,8 @@ asst.renderEvidencePanel({
 
 var valText = collectText(panel);
 assert.ok(valText.indexOf("估價") !== -1);
+assert.ok(valText.indexOf("信心度") !== -1);
+assert.ok(valText.indexOf("高") !== -1);
 assert.ok(valText.indexOf("近期成交") !== -1);
 
 // --- getCsrfToken ---

@@ -235,6 +235,11 @@
           " ~ " + (display ? display.formatTotalWan(valuation.interval_total_price_twd[1]) : formatMoney(valuation.interval_total_price_twd[1])),
         ]));
       }
+      if (valuation.confidence) {
+        valChildren.push(el("p", { "class": "val-confidence" }, [
+          "\u4fe1\u5fc3\u5ea6\uff1a" + (display ? display.localizeConfidence(valuation.confidence) : valuation.confidence)
+        ]));
+      }
       panel.appendChild(el("section", { "class": "evidence-valuation" }, valChildren));
     }
 
