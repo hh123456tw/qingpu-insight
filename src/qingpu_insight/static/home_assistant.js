@@ -124,27 +124,73 @@
     el.className = "status" + (isError ? " error" : "");
   }
 
+  function truncateConversationTitle(value, maxLength) {
+    maxLength = maxLength || 28;
+    if (value.length > maxLength) {
+      return value.slice(0, maxLength) + "\u2026";
+    }
+    return value;
+  }
+
   function renderRecentConversations(items) {
     if (typeof document === "undefined") return;
     var container = document.getElementById("recent-conversations");
     if (!container) return;
-    container.innerHTML = "";
+    container.textContent = "";
     if (!items || items.length === 0) return;
-    var heading = document.createElement("p");
-    heading.className = "recent-heading";
-    heading.textContent = "最近對話";
-    container.appendChild(heading);
-    var list = document.createElement("ul");
-    list.className = "recent-list";
+    var menuId = "recent-menu-" + Date.now();
+    var button = document.createElement("button");
+    button.className = "recent-pill";
+    button.textContent = "\u6700\u8FD1\u5C0D\u8A71 " + items.length;
+    button.setAttribute("aria-expanded", "false");
+    button.setAttribute("aria-controls", menuId);
+    button.setAttribute("aria-haspopup", "true");
+    container.appendChild(button);
+    var menu = document.createElement("div");
+    menu.id = menuId;
+    menu.className = "recent-menu";
+    menu.hidden = true;
+    container.appendChild(menu);
     items.forEach(function (item) {
-      var li = document.createElement("li");
-      var a = document.createElement("a");
-      a.href = "/assistant/" + item.id;
-      a.textContent = item.title || item.id.slice(0, 8);
-      li.appendChild(a);
-      list.appendChild(li);
+      var link = document.createElement("a");
+      link.href = "/assistant/" + item.id;
+      menu.appendChild(link);
+      var titleSpan = document.createElement("span");
+      titleSpan.className = "recent-item-title";
+      titleSpan.textContent = truncateConversationTitle(item.title || item.id.slice(0, 8));
+      link.appendChild(titleSpan);
+      if (item.created_at) {
+        var timeSpan = document.createElement("span");
+        timeSpan.className = "recent-item-time";
+        var date = new Date(item.created_at);
+        timeSpan.textContent = date.toLocaleString("zh-TW", {timeZone: "Asia/Taipei"});
+        link.appendChild(timeSpan);
+      }
     });
-    container.appendChild(list);
+    function toggle() {
+      var expanded = button.getAttribute("aria-expanded") === "true";
+      button.setAttribute("aria-expanded", String(!expanded));
+      menu.hidden = expanded;
+    }
+    button.addEventListener("click", function (e) {
+      e.stopPropagation();
+      toggle();
+    });
+    function onDocumentClick(e) {
+      if (e.target !== button && !menu.contains(e.target)) {
+        button.setAttribute("aria-expanded", "false");
+        menu.hidden = true;
+      }
+    }
+    function onDocumentKeydown(e) {
+      if (e.key === "Escape" && button.getAttribute("aria-expanded") === "true") {
+        button.setAttribute("aria-expanded", "false");
+        menu.hidden = true;
+        button.focus();
+      }
+    }
+    document.addEventListener("click", onDocumentClick, true);
+    document.addEventListener("keydown", onDocumentKeydown, true);
   }
 
   function pollJob(runId, onSuccess, onError) {
@@ -282,6 +328,7 @@
     buildListingPayload: buildListingPayload,
     getCsrfToken: getCsrfToken,
     renderStatus: renderStatus,
+    truncateConversationTitle: truncateConversationTitle,
     renderRecentConversations: renderRecentConversations,
   };
 });
