@@ -1,0 +1,63 @@
+{
+  "results": [
+    {
+      "case_id": "sale-owner-occupied-001",
+      "model": "gemma-4-31b-it",
+      "provider": "gemini",
+      "schema_success": true,
+      "fact_accuracy": 1.0,
+      "required_section_coverage": 0.8,
+      "fallback_used": false,
+      "latency_ms": 14900,
+      "failure_codes": [
+        "unit_mismatch",
+        "missing_numeric_fact_reference",
+        "unit_mismatch",
+        "unit_mismatch"
+      ],
+      "requested_provider": "gemini",
+      "requested_model": "gemma-4-31b-it",
+      "success": true,
+      "error_code": null,
+      "actual_provider": "gemini",
+      "actual_model": "gemma-4-31b-it"
+    },
+    {
+      "case_id": "newhouse-presale-001",
+      "model": "gemma-4-31b-it",
+      "provider": "gemini",
+      "schema_success": true,
+      "fact_accuracy": 1.0,
+      "required_section_coverage": 0.8,
+      "fallback_used": false,
+      "latency_ms": 14093,
+      "failure_codes": [
+        "unit_mismatch",
+        "missing_numeric_fact_reference",
+        "unit_mismatch",
+        "unit_mismatch"
+      ],
+      "requested_provider": "gemini",
+      "requested_model": "gemma-4-31b-it",
+      "success": true,
+      "error_code": null,
+      "actual_provider": "gemini",
+      "actual_model": "gemma-4-31b-it"
+    }
+  ],
+  "summaries": [
+    {
+      "model": "gemma-4-31b-it",
+      "case_count": 2,
+      "success_rate": 0.0,
+      "avg_fact_accuracy": 1.0,
+      "avg_coverage": 0.8,
+      "p50_latency": 14496.5,
+      "p95_latency": 14859.650000000001,
+      "failure_codes": [
+        "missing_numeric_fact_reference",
+        "unit_mismatch"
+      ]
+    }
+  ]
+}

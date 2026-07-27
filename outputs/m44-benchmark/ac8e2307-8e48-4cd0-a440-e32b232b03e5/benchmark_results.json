@@ -1,0 +1,67 @@
+{
+  "results": [
+    {
+      "case_id": "sale-owner-occupied-001",
+      "model": "gemini:gemma-4-31b-it",
+      "provider": "gemini:gemma-4-31b-it",
+      "schema_success": false,
+      "fact_accuracy": 0.0,
+      "required_section_coverage": 0.0,
+      "fallback_used": false,
+      "latency_ms": 30225,
+      "failure_codes": [],
+      "requested_provider": "gemini",
+      "requested_model": "gemma-4-31b-it",
+      "success": false,
+      "error_code": "provider_failed",
+      "actual_provider": "gemini:gemma-4-31b-it",
+      "actual_model": "gemini:gemma-4-31b-it"
+    },
+    {
+      "case_id": "newhouse-presale-001",
+      "model": "gemini:gemma-4-31b-it",
+      "provider": "gemini:gemma-4-31b-it",
+      "schema_success": false,
+      "fact_accuracy": 0.0,
+      "required_section_coverage": 0.0,
+      "fallback_used": false,
+      "latency_ms": 12243,
+      "failure_codes": [],
+      "requested_provider": "gemini",
+      "requested_model": "gemma-4-31b-it",
+      "success": false,
+      "error_code": "provider_failed",
+      "actual_provider": "gemini:gemma-4-31b-it",
+      "actual_model": "gemini:gemma-4-31b-it"
+    },
+    {
+      "case_id": "rental-reference-001",
+      "model": "gemini:gemma-4-31b-it",
+      "provider": "gemini:gemma-4-31b-it",
+      "schema_success": false,
+      "fact_accuracy": 0.0,
+      "required_section_coverage": 0.0,
+      "fallback_used": false,
+      "latency_ms": 8512,
+      "failure_codes": [],
+      "requested_provider": "gemini",
+      "requested_model": "gemma-4-31b-it",
+      "success": false,
+      "error_code": "provider_failed",
+      "actual_provider": "gemini:gemma-4-31b-it",
+      "actual_model": "gemini:gemma-4-31b-it"
+    }
+  ],
+  "summaries": [
+    {
+      "model": "gemini:gemma-4-31b-it",
+      "case_count": 3,
+      "success_rate": 0.0,
+      "avg_fact_accuracy": 0.0,
+      "avg_coverage": 0.0,
+      "p50_latency": 12243.0,
+      "p95_latency": 28426.799999999996,
+      "failure_codes": []
+    }
+  ]
+}
