@@ -175,7 +175,8 @@ class TestRuleConversationProvider:
             rolling_summary=None,
             recent_messages=(),
             evidence_revision=1,
-            evidence_facts=comparable_facts + (_RULE_FACT_PRICE, _RULE_FACT_POINT, _RULE_FACT_POSITION),
+            evidence_facts=comparable_facts
+            + (_RULE_FACT_PRICE, _RULE_FACT_POINT, _RULE_FACT_POSITION),
             limitations=(),
         )
 
@@ -211,15 +212,38 @@ class TestRuleConversationProvider:
     def test_rule_summary_prioritizes_six_decision_facts(self) -> None:
         facts = (
             _RULE_FACT_PRICE,
-            EvidenceFact(id="listing.area", label="建物面積", value="32.5 坪", source="591", observed_at=_NOW),
-            EvidenceFact(id="listing.floor", label="樓層", value="12", source="591", observed_at=_NOW),
+            EvidenceFact(
+                id="listing.area", label="建物面積", value="32.5 坪",
+                source="591", observed_at=_NOW,
+            ),
+            EvidenceFact(
+                id="listing.floor", label="樓層", value="12",
+                source="591", observed_at=_NOW,
+            ),
             _RULE_FACT_POINT,
             _RULE_FACT_POSITION,
-            EvidenceFact(id="valuation.low", label="估值下限", value="1,538 萬", source="估值模型", observed_at=_NOW),
-            EvidenceFact(id="valuation.high", label="估值上限", value="2,441 萬", source="估值模型", observed_at=_NOW),
-            EvidenceFact(id="valuation.confidence", label="信心度", value="低", source="估值模型", observed_at=_NOW),
-            EvidenceFact(id="valuation.asking_gap_percent", label="開價與估值差距百分比", value="高於估值中心 15.5%", source="估值模型", observed_at=_NOW),
-            EvidenceFact(id="market.sample_size", label="相似成交筆數", value="10", source="實價登錄", observed_at=_NOW),
+            EvidenceFact(
+                id="valuation.low", label="估值下限", value="1,538 萬",
+                source="估值模型", observed_at=_NOW,
+            ),
+            EvidenceFact(
+                id="valuation.high", label="估值上限", value="2,441 萬",
+                source="估值模型", observed_at=_NOW,
+            ),
+            EvidenceFact(
+                id="valuation.confidence", label="信心度", value="低",
+                source="估值模型", observed_at=_NOW,
+            ),
+            EvidenceFact(
+                id="valuation.asking_gap_percent",
+                label="開價與估值差距百分比",
+                value="高於估值中心 15.5%",
+                source="估值模型", observed_at=_NOW,
+            ),
+            EvidenceFact(
+                id="market.sample_size", label="相似成交筆數",
+                value="10", source="實價登錄", observed_at=_NOW,
+            ),
         )
         ctx = ConversationContext(
             rolling_summary=None,
