@@ -358,6 +358,17 @@ def valuate(
         bundle = None
         degraded = True
 
+    if (
+        bundle is not None
+        and bundle.parking_price_policy is None
+        and (
+            "parking_type" in bundle.feature_columns
+            or "parking_area_ping" in bundle.feature_columns
+        )
+    ):
+        degraded = True
+        degraded_reason = "legacy_parking_contract"
+
     if degraded or bundle is None:
         recent = market.loc[(market["transaction_type"] == input_.transaction_type)].copy()
         recent = recent.dropna(subset=["transaction_date", "unit_price_per_ping_twd"])
@@ -391,6 +402,11 @@ def valuate(
             if parking_price is not None
             else (building_low, building_high)
         )
+        fallback_reason = (
+            "正式模型為舊版車位契約，使用近期中位數降級估價"
+            if degraded_reason == "legacy_parking_contract"
+            else "模型 artifact 不可用，使用近期中位數降級估價"
+        )
         return {
             "transaction_type": input_.transaction_type,
             "estimated_unit_price_per_ping_twd": round(median_price),
@@ -408,13 +424,13 @@ def valuate(
             ),
             "interval_total_price_twd": interval_total,
             "confidence": "low",
-            "confidence_reasons": ["模型 artifact 不可用，使用近期中位數降級估價"],
+            "confidence_reasons": [fallback_reason],
             "factors": [],
             "comparables": [],
             "comparable_scope": "degraded",
             "data_date": str(data_date.date()),
             "degraded": True,
-            "degraded_reason": "artifact_unavailable",
+            "degraded_reason": degraded_reason or "artifact_unavailable",
             "asking_price_assessment": None,
             "model": {
                 "name": "recent_median_baseline",

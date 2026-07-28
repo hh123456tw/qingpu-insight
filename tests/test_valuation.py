@@ -461,9 +461,7 @@ def test_legacy_bundle_no_parking_policy(bundle, market, valid_resale_input):
 def test_legacy_parking_feature_contract_remains_servable(bundle, market, valid_resale_input):
     class LegacyParkingPipeline:
         def predict(self, frame):
-            assert "parking_type" in frame
-            assert "parking_area_ping" in frame
-            return np.full(len(frame), 500_000)
+            raise AssertionError("legacy parking model must not be used")
 
     bundle.pipeline = LegacyParkingPipeline()
     bundle.feature_columns = FEATURE_COLUMNS + (
@@ -471,11 +469,23 @@ def test_legacy_parking_feature_contract_remains_servable(bundle, market, valid_
         "parking_area_ping",
     )
     bundle.parking_price_policy = None
+    market = market.copy()
+    market["parking_type"] = "坡道平面"
+    market["parking_price_twd"] = 1_500_000
+    no_parking_input = replace(
+        valid_resale_input,
+        parking_type="",
+        parking_area_ping=0,
+    )
 
-    result = valuate(valid_resale_input, FakeRegistry(bundle), market)
+    no_parking = valuate(no_parking_input, FakeRegistry(bundle), market)
+    with_parking = valuate(valid_resale_input, FakeRegistry(bundle), market)
 
-    assert result["estimated_total_price_twd"] == 15_000_000
-    assert "legacy_parking" in result["confidence_reasons"]
+    assert (
+        with_parking["estimated_building_price_twd"] == (no_parking["estimated_building_price_twd"])
+    )
+    assert with_parking["estimated_total_price_twd"] > (no_parking["estimated_total_price_twd"])
+    assert with_parking["degraded_reason"] == "legacy_parking_contract"
 
 
 # --- Task 3: Parking policy ---
