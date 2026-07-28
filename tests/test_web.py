@@ -1041,6 +1041,7 @@ def test_unknown_route_preserves_http_404(client: FlaskClient) -> None:
 @pytest.fixture
 def trained_registry(tmp_path) -> ModelRegistry:
     import joblib
+
     from qingpu_insight.parking_valuation import ParkingPricePolicy, ParkingPriceStat
 
     dummy = DummyRegressor(strategy="constant", constant=500_000)

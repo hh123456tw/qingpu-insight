@@ -350,11 +350,13 @@ def test_execute_runs_tuned_model_experiment_with_profiles_and_recency_weighting
             "profile_names": [p.name for p in profiles],
         })
         from qingpu_insight.model_training import (
-            run_model_experiment as orig,
-            evaluate_candidate,
-            candidate_estimators,
             ProfileEvaluation,
             TunedModelExperiment,
+            candidate_estimators,
+            evaluate_candidate,
+        )
+        from qingpu_insight.model_training import (
+            run_model_experiment as orig,
         )
         result = orig(
             split,

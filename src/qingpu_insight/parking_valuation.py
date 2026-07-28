@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Optional
 
 import pandas as pd
 
@@ -23,7 +22,7 @@ class ParkingPricePolicy:
     version: int
     minimum_type_samples: int
     by_type: dict[str, ParkingPriceStat]
-    market_fallback: Optional[ParkingPriceStat]
+    market_fallback: ParkingPriceStat | None
 
 
 def _normalize(value: object) -> str:
@@ -65,8 +64,8 @@ def build_parking_price_policy(
 
 
 def estimate_parking_price(
-    policy: Optional[ParkingPricePolicy], parking_type: str
-) -> Optional[ParkingPriceEstimate]:
+    policy: ParkingPricePolicy | None, parking_type: str
+) -> ParkingPriceEstimate | None:
     if policy is None:
         return None
 
