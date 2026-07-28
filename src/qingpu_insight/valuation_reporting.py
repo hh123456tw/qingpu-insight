@@ -115,6 +115,14 @@ def write_evaluation(
         "feature_ranges": bundle.feature_ranges,
         "data_date": bundle.data_max_date,
     }
+    policy = bundle.parking_price_policy
+    if policy is not None:
+        report["parking_policy"] = {
+            "version": policy.version,
+            "minimum_type_samples": policy.minimum_type_samples,
+            "by_type": {k: {"price_twd": v.price_twd, "sample_size": v.sample_size} for k, v in policy.by_type.items()},
+            "market_fallback": {"price_twd": policy.market_fallback.price_twd, "sample_size": policy.market_fallback.sample_size} if policy.market_fallback else None,
+        }
     if diagnostics is not None:
         report["diagnostics"] = diagnostics
     if feature_experiments is not None:
@@ -177,11 +185,25 @@ def write_model_card(
         "## 資料期間",
         f"- {bundle.data_min_date} 至 {bundle.data_max_date}",
         "",
+    ]
+
+    _policy = bundle.parking_price_policy
+    if _policy is not None:
+        lines.append("## 車位估值政策")
+        lines.append(f"- 政策版本：{_policy.version}")
+        lines.append("- 房屋模型不包含車位特徵")
+        for pt, stat in _policy.by_type.items():
+            lines.append(f"- {pt}：{stat.price_twd:,} 元（樣本數 {stat.sample_size}）")
+        if _policy.market_fallback:
+            lines.append(f"- 市場中位數：{_policy.market_fallback.price_twd:,} 元（樣本數 {_policy.market_fallback.sample_size}）")
+        lines.append("")
+
+    lines.extend([
         "## 時間切割",
         "- 訓練集、校準集與測試集依交易日期時間順序切割",
         "",
         "## 候選模型",
-    ]
+    ])
 
     if hasattr(experiment, "selection_results"):
         candidates = experiment.selection_results

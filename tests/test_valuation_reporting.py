@@ -8,6 +8,7 @@ from qingpu_insight.model_training import (
     run_model_experiment,
 )
 from qingpu_insight.model_tuning import TrainingProfile
+from qingpu_insight.parking_valuation import ParkingPricePolicy, ParkingPriceStat
 from qingpu_insight.valuation import ValuationBundle
 from qingpu_insight.valuation_reporting import write_evaluation, write_model_card
 
@@ -20,7 +21,7 @@ def trained_bundle():
 
             return np.full(len(X), 500_000.0)
 
-    return ValuationBundle(
+    bundle = ValuationBundle(
         transaction_type="resale",
         model_name="ridge",
         model_version="resale-2026-06-01-a1b2c3d4",
@@ -53,6 +54,16 @@ def trained_bundle():
             },
         },
     )
+    bundle.parking_price_policy = ParkingPricePolicy(
+        version=1,
+        minimum_type_samples=20,
+        by_type={
+            "\u5761\u9053\u5e73\u9762": ParkingPriceStat(price_twd=1_500_000, sample_size=50),
+            "\u5761\u9053\u6a5f\u68b0": ParkingPriceStat(price_twd=800_000, sample_size=30),
+        },
+        market_fallback=ParkingPriceStat(price_twd=1_200_000, sample_size=100),
+    )
+    return bundle
 
 
 def _build_experiment_frame(n_train: int, n_cal: int, n_test: int, seed: int = 42) -> TimeSplit:
@@ -141,6 +152,10 @@ def test_model_card_discloses_required_evidence(tmp_path, trained_bundle, experi
     assert "overall：MAE = 45000" in text
     assert "mae：MAE = N/A" not in text
     assert "此版本為未發布候選模型，不會替換網站正式估價模型。" in text
+    assert "車位估值政策" in text
+    assert "政策版本：1" in text
+    assert "坡道平面" in text
+    assert "1,500,000" in text
 
 
 def test_write_evaluation_creates_json(tmp_path, trained_bundle, experiment):
@@ -167,6 +182,10 @@ def test_write_evaluation_creates_json(tmp_path, trained_bundle, experiment):
     assert "leakage_audit" in payload
     assert "test_coverage" in payload
     assert payload["data_date"] == "2026-06-01"
+    assert "parking_policy" in payload
+    assert payload["parking_policy"]["version"] == 1
+    assert payload["parking_policy"]["by_type"]["坡道平面"]["price_twd"] == 1_500_000
+    assert payload["parking_policy"]["market_fallback"]["price_twd"] == 1_200_000
 
 
 def test_write_evaluation_with_selected_profile(tmp_path, trained_bundle, experiment):

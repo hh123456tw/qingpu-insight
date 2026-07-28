@@ -26,6 +26,7 @@ from qingpu_insight.operation_previews import (
     PreviewAlreadyConsumed,
     PreviewConfirmationMismatch,
 )
+from qingpu_insight.parking_valuation import ParkingPricePolicy, ParkingPriceStat
 from qingpu_insight.valuation import ValuationBundle
 
 
@@ -35,7 +36,7 @@ def _make_bundle(market: str, model_version: str = "1.0") -> ValuationBundle:
         pd.DataFrame(
             {c: [0.0] for c in ["building_area_ping", "station_distance_m", "bedrooms",
                                  "living_rooms", "bathrooms", "building_age_years",
-                                 "floor", "total_floors", "parking_area_ping"]}
+                                 "floor", "total_floors"]}
         ),
         pd.Series([500_000.0]),
     )
@@ -63,6 +64,14 @@ def _setup_candidate(
     candidate_root.mkdir(parents=True)
 
     bundle = _make_bundle(market)
+    bundle.parking_price_policy = ParkingPricePolicy(
+        version=1,
+        minimum_type_samples=20,
+        by_type={
+            "\u5761\u9053\u5e73\u9762": ParkingPriceStat(price_twd=1_500_000, sample_size=50),
+        },
+        market_fallback=ParkingPriceStat(price_twd=1_200_000, sample_size=100),
+    )
     artifact_file = f"{market}.joblib"
     joblib.dump(bundle, candidate_root / artifact_file)
     artifact_hash = sha256_file(candidate_root / artifact_file)
@@ -108,6 +117,37 @@ def _setup_candidate(
     )
 
     return candidate_root, manifest, result
+
+
+@pytest.fixture
+def bundle_with_policy() -> ValuationBundle:
+    bundle = _make_bundle("resale", "2.0")
+    bundle.parking_price_policy = ParkingPricePolicy(
+        version=1,
+        minimum_type_samples=20,
+        by_type={
+            "\u5761\u9053\u5e73\u9762": ParkingPriceStat(price_twd=1_500_000, sample_size=50),
+            "\u5761\u9053\u6a5f\u68b0": ParkingPriceStat(price_twd=800_000, sample_size=30),
+        },
+        market_fallback=ParkingPriceStat(price_twd=1_200_000, sample_size=100),
+    )
+    return bundle
+
+
+class TestReleaseSmoke:
+    def test_release_smoke_rejects_missing_or_nonpositive_parking_policy(self):
+        bundle = _make_bundle("resale")
+        bundle.parking_price_policy = ParkingPricePolicy(
+            version=1,
+            minimum_type_samples=20,
+            by_type={},
+            market_fallback=None,
+        )
+        with pytest.raises(ValueError, match="parking price policy"):
+            ModelReleaseService._smoke_test("resale", bundle)
+
+    def test_release_smoke_accepts_additive_parking(self, bundle_with_policy):
+        ModelReleaseService._smoke_test("resale", bundle_with_policy)
 
 
 class FakeJobRepository:

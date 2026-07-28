@@ -480,6 +480,19 @@
     };
   }
 
+  function parkingPolicySummary(policy) {
+    if (!policy) return "無車位估值政策";
+    var lines = ["車位估值政策 v" + policy.version];
+    for (var type in policy.by_type) {
+      var stat = policy.by_type[type];
+      lines.push(type + "：" + (stat.price_twd / 10000).toFixed(0) + " 萬（" + stat.sample_size + " 筆）");
+    }
+    if (policy.market_fallback) {
+      lines.push("市場中位數：" + (policy.market_fallback.price_twd / 10000).toFixed(0) + " 萬（" + policy.market_fallback.sample_size + " 筆）");
+    }
+    return lines.join(" | ");
+  }
+
   return {
     MARKET_PAYLOADS: MARKET_PAYLOADS,
     PROFILE_LABELS: PROFILE_LABELS,
@@ -507,5 +520,6 @@
     backtestRows: backtestRows,
     releaseCheckRows: releaseCheckRows,
     candidateDecisionSummary: candidateDecisionSummary,
+    parkingPolicySummary: parkingPolicySummary,
   };
 });

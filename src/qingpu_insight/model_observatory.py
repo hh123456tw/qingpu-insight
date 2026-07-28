@@ -63,7 +63,7 @@ def _official_model_report(bundle: ValuationBundle) -> dict[str, Any]:
                 continue
             top_features.append({"feature": item["feature"], "importance": score})
 
-    return {
+    report = {
         "data_min_date": str(bundle.data_min_date),
         "data_max_date": str(bundle.data_max_date),
         "test_count": _public_number(overall.get("count"), integer=True),
@@ -76,6 +76,14 @@ def _official_model_report(bundle: ValuationBundle) -> dict[str, Any]:
         "stations": stations,
         "top_features": top_features,
     }
+    policy = bundle.parking_price_policy
+    if policy is not None:
+        report["parking_policy"] = {
+            "version": policy.version,
+            "by_type": {k: {"price_twd": v.price_twd, "sample_size": v.sample_size} for k, v in policy.by_type.items()},
+            "market_fallback": {"price_twd": policy.market_fallback.price_twd, "sample_size": policy.market_fallback.sample_size} if policy.market_fallback else None,
+        }
+    return report
 
 
 class ModelObservatory:

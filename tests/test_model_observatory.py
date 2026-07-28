@@ -20,11 +20,12 @@ from qingpu_insight.model_artifacts import (
 )
 from qingpu_insight.model_observatory import ModelObservatory
 from qingpu_insight.model_release import OfficialModelStore
+from qingpu_insight.parking_valuation import ParkingPricePolicy, ParkingPriceStat
 from qingpu_insight.valuation import ValuationBundle
 
 
 def bundle_fixture(model_name: str = "ridge", transaction_type: str = "resale") -> ValuationBundle:
-    return ValuationBundle(
+    bundle = ValuationBundle(
         transaction_type=transaction_type,
         model_name=model_name,
         model_version="v1",
@@ -39,6 +40,15 @@ def bundle_fixture(model_name: str = "ridge", transaction_type: str = "resale") 
         data_max_date="2024-01-01",
         metrics={},
     )
+    bundle.parking_price_policy = ParkingPricePolicy(
+        version=1,
+        minimum_type_samples=20,
+        by_type={
+            "\u5761\u9053\u5e73\u9762": ParkingPriceStat(price_twd=1_500_000, sample_size=50),
+        },
+        market_fallback=ParkingPriceStat(price_twd=1_200_000, sample_size=100),
+    )
+    return bundle
 
 
 def manifest_fixture(
@@ -276,6 +286,11 @@ class TestModelObservatoryStatus:
                 {"feature": "station_distance_m", "importance": 42_804.1},
                 {"feature": "building_age_years", "importance": 15_178.9},
             ],
+            "parking_policy": {
+                "version": 1,
+                "by_type": {"\u5761\u9053\u5e73\u9762": {"price_twd": 1_500_000, "sample_size": 50}},
+                "market_fallback": {"price_twd": 1_200_000, "sample_size": 100},
+            },
         }
         json.dumps(status)
 

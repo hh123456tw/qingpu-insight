@@ -427,4 +427,27 @@ assert.equal(candidateSummary.baselineComparison, "改善 25.3%");
 assert.equal(candidateSummary.isCurrentOfficial, true);
 assert.deepEqual(candidateSummary.stationWarnings, ["A18"]);
 
+// parkingPolicySummary tests
+assert.equal(admin.parkingPolicySummary(null), "無車位估值政策");
+assert.equal(admin.parkingPolicySummary(undefined), "無車位估值政策");
+assert.equal(
+  admin.parkingPolicySummary({
+    version: 1,
+    by_type: {
+      "坡道平面": { price_twd: 1500000, sample_size: 50 },
+      "坡道機械": { price_twd: 800000, sample_size: 30 },
+    },
+    market_fallback: { price_twd: 1200000, sample_size: 100 },
+  }),
+  "車位估值政策 v1 | 坡道平面：150 萬（50 筆） | 坡道機械：80 萬（30 筆） | 市場中位數：120 萬（100 筆）"
+);
+assert.equal(
+  admin.parkingPolicySummary({
+    version: 2,
+    by_type: {},
+    market_fallback: null,
+  }),
+  "車位估值政策 v2"
+);
+
 process.stdout.write("model admin contract passed\n");

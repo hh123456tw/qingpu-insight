@@ -17,7 +17,7 @@ from qingpu_insight.model_artifacts import (
     TrainingManifest,
     sha256_file,
 )
-from qingpu_insight.model_features import ValuationInput
+from qingpu_insight.model_features import PARKING_FEATURE_COLUMNS, ValuationInput
 from qingpu_insight.model_release_repository import (
     ModelReleaseRepository,
     ModelVersionRecord,
@@ -513,6 +513,19 @@ class ModelReleaseService:
 
     @staticmethod
     def _smoke_test(market: str, bundle: ValuationBundle) -> None:
+        from qingpu_insight.parking_valuation import estimate_parking_price
+        from qingpu_insight.valuation import compose_total_price
+
+        # Verify no parking features in bundle
+        for col in PARKING_FEATURE_COLUMNS:
+            if col in bundle.feature_columns:
+                raise ValueError(f"parking feature {col} must not be in feature_columns")
+
+        # Verify policy exists and has positive fallback
+        policy = bundle.parking_price_policy
+        if policy is None or policy.market_fallback is None or policy.market_fallback.price_twd <= 0:
+            raise ValueError("parking price policy must have positive market fallback")
+
         test_input = _SMOKE_INPUTS.get(market)
         if test_input is None:
             raise ValueError(f"no smoke test input for market {market!r}")
@@ -523,3 +536,23 @@ class ModelReleaseService:
         data_date = pd.Timestamp(bundle.data_max_date)
         row = input_frame(test_input, data_date)
         bundle.pipeline.predict(row)
+
+        # Verify parking consistency
+        unit_price = float(bundle.pipeline.predict(row)[0])
+
+        # No parking case
+        no_parking_est = estimate_parking_price(policy, "")
+        _, _, no_parking_total = compose_total_price(unit_price, 30.0, no_parking_est)
+
+        # Slope flat
+        flat_est = estimate_parking_price(policy, "\u5761\u9053\u5e73\u9762")
+        _, _, flat_total = compose_total_price(unit_price, 30.0, flat_est)
+
+        # Slope mechanical
+        mechanical_est = estimate_parking_price(policy, "\u5761\u9053\u6a5f\u68b0")
+        _, _, mechanical_total = compose_total_price(unit_price, 30.0, mechanical_est)
+
+        if not (flat_total > no_parking_total):
+            raise ValueError("parking consistency: slope flat total must exceed no-parking total")
+        if not (mechanical_total > no_parking_total):
+            raise ValueError("parking consistency: slope mechanical total must exceed no-parking total")
