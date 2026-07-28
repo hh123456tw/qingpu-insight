@@ -19,6 +19,7 @@ dependencies = [
   "beautifulsoup4>=4.12,<5",
   "selenium>=4.28,<5",
   "pydantic>=2.10,<3",
+  "optuna>=4,<5",
 ]
 
 [project.optional-dependencies]

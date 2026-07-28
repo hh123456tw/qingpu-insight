@@ -50,12 +50,55 @@ class TrainingTuningPlan:
         return any(profile.name == "custom" for profile in self.profiles)
 
 
+AutoMLBudgetName = Literal["quick", "standard", "deep"]
+
+
+@dataclass(frozen=True)
+class AutoMLBudget:
+    name: AutoMLBudgetName
+    seconds: int
+    max_trials: int
+
+
+@dataclass(frozen=True)
+class AutoMLTuningPlan:
+    version: Literal[2]
+    mode: Literal["automl"]
+    budget: AutoMLBudget
+    seed: Literal[42] = 42
+
+
+TrainingPlan = TrainingTuningPlan | AutoMLTuningPlan
+
+AUTOML_BUDGETS = {
+    "quick": AutoMLBudget("quick", 300, 12),
+    "standard": AutoMLBudget("standard", 900, 35),
+    "deep": AutoMLBudget("deep", 1800, 70),
+}
+
 PRESET_PROFILES = (
     TrainingProfile("quick", "preset", 0.08, 180, 160, 48),
     TrainingProfile("balanced", "preset", 0.06, 350, 400, 48),
     TrainingProfile("thorough", "preset", 0.04, 600, 700, 48),
 )
 BALANCED_PROFILE = PRESET_PROFILES[1]
+
+
+def _parse_automl_plan(payload: Mapping[str, Any]) -> AutoMLTuningPlan:
+    fields: dict[str, str] = {}
+    allowed = frozenset({"mode", "budget"})
+    for key in sorted(set(payload) - allowed):
+        fields[key] = "not_allowed"
+
+    budget_name = payload.get("budget")
+    if budget_name not in AUTOML_BUDGETS:
+        fields["budget"] = "required"
+
+    if fields:
+        raise TuningValidationError(fields)
+
+    assert isinstance(budget_name, str)
+    return AutoMLTuningPlan(2, "automl", AUTOML_BUDGETS[budget_name])
 
 
 def _finite_float(value: Any, low: float, high: float) -> bool:
@@ -78,18 +121,22 @@ def _bounded_int(value: Any, low: int, high: int) -> bool:
 def parse_tuning_plan(
     markets: tuple[MarketName, ...],
     payload: Mapping[str, Any] | None,
-) -> TrainingTuningPlan:
+) -> TrainingPlan:
     if payload is None:
         return TrainingTuningPlan(1, "preset_comparison", PRESET_PROFILES)
     if not isinstance(payload, Mapping):
         raise TuningValidationError({"body": "object"})
+
+    mode = payload.get("mode")
+    if mode == "automl":
+        return _parse_automl_plan(payload)
 
     fields: dict[str, str] = {}
     allowed = {"mode", "include_custom", "custom"}
     for key in sorted(set(payload) - allowed):
         fields[key] = "not_allowed"
 
-    if payload.get("mode") != "preset_comparison":
+    if mode != "preset_comparison":
         fields["mode"] = "preset_comparison"
     include_custom = payload.get("include_custom")
     if not isinstance(include_custom, bool):

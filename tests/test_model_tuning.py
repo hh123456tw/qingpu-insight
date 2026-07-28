@@ -4,6 +4,8 @@ import pytest
 
 from qingpu_insight.model_tuning import (
     PROFILE_ORDER,
+    AutoMLTuningPlan,
+    TrainingTuningPlan,
     TuningValidationError,
     parse_tuning_plan,
 )
@@ -162,3 +164,52 @@ def test_presale_custom_with_exactly_three_model_fields() -> None:
     custom = plan.profiles[-1]
     assert custom.name == "custom"
     assert custom.recency_half_life_months is None
+
+
+def test_preset_comparison_still_returns_training_tuning_plan() -> None:
+    plan = parse_tuning_plan(("resale",), None)
+    assert isinstance(plan, TrainingTuningPlan)
+    assert len(plan.profiles) == 3
+    assert [p.name for p in plan.profiles] == ["quick", "balanced", "thorough"]
+
+
+def test_parse_automl_quick_plan() -> None:
+    plan = parse_tuning_plan(("resale",), {"mode": "automl", "budget": "quick"})
+    assert isinstance(plan, AutoMLTuningPlan)
+    assert plan.version == 2
+    assert plan.budget.name == "quick"
+    assert plan.budget.seconds == 300
+    assert plan.budget.max_trials == 12
+    assert plan.seed == 42
+
+
+@pytest.mark.parametrize("name,seconds,trials", [
+    ("quick", 300, 12),
+    ("standard", 900, 35),
+    ("deep", 1800, 70),
+])
+def test_automl_budget_contract(name: str, seconds: int, trials: int) -> None:
+    plan = parse_tuning_plan(("resale",), {"mode": "automl", "budget": name})
+    assert plan.budget.seconds == seconds
+    assert plan.budget.max_trials == trials
+
+
+def test_automl_rejects_custom_search_space() -> None:
+    with pytest.raises(TuningValidationError) as exc:
+        parse_tuning_plan(
+            ("resale",),
+            {"mode": "automl", "budget": "quick", "estimators": ["xgboost"]},
+        )
+    assert exc.value.fields["estimators"] == "not_allowed"
+
+
+def test_automl_rejects_missing_budget() -> None:
+    with pytest.raises(TuningValidationError) as exc:
+        parse_tuning_plan(("resale",), {"mode": "automl"})
+    assert "budget" in exc.value.fields
+
+
+def test_automl_rejects_unknown_budget() -> None:
+    with pytest.raises(TuningValidationError) as exc:
+        parse_tuning_plan(("resale",), {"mode": "automl", "budget": "ultra"})
+    assert "budget" in exc.value.fields

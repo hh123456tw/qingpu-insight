@@ -40,7 +40,7 @@ from qingpu_insight.model_training import (
     run_tuned_model_experiment,
     split_by_time,
 )
-from qingpu_insight.model_tuning import TrainingTuningPlan, parse_tuning_plan
+from qingpu_insight.model_tuning import TrainingPlan, parse_tuning_plan
 from qingpu_insight.valuation import ValuationBundle, train_artifact
 from qingpu_insight.valuation_reporting import (
     compute_interval_summary,
@@ -218,7 +218,7 @@ class ModelTrainingRequest:
         self,
         markets: tuple[Literal["resale", "presale"], ...],
         trigger: str = "web",
-        tuning_plan: TrainingTuningPlan | None = None,
+        tuning_plan: TrainingPlan | None = None,
     ) -> None:
         if not markets:
             raise ValueError("markets must not be empty")
