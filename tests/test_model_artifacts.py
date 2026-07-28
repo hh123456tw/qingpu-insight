@@ -592,9 +592,44 @@ class TestSchemaV4:
         assert manifest.automl is not None
         assert manifest.automl.markets["resale"].budget_name == "quick"
 
+    def test_schema_v4_rejects_non_v2_tuning_plan(
+        self, valid_manifest_data: dict[str, object]
+    ) -> None:
+        data = {
+            **valid_manifest_data,
+            "schema_version": 4,
+            "tuning_plan_version": 1,
+            "profiles": [],
+            "automl": automl_snapshot_data(),
+        }
+        with pytest.raises(ValueError, match="tuning_plan_version"):
+            TrainingManifest.model_validate(data)
+
+    def test_schema_v4_rejects_non_empty_profiles(
+        self, valid_manifest_data: dict[str, object]
+    ) -> None:
+        data = {
+            **valid_manifest_data,
+            "schema_version": 4,
+            "tuning_plan_version": 2,
+            "profiles": [
+                {
+                    "name": "quick",
+                    "source": "preset",
+                    "hgb_learning_rate": 0.08,
+                    "hgb_max_iter": 180,
+                    "rf_n_estimators": 160,
+                    "recency_half_life_months": 48,
+                }
+            ],
+            "automl": automl_snapshot_data(),
+        }
+        with pytest.raises(ValueError, match="profiles"):
+            TrainingManifest.model_validate(data)
+
     def test_candidate_store_rejects_tampered_trial_file(self, tmp_path: Path) -> None:
         store, run_id, manifest = staged_v4_candidate(tmp_path)
-        trial_path = tmp_path / "candidates" / f".tmp-{run_id}" / "automl" / "resale-trials.json"
+        trial_path = store._root / f".tmp-{run_id}" / "automl" / "resale-trials.json"
         trial_path.write_text("tampered", encoding="utf-8")
         with pytest.raises(ValueError, match="Hash mismatch"):
             store.commit(run_id, manifest)
