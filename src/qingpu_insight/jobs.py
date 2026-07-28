@@ -219,6 +219,9 @@ class JobService:
             error_message=redact_job_message(error_message),
         )
 
+    def skip(self, run_id: str, summary: dict[str, object]) -> JobRun:
+        return self._transition(run_id, "skipped", summary=summary)
+
     def retry(self, run_id: str) -> JobRun:
         return self._transition(run_id, "retry_wait")
 

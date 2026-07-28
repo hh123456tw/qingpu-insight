@@ -248,6 +248,36 @@ class TestProgressAndRecovery:
         assert service.get(listing.run_id).status == "running"  # type: ignore[union-attr]
 
 
+class TestJobServiceSkip:
+    def test_skip_transitions_running_to_skipped(
+        self, service: JobService
+    ) -> None:
+        run = service.create("test", "skip-key", "manual").run
+        service.start(run.run_id)
+        skipped = service.skip(run.run_id, {"reason": "user cancelled"})
+        assert skipped.status == "skipped"
+        assert skipped.finished_at is not None
+        assert skipped.summary == {"reason": "user cancelled"}
+
+    def test_skip_preserves_summary(self, service: JobService) -> None:
+        run = service.create("test", "skip-key2", "manual").run
+        service.start(run.run_id)
+        skipped = service.skip(run.run_id, {"reason": "no more time", "trials": 5})
+        assert skipped.summary == {"reason": "no more time", "trials": 5}
+
+    def test_skip_from_pending_is_illegal(self, service: JobService) -> None:
+        run = service.create("test", "skip-key3", "manual").run
+        with pytest.raises(InvalidJobTransition):
+            service.skip(run.run_id, {})
+
+    def test_skip_from_succeeded_is_illegal(self, service: JobService) -> None:
+        run = service.create("test", "skip-key4", "manual").run
+        service.start(run.run_id)
+        service.succeed(run.run_id, "v1", {})
+        with pytest.raises(InvalidJobTransition):
+            service.skip(run.run_id, {})
+
+
 class TestRedactJobMessage:
     def test_redacts_url_credentials(self) -> None:
         msg = "connecting to mysql://user:secret@host:3306/db"
