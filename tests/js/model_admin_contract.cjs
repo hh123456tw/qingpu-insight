@@ -450,4 +450,87 @@ assert.equal(
   "車位估值政策 v2"
 );
 
+// AutoML contract tests (Task 8)
+assert.deepEqual(admin.BUILD_LABELS, {
+  quick: "快速探索（5 分鐘）",
+  standard: "標準探索（15 分鐘）",
+  deep: "深度探索（30 分鐘）",
+});
+
+assert.deepEqual(admin.buildAutoMLPayload("resale", "quick"), {
+  markets: ["resale"],
+  tuning: { mode: "automl", budget: "quick" },
+});
+assert.deepEqual(admin.buildAutoMLPayload("all", "deep"), {
+  markets: ["resale", "presale"],
+  tuning: { mode: "automl", budget: "deep" },
+});
+assert.throws(() => admin.buildAutoMLPayload("all", "hour"), /budget/i);
+assert.throws(() => admin.buildAutoMLPayload("xgboost", "quick"), /unknown market/i);
+
+// automlProgressView tests
+var automlSummary = {
+  stage: "searching",
+  model_name: "hist_gradient_boosting",
+  completed_trials: 5,
+  failed_trials: 1,
+  elapsed_seconds: 125,
+  best_mae: 45000,
+  last_parameters: { hgb_learning_rate: 0.05 },
+};
+var progress = admin.automlProgressView(automlSummary);
+assert.equal(progress.stage, "searching");
+assert.equal(progress.modelName, "hist_gradient_boosting");
+assert.equal(progress.completedTrials, 5);
+assert.equal(progress.failedTrials, 1);
+assert.equal(progress.elapsedSeconds, "02:05");
+assert.equal(progress.bestMae, 45000);
+assert.deepEqual(progress.lastParameters, { hgb_learning_rate: 0.05 });
+
+// Edge: empty summary
+var emptyProgress = admin.automlProgressView({});
+assert.equal(emptyProgress.stage, null);
+assert.equal(emptyProgress.elapsedSeconds, "00:00");
+assert.equal(emptyProgress.completedTrials, 0);
+
+// Edge: edge elapsed formatting
+var edgeProgress = admin.automlProgressView({ elapsed_seconds: 3661 });
+assert.equal(edgeProgress.elapsedSeconds, "61:01");
+
+// automlLeaderboardRows fixture
+var automlFixture = {
+  manifest: {
+    automl: {
+      top_trials: [
+        { trial_number: 7, state: "completed", model_name: "hist_gradient_boosting", mae: 45000, mape: 8.5, calibration_passed: true, duration_seconds: 120 },
+        { trial_number: 3, state: "completed", model_name: "ridge", mae: 52000, mape: 10.2, calibration_passed: true, duration_seconds: 90 },
+        { trial_number: 5, state: "completed", model_name: "random_forest", mae: 48000, mape: 9.1, calibration_passed: false, duration_seconds: 110 },
+      ],
+    },
+  },
+};
+assert.deepEqual(
+  admin.automlLeaderboardRows(automlFixture).slice(0, 2).map(function (x) { return x.trialNumber; }),
+  [7, 3]
+);
+assert.equal(admin.automlLeaderboardRows(automlFixture)[0].modelName, "hist_gradient_boosting");
+assert.equal(admin.automlLeaderboardRows(automlFixture)[2].calibrationPassed, false);
+assert.equal(admin.automlLeaderboardRows(null).length, 0);
+assert.equal(admin.automlLeaderboardRows({ manifest: {} }).length, 0);
+
+// canStopAutoML tests
+assert.equal(admin.canStopAutoML({
+  status: "running",
+  summary: { mode: "automl" },
+}), true);
+assert.equal(admin.canStopAutoML({
+  status: "running",
+  summary: { mode: "preset_comparison" },
+}), false);
+assert.equal(admin.canStopAutoML({
+  status: "succeeded",
+  summary: { mode: "automl" },
+}), false);
+assert.equal(admin.canStopAutoML(null), false);
+
 process.stdout.write("model admin contract passed\n");

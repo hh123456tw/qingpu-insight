@@ -1101,11 +1101,120 @@
           });
       }
 
+      function isAutomlMode() {
+        var mode = document.getElementById("ma-training-mode");
+        return mode && mode.value === "automl";
+      }
+
+      function updateAutomlStatus(job) {
+        var statusEl = document.getElementById("ma-automl-status");
+        if (!statusEl || !job.summary) return;
+        statusEl.style.display = "block";
+        var summary = job.summary;
+        if (summary.stage === "validating_shortlist") {
+          statusEl.textContent = "搜尋完成，正在驗證前三名";
+          return;
+        }
+        var progress = ma.automlProgressView(summary);
+        var parts = [];
+        if (progress.modelName) parts.push("模型：" + progress.modelName);
+        parts.push("已完成：" + progress.completedTrials + " 次探索");
+        if (progress.failedTrials > 0) parts.push("失敗：" + progress.failedTrials + " 次");
+        parts.push("耗時：" + progress.elapsedSeconds);
+        if (progress.bestMae != null) parts.push("最佳 MAE：" + (progress.bestMae / 10000).toFixed(2) + " 萬／坪");
+        statusEl.textContent = parts.join("｜");
+      }
+
+      function updateAutomlLeaderboard(job) {
+        var container = document.getElementById("ma-automl-leaderboard");
+        if (!container) return;
+        var rows = ma.automlLeaderboardRows(job);
+        if (rows.length === 0) return;
+        container.style.display = "block";
+        container.innerHTML = "";
+        var visibleRows = rows.slice(0, 10);
+        var table = document.createElement("table");
+        table.className = "ma-automl-table";
+        var thead = document.createElement("thead");
+        var headerRow = document.createElement("tr");
+        ["搜尋排名", "模型", "MAE", "MAPE", "發布資格", "歷時"].forEach(function (t) {
+          var th = document.createElement("th"); th.textContent = t; headerRow.appendChild(th);
+        });
+        thead.appendChild(headerRow);
+        table.appendChild(thead);
+        var tbody = document.createElement("tbody");
+        for (var i = 0; i < visibleRows.length; i++) {
+          var rowData = visibleRows[i];
+          var tr = document.createElement("tr");
+          var cellTexts = [
+            String(i + 1),
+            rowData.modelName || "—",
+            rowData.mae != null ? (rowData.mae / 10000).toFixed(2) + " 萬" : "—",
+            rowData.mape != null ? rowData.mape + "%" : "—",
+            rowData.calibrationPassed ? "通過" : "未通過",
+            rowData.durationSeconds != null ? rowData.durationSeconds + "s" : "—",
+          ];
+          for (var j = 0; j < cellTexts.length; j++) {
+            var td = document.createElement("td");
+            td.textContent = cellTexts[j];
+            tr.appendChild(td);
+          }
+          tbody.appendChild(tr);
+        }
+        table.appendChild(tbody);
+        container.appendChild(table);
+
+        var remaining = rows.slice(10);
+        if (remaining.length > 0) {
+          var detailsEl = document.createElement("details");
+          var detSummary = document.createElement("summary");
+          detSummary.textContent = "查看第 11 名以後的探索";
+          detailsEl.appendChild(detSummary);
+          var extraTable = document.createElement("table");
+          extraTable.className = "ma-automl-table";
+          var extraTbody = document.createElement("tbody");
+          for (var k = 0; k < remaining.length; k++) {
+            var rd = remaining[k];
+            var etr = document.createElement("tr");
+            var extraCells = [
+              String(11 + k),
+              rd.modelName || "—",
+              rd.mae != null ? (rd.mae / 10000).toFixed(2) + " 萬" : "—",
+              rd.mape != null ? rd.mape + "%" : "—",
+              rd.calibrationPassed ? "通過" : "未通過",
+              rd.durationSeconds != null ? rd.durationSeconds + "s" : "—",
+            ];
+            for (var m = 0; m < extraCells.length; m++) {
+              var etd = document.createElement("td");
+              etd.textContent = extraCells[m];
+              etr.appendChild(etd);
+            }
+            extraTbody.appendChild(etr);
+          }
+          extraTable.appendChild(extraTbody);
+          detailsEl.appendChild(extraTable);
+          container.appendChild(detailsEl);
+        }
+      }
+
+      function clearAutomlDisplay() {
+        var statusEl = document.getElementById("ma-automl-status");
+        var leaderboard = document.getElementById("ma-automl-leaderboard");
+        var stopBtn = document.getElementById("ma-automl-stop-btn");
+        if (statusEl) { statusEl.style.display = "none"; statusEl.textContent = ""; }
+        if (leaderboard) { leaderboard.style.display = "none"; leaderboard.innerHTML = ""; }
+        if (stopBtn) stopBtn.style.display = "none";
+      }
+
       function startTrainingPolling(runId) {
         var status = document.getElementById("ma-active-status");
         var button = document.getElementById("ma-submit-btn");
+        var automl = isAutomlMode();
         activeRun = { run_id: runId, status: "running" };
         button.disabled = true;
+        if (automl) {
+          document.getElementById("ma-automl-stop-btn").style.display = "inline-block";
+        }
         var controller = polling.createPollController({
           fetchJob: function (id) {
             return fetch("/api/admin/model-training-runs/" + id);
@@ -1113,6 +1222,10 @@
           schedule: function (callback, delay) { setTimeout(callback, delay); },
           onUpdate: function (job) {
             activeRun = job;
+            if (automl && job.summary && job.summary.mode === "automl") {
+              updateAutomlStatus(job);
+              updateAutomlLeaderboard(job);
+            }
             var stage = job.summary && job.summary.stage;
             status.textContent =
               (stage && ma.STAGE_LABELS[stage]) || "正在處理模型訓練…";
@@ -1125,6 +1238,9 @@
             loadModelStatus();
             loadTrainingRuns();
             if (job && job.run_id) loadTrainingDetail(job.run_id);
+            if (automl) {
+              document.getElementById("ma-automl-stop-btn").style.display = "none";
+            }
           },
           minDelay: 2000,
           maxDelay: 16000,
@@ -1134,6 +1250,50 @@
         controller.start(runId);
       }
 
+      function stopAutoml() {
+        var stopBtn = document.getElementById("ma-automl-stop-btn");
+        if (!activeRun || stopBtn.disabled) return;
+        stopBtn.disabled = true;
+        stopBtn.textContent = "正在要求停止…";
+        fetch("/api/admin/model-training-runs/" + activeRun.run_id + "/stop", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Qingpu-CSRF": getCSRF() },
+        })
+          .then(function (response) { return response.json(); })
+          .then(function (data) {
+            if (data.stop_requested) {
+              stopBtn.textContent = "已要求停止；目前這次嘗試完成後會結束";
+            } else {
+              stopBtn.disabled = false;
+              stopBtn.textContent = "停止搜尋";
+            }
+          })
+          .catch(function () {
+            stopBtn.disabled = false;
+            stopBtn.textContent = "停止搜尋";
+          });
+      }
+
+      function toggleTrainingMode() {
+        var mode = document.getElementById("ma-training-mode").value;
+        var guided = document.getElementById("ma-guided-controls");
+        var automl = document.getElementById("ma-automl-controls");
+        var marketSel = document.getElementById("ma-market-select");
+        var summary = document.getElementById("ma-submit-summary");
+        if (mode === "automl") {
+          guided.style.display = "none";
+          automl.style.display = "block";
+          if (marketSel) marketSel.value = "resale";
+          clearAutomlDisplay();
+          if (summary) summary.textContent = "自動探索設定（中古屋）";
+        } else {
+          guided.style.display = "block";
+          automl.style.display = "none";
+          clearAutomlDisplay();
+          updateTrainingSummary();
+        }
+      }
+
       function submitTraining(event) {
         event.preventDefault();
         var button = document.getElementById("ma-submit-btn");
@@ -1141,6 +1301,39 @@
         if (button.disabled) return;
         button.disabled = true;
         notice.textContent = "正在建立訓練工作…";
+
+        if (isAutomlMode()) {
+          var market = document.getElementById("ma-market-select").value;
+          var budgetEl = document.querySelector('input[name="ma-automl-budget"]:checked');
+          var budget = budgetEl ? budgetEl.value : "quick";
+          fetch("/api/admin/model-training-runs", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Qingpu-CSRF": getCSRF(),
+            },
+            body: JSON.stringify(ma.buildAutoMLPayload(market, budget)),
+          })
+            .then(function (response) {
+              return response.json().then(function (data) {
+                return { ok: response.ok, data: data };
+              });
+            })
+            .then(function (result) {
+              if (!result.ok || result.data.error) {
+                throw new Error((result.data.error && result.data.error.message) || "訓練工作無法啟動");
+              }
+              notice.textContent = "工作已建立：" + result.data.run_id.slice(0, 8);
+              startTrainingPolling(result.data.run_id);
+              loadTrainingRuns();
+            })
+            .catch(function (error) {
+              button.disabled = false;
+              notice.textContent = error.message || "訓練工作無法啟動";
+            });
+          return;
+        }
+
         var market = document.getElementById("ma-market-select").value;
         var includeCustom = document.getElementById("ma-custom-enabled") && document.getElementById("ma-custom-enabled").checked;
         var customValues = null;
@@ -1247,7 +1440,7 @@
         var sel = document.getElementById("ma-market-select");
         var cb = document.getElementById("ma-custom-enabled");
         var summary = document.getElementById("ma-submit-summary");
-        if (summary && sel) {
+        if (summary && sel && !isAutomlMode()) {
           summary.textContent = ma.trainingSubmitSummary(sel.value, cb ? cb.checked : false);
         }
       }
@@ -1277,9 +1470,16 @@
           pendingPreview = null;
           document.getElementById("mr-preview-dialog").style.display = "none";
         });
-        document.getElementById("ma-market-select").addEventListener("change", updateHalfLifeState);
+        document.getElementById("ma-market-select").addEventListener("change", function () {
+          if (isAutomlMode()) return;
+          updateHalfLifeState();
+        });
         var customCb = document.getElementById("ma-custom-enabled");
         if (customCb) customCb.addEventListener("change", updateTrainingSummary);
+        var modeSelect = document.getElementById("ma-training-mode");
+        if (modeSelect) modeSelect.addEventListener("change", toggleTrainingMode);
+        var stopBtn = document.getElementById("ma-automl-stop-btn");
+        if (stopBtn) stopBtn.addEventListener("click", stopAutoml);
         updateHalfLifeState();
       });
     })();

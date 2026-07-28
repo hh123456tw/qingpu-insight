@@ -145,3 +145,111 @@
   font-weight: 600;
   color: #0066cc;
 }
+
+/* Training mode selector */
+.ma-mode-select {
+  margin: 0.75rem 0;
+}
+.ma-mode-select label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.ma-mode-select select {
+  padding: 0.25rem 0.5rem;
+  border: 1px solid #bbb;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+
+/* Budget cards for AutoML */
+.ma-budget-cards {
+  display: flex;
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+  flex-wrap: wrap;
+}
+.ma-budget-card {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+  flex: 1 1 140px;
+  background: #f9f9f9;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+.ma-budget-card:has(input:checked) {
+  border-color: #0066cc;
+  background: #eef4ff;
+}
+.ma-budget-card input {
+  margin: 0;
+}
+
+/* AutoML status region */
+.ma-automl-status {
+  background: #e8f4fd;
+  border: 1px solid #b8d4f0;
+  border-radius: 4px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+  color: #1a4d7a;
+  margin: 0.5rem 0;
+  min-height: 1.2em;
+}
+
+/* AutoML leaderboard table */
+.ma-automl-leaderboard {
+  margin: 0.75rem 0;
+  overflow-x: auto;
+}
+.ma-automl-table {
+  border-collapse: collapse;
+  font-size: 0.82rem;
+  width: 100%;
+  font-family: Consolas, "Courier New", monospace;
+}
+.ma-automl-table th,
+.ma-automl-table td {
+  border: 1px solid #ddd;
+  padding: 0.3rem 0.5rem;
+  text-align: right;
+  white-space: nowrap;
+}
+.ma-automl-table th {
+  background: #f0f4f8;
+  font-weight: 600;
+  text-align: center;
+}
+.ma-automl-table td:first-child,
+.ma-automl-table td:nth-child(2) {
+  text-align: left;
+}
+.ma-automl-table td:nth-child(5) {
+  font-weight: 600;
+}
+
+/* Stop button */
+#ma-automl-stop-btn {
+  margin: 0.5rem 0;
+}
+#ma-automl-stop-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Leaderboard expandable details */
+.ma-automl-leaderboard details {
+  margin-top: 0.5rem;
+}
+.ma-automl-leaderboard details summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #0066cc;
+}

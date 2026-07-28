@@ -19,6 +19,12 @@
     custom: "自訂",
   };
 
+  var BUILD_LABELS = {
+    quick: "快速探索（5 分鐘）",
+    standard: "標準探索（15 分鐘）",
+    deep: "深度探索（30 分鐘）",
+  };
+
   var STAGE_LABELS = {
     validating_data: "驗證訓練資料",
     training_resale: "正在訓練中古屋模型",
@@ -480,6 +486,62 @@
     };
   }
 
+  function buildAutoMLPayload(market, budget) {
+    if (!MARKET_PAYLOADS.hasOwnProperty(market)) {
+      throw new Error("unknown market selection: " + market);
+    }
+    if (!BUILD_LABELS.hasOwnProperty(budget)) {
+      throw new Error("unknown budget: " + budget);
+    }
+    return {
+      markets: MARKET_PAYLOADS[market],
+      tuning: { mode: "automl", budget: budget },
+    };
+  }
+
+  function canStopAutoML(run) {
+    return Boolean(
+      run
+      && run.status === "running"
+      && run.summary
+      && run.summary.mode === "automl"
+    );
+  }
+
+  function automlProgressView(summary) {
+    if (!summary) summary = {};
+    var totalSecs = summary.elapsed_seconds || 0;
+    var mins = Math.floor(totalSecs / 60);
+    var secs = Math.floor(totalSecs % 60);
+    var elapsed = (mins < 10 ? "0" : "") + mins + ":" + (secs < 10 ? "0" : "") + secs;
+    return {
+      stage: summary.stage || null,
+      modelName: summary.model_name || null,
+      completedTrials: summary.completed_trials || 0,
+      failedTrials: summary.failed_trials || 0,
+      elapsedSeconds: elapsed,
+      bestMae: summary.best_mae != null ? summary.best_mae : null,
+      lastParameters: summary.last_parameters || null,
+    };
+  }
+
+  function automlLeaderboardRows(detail) {
+    var manifest = (detail && detail.manifest) || {};
+    var automl = manifest.automl || {};
+    var trials = (automl.top_trials || []).slice(0, 10);
+    return trials.map(function (t) {
+      return {
+        trialNumber: t.trial_number,
+        state: t.state,
+        modelName: t.model_name,
+        mae: t.mae,
+        mape: t.mape,
+        calibrationPassed: t.calibration_passed === true,
+        durationSeconds: t.duration_seconds,
+      };
+    });
+  }
+
   function parkingPolicySummary(policy) {
     if (!policy) return "無車位估值政策";
     var lines = ["車位估值政策 v" + policy.version];
@@ -521,5 +583,10 @@
     releaseCheckRows: releaseCheckRows,
     candidateDecisionSummary: candidateDecisionSummary,
     parkingPolicySummary: parkingPolicySummary,
+    BUILD_LABELS: BUILD_LABELS,
+    buildAutoMLPayload: buildAutoMLPayload,
+    canStopAutoML: canStopAutoML,
+    automlProgressView: automlProgressView,
+    automlLeaderboardRows: automlLeaderboardRows,
   };
 });
