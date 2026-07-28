@@ -220,7 +220,7 @@ assert.deepEqual(
 assert.equal(cards[0].label, "MAPE");
 assert.equal(cards[0].value, "8.5%");
 assert.equal(cards[1].label, "MAE");
-assert.equal(cards[1].value, "4.50 萬元／坪");
+assert.equal(cards[1].value, "4.50 萬／坪");
 assert.equal(cards[2].label, "測試覆蓋率");
 assert.equal(cards[2].value, "85.0%");
 
@@ -297,7 +297,7 @@ assert.deepEqual(overview.readingOrder, [
 ]);
 assert.ok(overview.baselineMaeDelta < 0);
 assert.equal(overview.mape, "8.5%");
-assert.equal(overview.mae, "4.50 萬元／坪");
+assert.equal(overview.mae, "4.50 萬／坪");
 assert.equal(overview.coverage, "85.0%");
 
 // Regression fixture: A18 candidate exceeds baseline
@@ -419,7 +419,7 @@ var candidateRun = {
 };
 var candidateSummary = admin.candidateDecisionSummary(candidateRun, "resale");
 assert.equal(candidateSummary.model, "HistGradientBoosting");
-assert.equal(candidateSummary.mae, "6.28 萬元／坪");
+assert.equal(candidateSummary.mae, "6.28 萬／坪");
 assert.equal(candidateSummary.mape, "18.3%");
 assert.equal(candidateSummary.coverage, "—");
 assert.equal(candidateSummary.backtests, "2 / 3 通過");

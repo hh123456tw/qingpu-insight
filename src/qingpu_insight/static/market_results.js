@@ -45,14 +45,14 @@
     if (signal) opts.signal = signal;
     return fetchImpl(url, opts).then(function (response) {
       if (!response.ok) {
-        onError(new Error("request " + response.status));
-        return;
+        throw new Error("request " + response.status);
       }
-      return response.json().then(onSuccess, function (parseError) {
-        onError(parseError);
-      });
-    }, function (networkError) {
-      onError(networkError);
+      return response.json();
+    }).then(function (payload) {
+      onSuccess(payload);
+    }).catch(function (error) {
+      if (error && error.name === "AbortError") return;
+      onError(error);
     });
   }
 

@@ -152,6 +152,26 @@ class TestStartImport:
         result.outcome = "ready"
         result.evidence_revision = 3
         deps["import_service"].import_initial_listing.return_value = result
+        deps["repository"].get_conversation.return_value = _conv(
+            default_provider="gemini",
+            default_model="gemini-3.5-flash-lite",
+        )
+        deps["repository"].get_evidence_pack.return_value = MagicMock(
+            facts=[],
+            limitations=[],
+        )
+        deps["reply_executor"].execute.return_value = ReplyExecution(
+            validated=ValidatedChatAnswer(
+                answer="Gemini analysis",
+                citations=[],
+                evidence_revision=3,
+                general_guidance=[],
+                suggested_questions=[],
+            ),
+            actual_provider="gemini",
+            actual_model="gemini-3.5-flash-lite",
+            fallback_reason=None,
+        )
 
         service._run_import("run-1", "conv-1", "https://example.com")
 
@@ -164,7 +184,23 @@ class TestStartImport:
         deps["job_service"].succeed.assert_called_once_with(
             "run-1", "rev3", {}
         )
-        deps["provider_registry"].get.assert_called_once_with("rule")
+        deps["reply_executor"].execute.assert_called_once_with(
+            requested_model="gemini-3.5-flash-lite",
+            question="請根據現有證據，先提供精簡的物件分析。",
+            context=ANY,
+            available_fact_ids=set(),
+            evidence_revision=3,
+        )
+        deps["repository"].append_message.assert_called_once_with(
+            conversation_id="conv-1",
+            role="assistant",
+            content="Gemini analysis",
+            evidence_revision=3,
+            provider="gemini",
+            model="gemini-3.5-flash-lite",
+            citations=[],
+            fallback_reason=None,
+        )
 
     def test_import_worker_needs_attention(
         self, service: ConversationService, deps: dict
@@ -233,6 +269,26 @@ class TestStartRefresh:
         result.outcome = "ready"
         result.evidence_revision = 2
         deps["import_service"].refresh_listing.return_value = result
+        deps["repository"].get_conversation.return_value = _conv(
+            default_provider="gemini",
+            default_model="gemini-3.5-flash-lite",
+        )
+        deps["repository"].get_evidence_pack.return_value = MagicMock(
+            facts=[],
+            limitations=[],
+        )
+        deps["reply_executor"].execute.return_value = ReplyExecution(
+            validated=ValidatedChatAnswer(
+                answer="Refreshed Gemini analysis",
+                citations=[],
+                evidence_revision=2,
+                general_guidance=[],
+                suggested_questions=[],
+            ),
+            actual_provider="gemini",
+            actual_model="gemini-3.5-flash-lite",
+            fallback_reason=None,
+        )
 
         service._run_refresh("run-2", "conv-1")
 
@@ -243,6 +299,16 @@ class TestStartRefresh:
         )
         deps["job_service"].succeed.assert_called_once_with(
             "run-2", "rev2", {}
+        )
+        deps["repository"].append_message.assert_called_once_with(
+            conversation_id="conv-1",
+            role="assistant",
+            content="Refreshed Gemini analysis",
+            evidence_revision=2,
+            provider="gemini",
+            model="gemini-3.5-flash-lite",
+            citations=[],
+            fallback_reason=None,
         )
 
     def test_refresh_worker_needs_attention(

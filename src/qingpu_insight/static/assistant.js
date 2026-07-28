@@ -196,9 +196,22 @@
       facts.filter(function (fact) {
         return fact && typeof fact.id === "string" && fact.id.indexOf("listing.") === 0;
       }).forEach(function (fact) {
+        var factValue = fact.value == null ? "\u2014" : String(fact.value);
+        if (display) {
+          factValue = display.normalizeLegacyMoneyText(factValue);
+          if (fact.id === "listing.price") {
+            var listingPrice = display.parseMoneyTwd(fact.value);
+            factValue = display.formatTotalWan(listingPrice);
+          } else if (
+            fact.id === "listing.unit_price"
+            && display.parseMoneyTwd(fact.value) != null
+          ) {
+            factValue = display.formatUnitWan(display.parseMoneyTwd(fact.value));
+          }
+        }
         factItems.push({
           k: fact.label || fact.id,
-          v: fact.value == null ? "\u2014" : String(fact.value),
+          v: factValue,
           source: fact.source || "",
         });
       });
@@ -226,19 +239,40 @@
     if (valuation) {
       var valChildren = [el("h3", {}, ["\u4f30\u50f9"])];
       var pointEstimate = valuation.point_estimate_twd || valuation.estimated_total_price_twd;
+      var interval = valuation.interval_total_price_twd;
+      var lowEstimate = valuation.low_estimate_twd || (interval && interval[0]);
+      var highEstimate = valuation.high_estimate_twd || (interval && interval[1]);
       if (pointEstimate) {
         valChildren.push(el("p", { "class": "val-price" }, [display ? display.formatTotalWan(pointEstimate) : formatMoney(pointEstimate)]));
       }
-      if (valuation.interval_total_price_twd) {
+      if (lowEstimate && highEstimate) {
         valChildren.push(el("p", { "class": "val-range" }, [
-          "\u5408\u7406\u5340\u9593\uff1a" + (display ? display.formatTotalWan(valuation.interval_total_price_twd[0]) : formatMoney(valuation.interval_total_price_twd[0])) +
-          " ~ " + (display ? display.formatTotalWan(valuation.interval_total_price_twd[1]) : formatMoney(valuation.interval_total_price_twd[1])),
+          "\u5408\u7406\u5340\u9593\uff1a" + (display ? display.formatTotalWan(lowEstimate) : formatMoney(lowEstimate)) +
+          " ~ " + (display ? display.formatTotalWan(highEstimate) : formatMoney(highEstimate)),
         ]));
       }
       if (valuation.confidence) {
         valChildren.push(el("p", { "class": "val-confidence" }, [
           "\u4fe1\u5fc3\u5ea6\uff1a" + (display ? display.localizeConfidence(valuation.confidence) : valuation.confidence)
         ]));
+      }
+      if (lowEstimate && pointEstimate && highEstimate) {
+        var askingPrice = null;
+        if (display && Array.isArray(facts)) {
+          var askingFact = facts.find(function (fact) {
+            return fact && fact.id === "listing.price";
+          });
+          askingPrice = askingFact ? display.parseMoneyTwd(askingFact.value) : null;
+        } else if (facts && facts.total_price_twd) {
+          askingPrice = facts.total_price_twd;
+        }
+        var pricePosition = renderPricePosition(
+          lowEstimate,
+          pointEstimate,
+          highEstimate,
+          askingPrice
+        );
+        if (pricePosition) valChildren.push(pricePosition);
       }
       panel.appendChild(el("section", { "class": "evidence-valuation" }, valChildren));
     }
@@ -302,10 +336,14 @@
     div.appendChild(header);
     var rawContent = msg.content || "";
     var cleaned = rawContent;
-    if (display) {
-      cleaned = display.normalizeLegacyMoneyText(stripLegacyInlineCitations(rawContent));
-    } else {
-      cleaned = stripLegacyInlineCitations(rawContent);
+    if (msg.role === "assistant") {
+      if (display) {
+        cleaned = display.normalizeLegacyConfidenceText(
+          display.normalizeLegacyMoneyText(stripLegacyInlineCitations(rawContent))
+        );
+      } else {
+        cleaned = stripLegacyInlineCitations(rawContent);
+      }
     }
     var contentDiv = el("div", { "class": "message-content" });
     contentDiv.textContent = cleaned;

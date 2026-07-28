@@ -110,21 +110,29 @@ class DetailPageBrowser:
         listing_type: str,
     ) -> None:
         start = self._clock.now()
+        content_ready_at: datetime | None = None
         while True:
-            elapsed = (self._clock.now() - start).total_seconds()
+            now = self._clock.now()
+            elapsed = (now - start).total_seconds()
             if elapsed >= self._config.page_timeout_seconds:
                 raise TimeoutError(
                     f"Page did not load content within {self._config.page_timeout_seconds}s"
                 )
             html = driver.page_source
-            if (
-                has_listing_detail_content(
-                    html,
-                    listing_type=listing_type,
-                )
-                or is_verification_page(html)
-            ):
+            if is_verification_page(html):
                 return
+            if has_listing_detail_content(html, listing_type=listing_type):
+                if listing_type != "sale":
+                    return
+                if (
+                    "detail-house-key" in html
+                    and "detail-house-value" in html
+                ):
+                    return
+                if content_ready_at is None:
+                    content_ready_at = now
+                elif (now - content_ready_at).total_seconds() >= 3:
+                    return
             time.sleep(0.5)
 
     def capture(self, initial_url: Initial591Url) -> CapturedListing:

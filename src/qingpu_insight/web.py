@@ -789,6 +789,26 @@ _CONVERSATION_LAYOUT_RE = re.compile(
 _CONVERSATION_FLOOR_RE = re.compile(r"(?P<floor>\d+)\s*[Ff]")
 
 
+def _conversation_model_building_type(
+    raw_building_type: object,
+    total_floors: int,
+) -> str:
+    value = str(raw_building_type or "").strip()
+    if not value:
+        raise ValueError("building type unavailable")
+    if "公寓" in value:
+        return "公寓(5樓含以下無電梯)"
+    if "華廈" in value:
+        return "華廈(10層含以下有電梯)"
+    if "住宅大樓" in value:
+        return "住宅大樓(11層含以上有電梯)"
+    if "電梯大樓" in value:
+        if total_floors <= 10:
+            return "華廈(10層含以下有電梯)"
+        return "住宅大樓(11層含以上有電梯)"
+    return value
+
+
 def _conversation_valuation(
     data_source: MarketDataSource,
     registry: ModelRegistry,
@@ -822,9 +842,10 @@ def _conversation_valuation(
     total_floors = int(payload["total_floors"])
     floor = int(floor_match.group("floor"))
     area = float(payload["area_ping"])
-    building_type = str(payload.get("building_type") or "").strip()
-    if not building_type:
-        raise ValueError("building type unavailable")
+    building_type = _conversation_model_building_type(
+        payload.get("building_type"),
+        total_floors,
+    )
     age = (
         None
         if transaction_type == "presale"

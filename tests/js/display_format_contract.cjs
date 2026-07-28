@@ -8,6 +8,9 @@ assert.equal(display.formatTotalWan(15377250), "1,537.7 萬");
 assert.equal(display.formatUnitWan(586700), "58.7 萬／坪");
 assert.equal(display.formatTotalWan(null), "—");
 assert.equal(display.localizeConfidence("low"), "低");
+assert.equal(display.normalizeLegacyConfidenceText("信心度: low"), "信心度: 低");
+assert.equal(display.parseMoneyTwd("22,000,000 元"), 22000000);
+assert.equal(display.parseMoneyTwd("2,200 萬"), 22000000);
 assert.equal(
   display.normalizeLegacyMoneyText("開價 22,980,000 元，單價 586,700 元/坪"),
   "開價 2,298 萬，單價 58.7 萬／坪"

@@ -262,6 +262,49 @@ class TestRuleConversationProvider:
         assert "valuation.asking_position" in cited
         assert not any(fid.startswith("comparable.") for fid in cited)
 
+    def test_rule_summary_falls_back_to_newhouse_listing_facts(self) -> None:
+        facts = (
+            EvidenceFact(
+                id="listing.unit_price_range",
+                label="單價區間",
+                value="50 萬／坪 至 56 萬／坪",
+                source="591",
+                observed_at=_NOW,
+            ),
+            EvidenceFact(
+                id="listing.area_range",
+                label="坪數區間",
+                value="20 至 35 坪",
+                source="591",
+                observed_at=_NOW,
+            ),
+            EvidenceFact(
+                id="listing.title",
+                label="物件名稱",
+                value="青埔新建案",
+                source="591",
+                observed_at=_NOW,
+            ),
+        )
+        ctx = ConversationContext(
+            rolling_summary=None,
+            recent_messages=(),
+            evidence_revision=1,
+            evidence_facts=facts,
+            limitations=(),
+        )
+
+        draft = RuleConversationProvider().reply(
+            model="rule", question="摘要", context=ctx,
+        )
+
+        assert len(draft.property_claims) == 3
+        assert {
+            fact_id
+            for claim in draft.property_claims
+            for fact_id in claim.fact_ids
+        } == {fact.id for fact in facts}
+
 
 class TestOllamaConversationProvider:
     _URL = "http://localhost:11434/api/chat"

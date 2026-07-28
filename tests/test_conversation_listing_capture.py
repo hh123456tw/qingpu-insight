@@ -32,6 +32,10 @@ SALE_DETAIL_HTML = """\
 <span class="info-unit-price">57.8萬/坪</span>
 <div class="info-community">測試社區</div>
 <div class="info-builder">測試建商</div>
+<div class="detail-house-item">
+  <div class="detail-house-key">型態</div>
+  <div class="detail-house-value">住宅大樓</div>
+</div>
 <div class="info-floor">12F/15F</div>
 <div class="info-age">3年</div>
 <div class="info-parking">坡道平面</div>

@@ -210,8 +210,8 @@ class ConversationEvidenceBuilder:
                     id="listing.unit_price_range",
                     label="單價區間",
                     value=(
-                        f"{int(unit_price_low):,} 至 "
-                        f"{int(unit_price_high):,} 元/坪"
+                        f"{format_unit_price_wan(unit_price_low)} 至 "
+                        f"{format_unit_price_wan(unit_price_high)}"
                     ),
                     source="591 詳細頁",
                     observed_at=observed_at,
@@ -270,15 +270,36 @@ class ConversationEvidenceBuilder:
         for key, fact_id, label, formatter in mappings:
             value = valuation.get(key)
             if value is not None:
+                formatted = formatter(value)
+                if key == "confidence":
+                    reasons = valuation.get("confidence_reasons")
+                    if isinstance(reasons, list) and reasons:
+                        first_reason = str(reasons[0]).strip()
+                        if first_reason:
+                            formatted = f"{formatted}（{first_reason}）"
                 facts.append(
                     EvidenceFact(
                         id=fact_id,
                         label=label,
-                        value=formatter(value),
+                        value=formatted,
                         source="估值模型",
                         observed_at=None,
                     )
                 )
+        low = valuation.get("low_estimate_twd")
+        high = valuation.get("high_estimate_twd")
+        if low is not None and high is not None:
+            facts.append(
+                EvidenceFact(
+                    id="valuation.interval",
+                    label="合理區間",
+                    value=(
+                        f"{format_total_price_wan(low)} 至 "
+                        f"{format_total_price_wan(high)}"
+                    ),
+                    source="估值模型",
+                )
+            )
         return facts
 
     @staticmethod
@@ -290,16 +311,19 @@ class ConversationEvidenceBuilder:
         low = valuation.get("low_estimate_twd")
         high = valuation.get("high_estimate_twd")
 
-        if point is not None:
+        if point is not None and point > 0:
             gap = asking_price_twd - point
-            gap_wan = gap / 10000
 
             if gap > 0:
-                amount_text = f"高於估值中心 {int(gap_wan)} 萬"
+                amount_text = (
+                    f"高於估值中心 {format_total_price_wan(gap)}"
+                )
                 pct = (gap / point) * 100
                 pct_text = f"高於估值中心 {pct:.1f}%"
             elif gap < 0:
-                amount_text = f"低於估值中心 {int(abs(gap_wan))} 萬"
+                amount_text = (
+                    f"低於估值中心 {format_total_price_wan(abs(gap))}"
+                )
                 pct = (abs(gap) / point) * 100
                 pct_text = f"低於估值中心 {pct:.1f}%"
             else:

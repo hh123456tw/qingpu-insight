@@ -163,12 +163,20 @@ def _component_similarity(left: object, right: object, tolerance: float) -> floa
         return None
     if tolerance <= 0:
         return None
-    return max(0.0, 1.0 - abs(l_val - r_val) / tolerance)
+    return min(1.0, max(0.0, 1.0 - abs(l_val - r_val) / tolerance))
 
 
-def _layout_similarity(input_row: pd.Series, candidate: pd.Series) -> float:
-    score = _component_similarity(input_row["bedrooms"], candidate["bedrooms"], 2)
-    return score if score is not None else 0.0
+def _layout_similarity(
+    input_row: pd.Series, candidate: pd.Series
+) -> float | None:
+    scores = [
+        _component_similarity(input_row.get(field), candidate.get(field), 2)
+        for field in ("bedrooms", "living_rooms", "bathrooms")
+    ]
+    available = [score for score in scores if score is not None]
+    if not available:
+        return None
+    return sum(available) / len(available)
 
 
 def _comparable_similarity(
@@ -193,7 +201,7 @@ def _comparable_similarity(
         (0.10, _component_similarity(ref_age, age, 20)),
         (0.10, _component_similarity(ref_floor_ratio, floor_ratio, 0.5)),
         (0.10, 1.0 if ref_type == candidate_type else 0.0),
-        (0.10, max(0.0, 1.0 - months_old / 60)),
+        (0.10, min(1.0, max(0.0, 1.0 - months_old / 60))),
     ]
     available = [(weight, score) for weight, score in components if score is not None]
     if not available:

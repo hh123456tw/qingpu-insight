@@ -30,6 +30,28 @@
     return map[value] || "—";
   }
 
+  function normalizeLegacyConfidenceText(text) {
+    if (text == null) return "";
+    return String(text).replace(
+      /(信心度\s*[:：]\s*)(high|medium|low)\b/gi,
+      function (_match, prefix, value) {
+        return prefix + localizeConfidence(value.toLowerCase());
+      }
+    );
+  }
+
+  function parseMoneyTwd(value) {
+    if (typeof value === "number") {
+      return Number.isFinite(value) && value > 0 ? value : null;
+    }
+    if (typeof value !== "string") return null;
+    var match = value.match(/([\d,]+(?:\.\d+)?)\s*(萬)?/);
+    if (!match) return null;
+    var numeric = Number(match[1].replace(/,/g, ""));
+    if (!Number.isFinite(numeric) || numeric <= 0) return null;
+    return match[2] ? numeric * 10000 : numeric;
+  }
+
   function normalizeLegacyMoneyText(text) {
     return text.replace(
       /([\d,]+(?:\.\d+)?)\s*元(?:\s*[/／]\s*坪)?/g,
@@ -101,7 +123,9 @@
     formatTotalWan: formatTotalWan,
     formatUnitWan: formatUnitWan,
     localizeConfidence: localizeConfidence,
+    normalizeLegacyConfidenceText: normalizeLegacyConfidenceText,
     normalizeLegacyMoneyText: normalizeLegacyMoneyText,
+    parseMoneyTwd: parseMoneyTwd,
     pricePositionState: pricePositionState,
   };
 });

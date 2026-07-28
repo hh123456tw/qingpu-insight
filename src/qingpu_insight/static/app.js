@@ -229,6 +229,7 @@ document.addEventListener("DOMContentLoaded", async function () {
     if (lastController !== null) lastController.abort();
     lastController = new AbortController();
     var params = buildParams();
+    updateFilterChips();
 
     initMap();
     initChart();
@@ -291,7 +292,6 @@ document.addEventListener("DOMContentLoaded", async function () {
         recentItems = transactions.items || [];
         recentExpanded = false;
         updateRecentTable();
-        updateFilterChips();
       },
       function (err) {
         var container = document.getElementById("recent-transactions");
@@ -451,6 +451,13 @@ document.addEventListener("DOMContentLoaded", async function () {
         " ~ " + (display ? display.formatTotalWan(result.interval_total_price_twd[1]) : money(result.interval_total_price_twd[1]))
       ]),
     ]);
+    var pricePosition = renderPricePosition(
+      result.interval_total_price_twd[0],
+      result.estimated_total_price_twd,
+      result.interval_total_price_twd[1],
+      askingVal ? parseInt(askingVal) : null
+    );
+    if (pricePosition) priceCard.appendChild(pricePosition);
     cards.push(priceCard);
 
     // Asking price assessment
@@ -462,13 +469,6 @@ document.addEventListener("DOMContentLoaded", async function () {
       else askLabel = "高於區間";
       askCard.appendChild(el("h3", {}, ["開價評估"]));
       askCard.appendChild(el("p", {}, ["開價" + askLabel]));
-      var ppEl = renderPricePosition(
-        result.interval_total_price_twd[0],
-        result.estimated_total_price_twd,
-        result.interval_total_price_twd[1],
-        askingVal ? parseInt(askingVal) : null
-      );
-      if (ppEl) askCard.appendChild(ppEl);
       askCard.appendChild(el("p", { "class": "asking-caveat" }, [
         "591 開價僅供參考，實際成交價可能包含議價空間"
       ]));
@@ -492,9 +492,12 @@ document.addEventListener("DOMContentLoaded", async function () {
       var ul = el("ul");
       result.factors.forEach(function (f) {
         var cls = f.direction === "positive" ? "factor-positive" : "factor-negative";
-        var sign = f.direction === "positive" ? "+" : "";
+        var sign = f.direction === "positive" ? "+" : "−";
+        var impactText = display
+          ? display.formatUnitWan(Math.abs(f.impact_twd_per_ping))
+          : formatWan(Math.abs(f.impact_twd_per_ping)) + "／坪";
         ul.appendChild(el("li", { "class": cls }, [
-          f.feature + "：" + sign + f.impact_twd_per_ping + " 元/坪"
+          f.feature + "：" + sign + impactText
         ]));
       });
       cards.push(el("div", { "class": "valuation-card" }, [

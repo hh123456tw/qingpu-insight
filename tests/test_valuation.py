@@ -496,6 +496,38 @@ def test_missing_optional_age_renormalizes_weights():
     assert 0 <= score <= 1
 
 
+def test_layout_similarity_averages_rooms_living_rooms_and_bathrooms():
+    from qingpu_insight.valuation import _layout_similarity
+
+    input_row = pd.Series({"bedrooms": 3, "living_rooms": 2, "bathrooms": 2})
+    candidate = pd.Series({"bedrooms": 3, "living_rooms": 1, "bathrooms": 1})
+
+    assert _layout_similarity(input_row, candidate) == pytest.approx(2 / 3)
+
+
+def test_future_candidate_similarity_stays_bounded():
+    from qingpu_insight.valuation import _comparable_similarity
+
+    input_row = pd.Series(
+        {
+            "building_area_ping": 30,
+            "station_distance_m": 500,
+            "bedrooms": 3,
+            "living_rooms": 2,
+            "bathrooms": 2,
+            "building_age_years": 6,
+            "floor_ratio": 0.5,
+            "building_type": "住宅大樓",
+        }
+    )
+    candidate = input_row.copy()
+    candidate["transaction_date"] = pd.Timestamp("2026-07-01")
+
+    assert _comparable_similarity(
+        input_row, candidate, pd.Timestamp("2026-06-01")
+    ) <= 1
+
+
 def test_typical_close_cases_clear_point_six(bundle):
     input_row = pd.DataFrame(
         {

@@ -191,6 +191,63 @@ def test_conversation_valuation_uses_official_model_adapter(
     assert result["dataset_version"] == "2026-06-13"
 
 
+def test_conversation_valuation_maps_591_elevator_building_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from qingpu_insight import web
+
+    captured: dict[str, Any] = {}
+    market = pd.DataFrame(
+        [{
+            "transaction_type": "resale",
+            "transaction_date": pd.Timestamp("2026-06-13"),
+            "latitude": 25.01,
+            "longitude": 121.21,
+            "building_area_ping": 34.0,
+            "total_price_twd": 13580000,
+            "unit_price_per_ping_twd": 399000,
+            "station_code": "A18",
+            "station_distance_m": 500.0,
+        }]
+    )
+    monkeypatch.setattr(
+        web,
+        "build_model_frame",
+        lambda frame, transaction_type: frame,
+    )
+
+    def fake_valuate(input_, registry, frame, latest_data_date):
+        captured["building_type"] = input_.building_type
+        return {
+            "estimated_total_price_twd": 12000000,
+            "interval_total_price_twd": (10000000, 14000000),
+            "confidence": "medium",
+            "confidence_reasons": [],
+            "data_date": "2026-06-13",
+            "model": {"version": "official-v3"},
+        }
+
+    monkeypatch.setattr(web, "valuate", fake_valuate)
+    web._conversation_valuation(
+        InMemoryMarketDataSource(market),
+        object(),  # type: ignore[arg-type]
+        {
+            "listing_type": "sale",
+            "area_ping": 34.02,
+            "layout": "2房2廳1衛1陽台",
+            "building_type": "電梯大樓",
+            "floor": "5F/10F",
+            "total_floors": 10,
+            "age_years": 7,
+            "total_price_twd": 13580000,
+            "latitude": 25.01,
+            "longitude": 121.21,
+        },
+    )
+
+    assert captured["building_type"] == "華廈(10層含以下有電梯)"
+
+
 @pytest.fixture
 def client(market_frame: pd.DataFrame) -> FlaskClient:
     from qingpu_insight.web import create_app

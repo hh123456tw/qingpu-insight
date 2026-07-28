@@ -277,6 +277,11 @@ assert.equal(detailsEl.getAttribute("open"), null,
 var msgNoCitations = { role: "user", content: "hello" };
 var msgEl3 = asst.renderMessage(msgNoCitations, null);
 assert.equal(msgEl3._children.length, 2); // header + content only
+var userVerbatim = asst.renderMessage({
+  role: "user",
+  content: "我的預算是 1 元（依據：我自己）",
+}, null);
+assert.equal(userVerbatim._children[1].textContent, "我的預算是 1 元（依據：我自己）");
 
 // --- renderMessage with price-position ---
 
@@ -297,5 +302,31 @@ var track = ppDiv._children[0];
 assert.equal(track.className, "price-range-track");
 // Should have price-marker children
 assert.ok(track._children.length >= 2);
+
+// Historical evidence keeps precise TWD strings and low/high estimate fields.
+asst.renderEvidencePanel({
+  revision: 1,
+  facts: [
+    { id: "listing.price", label: "開價總價", value: "22,000,000 元", source: "591" },
+    { id: "listing.unit_price", label: "單價", value: "519,100 元/坪", source: "591" },
+  ],
+  valuation: {
+    point_estimate_twd: 24714994,
+    low_estimate_twd: 19190114,
+    high_estimate_twd: 30239875,
+    confidence: "low",
+  },
+  comparables: [],
+  limitations: [],
+});
+var historicalText = collectText(panel);
+assert.ok(historicalText.indexOf("2,200 萬") !== -1);
+assert.ok(historicalText.indexOf("51.9 萬／坪") !== -1);
+assert.ok(historicalText.indexOf("信心度：低") !== -1);
+assert.ok(panel._children.some(function (section) {
+  return section._children && section._children.some(function (child) {
+    return child.className === "price-position";
+  });
+}));
 
 process.stdout.write("assistant contract passed\n");

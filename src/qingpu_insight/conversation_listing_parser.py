@@ -179,7 +179,10 @@ def _labeled_value(
         label_element = row.select_one(label_selector)
         if label_element is None:
             continue
-        if label_element.get_text(" ", strip=True) != label:
+        normalized_label = "".join(
+            label_element.get_text(" ", strip=True).split()
+        )
+        if normalized_label != "".join(label.split()):
             continue
         value_element = row.select_one(value_selector)
         if value_element is not None:
@@ -504,6 +507,25 @@ def parse_listing_detail(
         ".info-building-type",
         "[class*='building-type']",
     )
+    if building_type is None and listing_type == "sale":
+        building_type = _labeled_value(
+            soup,
+            row_selector=".detail-house-item",
+            label_selector=".detail-house-key",
+            value_selector=".detail-house-value",
+            label="型態",
+        )
+    if building_type is None and listing_type == "sale":
+        for label in ("型態", "建物型態", "建物類型"):
+            building_type = _labeled_value(
+                soup,
+                row_selector=".info-addr-content",
+                label_selector=".info-addr-key",
+                value_selector=".info-addr-value-text, .info-addr-value",
+                label=label,
+            )
+            if building_type is not None:
+                break
 
     floor_str = None
     if listing_type == "sale":

@@ -268,7 +268,7 @@ class ConversationService:
                 )
                 self._job_service.needs_attention(run_id)
             else:
-                self._append_rule_summary(
+                self._append_initial_summary(
                     conversation_id=conversation_id,
                     evidence_revision=result.evidence_revision,
                 )
@@ -306,6 +306,10 @@ class ConversationService:
                 )
                 self._job_service.needs_attention(run_id)
             else:
+                self._append_initial_summary(
+                    conversation_id=conversation_id,
+                    evidence_revision=result.evidence_revision,
+                )
                 self._job_service.succeed(
                     run_id, f"rev{result.evidence_revision}", {}
                 )
@@ -413,7 +417,7 @@ class ConversationService:
             with self._reply_lock:
                 self._active_replies.discard(conversation_id)
 
-    def _append_rule_summary(
+    def _append_initial_summary(
         self,
         *,
         conversation_id: str,
@@ -429,7 +433,6 @@ class ConversationService:
         if evidence_pack is None:
             return
         facts = _facts_from_pack(evidence_pack.facts)
-        provider = self._provider_registry.get("rule")
         context = ConversationContext(
             rolling_summary=None,
             recent_messages=(),
@@ -437,24 +440,23 @@ class ConversationService:
             evidence_facts=facts,
             limitations=tuple(evidence_pack.limitations),
         )
-        draft = provider.reply(
-            model=conversation.default_model,
-            question="",
+        execution = self._reply_executor.execute(
+            requested_model=conversation.default_model,
+            question="請根據現有證據，先提供精簡的物件分析。",
             context=context,
-        )
-        validated = self._validator(
-            draft,
             available_fact_ids={fact.id for fact in facts},
             evidence_revision=evidence_revision,
         )
+        validated = execution.validated
         self._repository.append_message(
             conversation_id=conversation_id,
             role="assistant",
             content=validated.answer,
             evidence_revision=evidence_revision,
-            provider="rule",
-            model="rule-v1",
+            provider=execution.actual_provider,
+            model=execution.actual_model,
             citations=list(validated.citations),
+            fallback_reason=execution.fallback_reason,
         )
 
     def _update_rolling_summary(

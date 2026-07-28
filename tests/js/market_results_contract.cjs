@@ -31,7 +31,22 @@ async function testIndependentSections() {
   assert.deepEqual(failures, ["request 503"]);
 }
 
-testIndependentSections().catch((error) => {
+async function testAbortAndRenderErrors() {
+  var failures = [];
+  var abortError = new Error("aborted");
+  abortError.name = "AbortError";
+  await ui.loadSection("/aborted", async () => { throw abortError; },
+    () => {}, (error) => failures.push(error.message));
+  assert.deepEqual(failures, []);
+
+  await ui.loadSection("/render-error",
+    async () => ({ ok: true, json: async () => ({ count: 1 }) }),
+    () => { throw new Error("render failed"); },
+    (error) => failures.push(error.message));
+  assert.deepEqual(failures, ["render failed"]);
+}
+
+Promise.all([testIndependentSections(), testAbortAndRenderErrors()]).catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });

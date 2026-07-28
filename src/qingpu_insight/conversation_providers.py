@@ -131,8 +131,7 @@ class RuleConversationProvider:
             "listing.price",
             "valuation.point",
             "valuation.asking_gap_percent",
-            "valuation.low",
-            "valuation.high",
+            "valuation.interval",
             "valuation.asking_position",
             "valuation.confidence",
         )
@@ -143,6 +142,23 @@ class RuleConversationProvider:
                 break
             if fid in fact_map:
                 selected.append(fact_map[fid])
+        fallback_ids = (
+            "listing.unit_price_range",
+            "listing.area_range",
+            "listing.area",
+            "listing.title",
+            "listing.address",
+            "listing.builder",
+            "market.median_unit_price",
+            "market.sample_size",
+        )
+        selected_ids = {fact.id for fact in selected}
+        for fid in fallback_ids:
+            if len(selected) >= 6:
+                break
+            if fid in fact_map and fid not in selected_ids:
+                selected.append(fact_map[fid])
+                selected_ids.add(fid)
         return tuple(selected)
 
     def _suggested_questions(self, context: ConversationContext) -> list[str]:

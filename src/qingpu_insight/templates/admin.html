@@ -192,8 +192,9 @@
         var number = Number(value);
         if (format === "money") {
           return new Intl.NumberFormat("zh-TW", {
-            maximumFractionDigits: 0,
-          }).format(number) + " 元／坪";
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 1,
+          }).format(number / 10000) + " 萬／坪";
         }
         if (format === "percent") return number.toFixed(2) + "%";
         return number.toFixed(3);
@@ -589,7 +590,7 @@
           var r = comparisons[i];
           var tr = document.createElement("tr");
           var nameTd = document.createElement("td"); nameTd.textContent = r.name; tr.appendChild(nameTd);
-          var maeTd = document.createElement("td"); maeTd.textContent = r.mae != null ? String(r.mae) : "—"; tr.appendChild(maeTd);
+            var maeTd = document.createElement("td"); maeTd.textContent = metricValue(r.mae, "money"); tr.appendChild(maeTd);
           var mapeTd = document.createElement("td"); mapeTd.textContent = r.mape != null ? r.mape + "%" : "—"; tr.appendChild(mapeTd);
           var selectedTd = document.createElement("td"); selectedTd.textContent = r.selected ? "是" : "否"; tr.appendChild(selectedTd);
           tbody.appendChild(tr);
@@ -667,7 +668,7 @@
           var sTd = document.createElement("td"); sTd.textContent = e.selected_model || "—"; tr.appendChild(sTd);
           var mTd = document.createElement("td");
           mTd.textContent = (e.metrics && e.metrics.overall && e.metrics.overall.mae != null)
-            ? String(e.metrics.overall.mae) : "—";
+            ? metricValue(e.metrics.overall.mae, "money") : "—";
           tr.appendChild(mTd);
           tbody.appendChild(tr);
         }
@@ -699,7 +700,9 @@
           var cTd = document.createElement("td"); cTd.textContent = b.cutoff_date || "—"; tr.appendChild(cTd);
           ["candidate_mae", "baseline_mae", "a17_mape", "a18_mape", "a19_mape"].forEach(function(key) {
             var metricTd = document.createElement("td");
-            metricTd.textContent = b[key] != null ? String(b[key]) : "—";
+            metricTd.textContent = b[key] != null
+              ? (key.endsWith("_mae") ? metricValue(b[key], "money") : b[key] + "%")
+              : "—";
             tr.appendChild(metricTd);
           });
           var pTd = document.createElement("td");
@@ -854,7 +857,7 @@
             var delta = document.createElement("p");
             delta.className = overview.baselineMaeDelta < 0 ? "ma-improvement" : "ma-regression";
             var direction = overview.baselineMaeDelta < 0 ? "改善" : "退步";
-            delta.textContent = "與基準模型相比 MAE " + direction + " " + Math.abs(overview.baselineMaeDelta / 10000).toFixed(2) + " 萬元／坪";
+            delta.textContent = "與基準模型相比 MAE " + direction + " " + Math.abs(overview.baselineMaeDelta / 10000).toFixed(2) + " 萬／坪";
             ovSection.appendChild(delta);
           }
           if (overview.stationWarnings.length > 0) {

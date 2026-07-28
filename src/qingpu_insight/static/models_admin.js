@@ -233,7 +233,7 @@
         key: "mae",
         label: "MAE",
         value: overall && overall.mae != null
-          ? (overall.mae / 10000).toFixed(2) + " 萬元／坪"
+          ? (overall.mae / 10000).toFixed(2) + " 萬／坪"
           : "—",
       },
       {
@@ -324,7 +324,7 @@
       selectedProfileLabel: PROFILE_LABELS[result && result.selected_profile] || "—",
       selectedModelLabel: winnerLabel,
       mape: mape != null ? mape.toFixed(1) + "%" : "—",
-      mae: mae != null ? (mae / 10000).toFixed(2) + " 萬元／坪" : "—",
+      mae: mae != null ? (mae / 10000).toFixed(2) + " 萬／坪" : "—",
       coverage: coverage != null ? (coverage * 100).toFixed(1) + "%" : "—",
       baselineMaeDelta: baselineMae != null && mae != null ? mae - baselineMae : null,
       stationWarnings: stationRows(result).filter(function (row) {

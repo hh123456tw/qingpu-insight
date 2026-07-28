@@ -72,6 +72,11 @@ class TestParseSaleDetail:
   <span class="info-addr-key">樓層</span>
   <span class="info-addr-value-text">13F/17F</span>
 </div>
+<div class="detail-house-item">
+  <div class="detail-house-key">型<duncak></duncak>態</div>
+  <span>：</span>
+  <div class="detail-house-value"><nmbx></nmbx>華廈</div>
+</div>
 <div class="info-addr-content">
   <span class="info-addr-key">地址</span>
   <span class="info-addr-value-text">桃園市中壢區高鐵站前路</span>
@@ -97,7 +102,7 @@ class TestParseSaleDetail:
         assert result.age_years == Decimal("0.75")
         assert result.address == "桃園市中壢區高鐵站前路"
         assert result.community_name == "測試社區"
-        assert result.building_type is None
+        assert result.building_type == "華廈"
         assert result.latitude == Decimal("25.0094795")
         assert result.longitude == Decimal("121.2187076")
 

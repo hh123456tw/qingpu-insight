@@ -1,5 +1,4 @@
 import pandas as pd
-import pytest
 
 from qingpu_insight.parking_valuation import (
     ParkingPriceEstimate,
@@ -21,6 +20,10 @@ def test_build_policy_uses_positive_prices_and_type_threshold():
     assert policy.market_fallback == ParkingPriceStat(1_700_000, 22)
 
 
+def test_estimate_none_policy_returns_none():
+    assert estimate_parking_price(None, "坡道平面") is None
+
+
 def test_estimate_uses_type_then_market_fallback():
     policy = ParkingPricePolicy(
         version=1,
@@ -35,3 +38,21 @@ def test_estimate_uses_type_then_market_fallback():
     assert estimate_parking_price(policy, "") == ParkingPriceEstimate(
         price_twd=0, sample_size=0, source="none", parking_type=""
     )
+
+
+def test_build_policy_edge_cases():
+    empty = pd.DataFrame({"parking_type": ["坡道平面"], "parking_price_twd": [0]})
+    policy = build_parking_price_policy(empty, minimum_type_samples=1)
+    assert policy.market_fallback is None
+    assert policy.by_type == {}
+
+    non_numeric = pd.DataFrame({"parking_type": ["坡道平面"], "parking_price_twd": ["N/A"]})
+    policy = build_parking_price_policy(non_numeric, minimum_type_samples=1)
+    assert policy.market_fallback is None
+
+    whitespace = pd.DataFrame({
+        "parking_type": ["  坡道平面  "],
+        "parking_price_twd": [1_500_000],
+    })
+    policy = build_parking_price_policy(whitespace, minimum_type_samples=1)
+    assert policy.by_type["坡道平面"] == ParkingPriceStat(1_500_000, 1)
