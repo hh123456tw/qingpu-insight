@@ -3,12 +3,14 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 import joblib
 import numpy as np
 import pandas as pd
 import pytest
+from sklearn.base import BaseEstimator as _SkBaseEst
 
 from qingpu_insight.automl_control import AutoMLControlRegistry
 from qingpu_insight.automl_outputs import AutoMLRunOutputStore
@@ -483,8 +485,6 @@ def automl_service_fixture(
 
 DUMMY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
-from sklearn.base import BaseEstimator as _SkBaseEst
-
 
 class _FakeEstimator(_SkBaseEst):
     def predict(self, X):
@@ -525,8 +525,7 @@ class TestAutoMLOrchestration:
         trials: list,
         stopped: bool = False,
     ) -> Any:
-        from qingpu_insight.automl_search import AutoMLSearchResult
-        from qingpu_insight.automl_search import rank_trials, shortlist_trials
+        from qingpu_insight.automl_search import AutoMLSearchResult, rank_trials, shortlist_trials
         all_trials = tuple(trials)
         ranked = rank_trials(all_trials)
         shortlisted = shortlist_trials(ranked)
@@ -587,6 +586,7 @@ class TestAutoMLOrchestration:
         )
 
         import joblib as _jl
+
         from qingpu_insight.valuation import ValuationBundle
 
         def _fake_train_artifact(transaction_type, selected, split, bundle, artifact_dir, **kw):
@@ -644,6 +644,7 @@ class TestAutoMLOrchestration:
 
             def _make_candidate_eval(self, name, estimator):
                 import pandas as pd
+
                 from qingpu_insight.model_training import CandidateEvaluation
                 return CandidateEvaluation(
                     name=name,
@@ -677,7 +678,6 @@ class TestAutoMLOrchestration:
         automl_service_fixture: tuple,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        import qingpu_insight.model_training_service as mts
 
         service, jobs, registry, output_store = automl_service_fixture
         self._patch_automl_pipeline(monkeypatch, passing=True, market="resale")
@@ -715,8 +715,8 @@ class TestAutoMLOrchestration:
         automl_service_fixture: tuple,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+
         import qingpu_insight.model_training_service as mts
-        import pandas as pd
 
         service, jobs, registry, output_store = automl_service_fixture
 
@@ -749,7 +749,6 @@ class TestAutoMLOrchestration:
         automl_service_fixture: tuple,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        import qingpu_insight.model_training_service as mts
 
         service, jobs, registry, output_store = automl_service_fixture
         self._patch_automl_pipeline(monkeypatch, passing=False, market="resale", n_trials=3)
@@ -774,8 +773,9 @@ class TestAutoMLOrchestration:
         automl_service_fixture: tuple,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        import qingpu_insight.model_training_service as mts
         import joblib as _jl
+
+        import qingpu_insight.model_training_service as mts
         from qingpu_insight.valuation import ValuationBundle
 
         service, jobs, registry, output_store = automl_service_fixture
@@ -837,9 +837,9 @@ class TestAutoMLOrchestration:
         monkeypatch.setattr(mts, "train_artifact", _fake_train_artifact)
         monkeypatch.setattr(mts, "run_annual_backtests", lambda *a, **kw: [])
 
-        from qingpu_insight.model_training import CandidateEvaluation
         import pandas as pd
-        import numpy as np
+
+        from qingpu_insight.model_training import CandidateEvaluation
 
         passing_checks = {
             "overall_mae_improved": True,
@@ -914,7 +914,6 @@ class TestAutoMLOrchestration:
         automl_service_fixture: tuple,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        import qingpu_insight.model_training_service as mts
 
         service, jobs, registry, output_store = automl_service_fixture
         self._patch_automl_pipeline(monkeypatch, passing=True, market="presale")
