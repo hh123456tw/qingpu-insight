@@ -75,6 +75,7 @@ class MarketTrainingResult(BaseModel):
     feature_experiments: list[dict[str, Any]] = Field(default_factory=list)
     backtests: list[dict[str, Any]] = Field(default_factory=list)
     release_checks: dict[str, bool] = Field(default_factory=dict)
+    parking_policy: dict[str, object] | None = None
 
 
 class TrainingManifest(BaseModel):

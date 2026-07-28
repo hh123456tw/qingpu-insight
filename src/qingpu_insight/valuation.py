@@ -17,6 +17,10 @@ from qingpu_insight.model_features import (
     parking_adjusted_target,
 )
 from qingpu_insight.model_training import recency_weights
+from qingpu_insight.parking_valuation import (
+    ParkingPricePolicy,
+    build_parking_price_policy,
+)
 
 
 @dataclass
@@ -35,10 +39,13 @@ class ValuationBundle:
     data_max_date: str
     metrics: dict[str, Any]
     feature_columns: tuple[str, ...] = BASE_FEATURE_COLUMNS
+    parking_price_policy: ParkingPricePolicy | None = None
 
     def __getattr__(self, name):
         if name == "feature_columns":
             return BASE_FEATURE_COLUMNS
+        if name == "parking_price_policy":
+            return None
         raise AttributeError(f"ValuationBundle has no attribute {name!r}")
 
 
@@ -594,6 +601,12 @@ def train_artifact(
                 train_frame["target_unit_price_twd"],
                 sample_weight=weights,
             )
+    parking_policy = (
+        build_parking_price_policy(train_frame)
+        if "parking_type" in train_frame.columns
+        else None
+    )
+
     feature_ranges: dict[str, tuple[float, float]] = {}
     feature_hard_ranges: dict[str, tuple[float, float]] = {}
     feature_medians: dict[str, float] = {}
@@ -629,6 +642,7 @@ def train_artifact(
         data_max_date=str(train_frame["transaction_date"].max().date()),
         metrics=selected.metrics.to_dict(orient="index"),
         feature_columns=feature_columns,
+        parking_price_policy=parking_policy,
     )
 
     artifact_dir.mkdir(parents=True, exist_ok=True)

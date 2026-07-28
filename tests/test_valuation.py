@@ -417,6 +417,101 @@ def test_degraded_valuation_refuses_to_invent_price_without_market_data(valid_re
         valuate(valid_resale_input, UnavailableRegistry(), empty)
 
 
+# --- Task 3: Parking policy ---
+
+
+def test_train_artifact_persists_parking_policy(tmp_path):
+    np.random.seed(42)
+    n = 200
+    train = pd.DataFrame({
+        "transaction_date": pd.date_range("2024-01-01", periods=n, freq="D"),
+        "target_unit_price_twd": np.random.uniform(200_000, 800_000, n),
+        "parking_type": np.random.choice(["坡道平面", "坡道機械", ""], n, p=[0.5, 0.3, 0.2]),
+        "parking_price_twd": np.where(
+            np.random.random(n) > 0.2, np.random.uniform(500_000, 2_000_000, n), 0
+        ),
+    })
+    for col in FEATURE_COLUMNS:
+        if col in ("station_code", "building_type", "parking_type"):
+            train[col] = "A17"
+        else:
+            train[col] = np.random.randn(n)
+    train["transaction_year"] = 2025
+    train["transaction_month"] = 6
+    for col in FEATURE_COLUMNS:
+        if col not in train.columns:
+            train[col] = 0
+
+    calibration = train.iloc[:50].copy()
+    test = train.iloc[50:100].copy()
+
+    from dataclasses import dataclass
+
+    @dataclass
+    class FakeSplit:
+        train: pd.DataFrame
+        calibration: pd.DataFrame
+        test: pd.DataFrame
+    split = FakeSplit(train=train, calibration=calibration, test=test)
+
+    @dataclass
+    class FakeSelected:
+        name: str
+        estimator: object
+        metrics: pd.DataFrame
+
+    estimator = DummyRegressor(strategy="mean")
+    estimator.fit(train[list(FEATURE_COLUMNS)], train["target_unit_price_twd"])
+    metrics = pd.DataFrame(
+        {"overall": {"mae": 50000, "mape": 10, "rmse": 60000, "r2": 0.5, "count": 50}}
+    ).T
+
+    seed_bundle = ValuationBundle(
+        transaction_type="resale",
+        model_name="baseline",
+        model_version="v1",
+        pipeline=estimator,
+        interval_abs_residual_twd_per_ping=50000,
+        feature_ranges={},
+        feature_hard_ranges={},
+        feature_medians={},
+        global_importance=[],
+        reference_rows=train,
+        data_min_date="2024-01-01",
+        data_max_date="2026-06-01",
+        metrics={},
+    )
+    selected = FakeSelected(name="baseline", estimator=estimator, metrics=metrics)
+
+    import sklearn.inspection
+    original_pi = sklearn.inspection.permutation_importance
+
+    def fake_pi(estimator, X, y, **kwargs):
+        from types import SimpleNamespace
+        return SimpleNamespace(importances_mean=np.zeros(len(FEATURE_COLUMNS)))
+
+    sklearn.inspection.permutation_importance = fake_pi
+
+    try:
+        path = train_artifact(
+            "resale", selected, split, seed_bundle, tmp_path,
+            feature_columns=FEATURE_COLUMNS,
+            training_frame=train,
+        )
+    finally:
+        sklearn.inspection.permutation_importance = original_pi
+
+    loaded = joblib.load(path)
+    assert loaded.parking_price_policy.version == 1
+    assert loaded.parking_price_policy.by_type["坡道平面"].price_twd > 0
+    assert "parking_type" not in loaded.feature_columns
+
+
+def test_old_bundle_pickle_gets_no_parking_policy(bundle):
+    del bundle.__dict__["parking_price_policy"]
+    assert bundle.parking_price_policy is None
+
+
 # --- Task 2 helpers ---
 
 

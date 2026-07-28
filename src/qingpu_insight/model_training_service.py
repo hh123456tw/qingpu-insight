@@ -133,6 +133,7 @@ def market_result_from_files(
     feature_contract_version: int = 0,
     test_coverage: float | None = None,
     average_interval_width_twd_per_ping: float | None = None,
+    parking_policy: dict[str, object] | None = None,
 ) -> MarketTrainingResult:
     selection_metrics: dict[str, dict[str, object]] = {}
     for profile_eval in experiment.profile_results:
@@ -185,6 +186,7 @@ def market_result_from_files(
         feature_experiments=feature_experiments or [],
         backtests=backtests or [],
         release_checks=release_checks or {},
+        parking_policy=parking_policy,
     )
 
 
@@ -418,6 +420,27 @@ class ModelTrainingService:
                         ),
                     )
                     bundle: ValuationBundle = joblib.load(artifact_path)
+                    parking_policy_dict = None
+                    if bundle.parking_price_policy is not None:
+                        pp = bundle.parking_price_policy
+                        parking_policy_dict = {
+                            "version": pp.version,
+                            "minimum_type_samples": pp.minimum_type_samples,
+                            "by_type": {
+                                k: {
+                                    "price_twd": int(v.price_twd),
+                                    "sample_size": int(v.sample_size),
+                                }
+                                for k, v in pp.by_type.items()
+                            },
+                            "market_fallback": (
+                                {
+                                    "price_twd": int(pp.market_fallback.price_twd),
+                                    "sample_size": int(pp.market_fallback.sample_size),
+                                }
+                                if pp.market_fallback else None
+                            ),
+                        }
                 except Exception as exc:
                     raise ModelTrainingError("candidate_write_failed", str(exc)) from exc
 
@@ -552,6 +575,7 @@ class ModelTrainingService:
                                     "average_interval_width_twd_per_ping"
                                 ]
                             ),
+                            parking_policy=parking_policy_dict,
                         )
                     )
                 except Exception as exc:

@@ -425,3 +425,22 @@ class TestSchemaV2:
         assert loaded.schema_version == 2
         assert loaded.results[0].feature_contract_version == 2
         assert loaded.results[0].release_checks["a18_improved"] is True
+
+
+def test_manifest_parking_policy_roundtrip():
+    data = {
+        "version": 1,
+        "minimum_type_samples": 20,
+        "by_type": {"坡道平面": {"price_twd": 1700000, "sample_size": 40}},
+        "market_fallback": {"price_twd": 1200000, "sample_size": 60},
+    }
+    result = MarketTrainingResult(
+        market="resale", selected_model="ridge", recommended=True,
+        reason_codes=["test"], selection_metrics={"a": {"mae": 1}},
+        final_test_metrics={"b": {"mae": 2}}, artifact_file="x.joblib",
+        artifact_sha256="a" * 64, report_files={"x": "y"},
+        report_sha256={"x": "a" * 64}, parking_policy=data,
+    )
+    dumped = result.model_dump(mode="json")
+    loaded = MarketTrainingResult.model_validate(dumped)
+    assert loaded.parking_policy == data
