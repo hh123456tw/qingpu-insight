@@ -50,10 +50,13 @@ class TestAutoMLRunOutputStore:
         store = AutoMLRunOutputStore(tmp_path)
         store.write(
             "00000000-0000-0000-0000-000000000001",
+            "resale",
             {"completed_trials": np.int64(2), "trials": [{"mae": np.float64(123.5)}]},
         )
         assert (
-            store.get("00000000-0000-0000-0000-000000000001")["completed_trials"]
+            store.get("00000000-0000-0000-0000-000000000001", "resale")[
+                "completed_trials"
+            ]
             == 2
         )
         assert not list(tmp_path.rglob("*.tmp"))
@@ -61,12 +64,12 @@ class TestAutoMLRunOutputStore:
     def test_write_rejects_invalid_uuid(self, tmp_path) -> None:
         store = AutoMLRunOutputStore(tmp_path)
         with pytest.raises(ValueError, match="run_id"):
-            store.write("not-a-uuid", {})
+            store.write("not-a-uuid", "resale", {})
 
     def test_get_missing_run_returns_none(self, tmp_path) -> None:
         store = AutoMLRunOutputStore(tmp_path)
         assert (
-            store.get("00000000-0000-0000-0000-000000000001") is None
+            store.get("00000000-0000-0000-0000-000000000001", "resale") is None
         )
 
     def test_copy_trials_to_returns_path_and_checksum(
@@ -75,7 +78,7 @@ class TestAutoMLRunOutputStore:
         store = AutoMLRunOutputStore(tmp_path)
         run_id = "00000000-0000-0000-0000-000000000001"
         data = {"completed_trials": 2, "trials": []}
-        store.write(run_id, data)
+        store.write(run_id, "resale", data)
 
         rel_path, sha256 = store.copy_trials_to(run_id, "resale", "candidate-stage")
 
