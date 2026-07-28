@@ -78,9 +78,46 @@ class MarketTrainingResult(BaseModel):
     parking_policy: dict[str, object] | None = None
 
 
+class AutoMLTrialSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    trial_number: int = Field(ge=0)
+    state: Literal["completed", "rejected", "failed"]
+    fit_spec: dict[str, object] | None
+    metrics: dict[str, dict[str, int | float]]
+    overall_mae: float | None
+    overall_mape: float | None
+    station_mape: dict[str, float]
+    calibration_passed: bool
+    reason_codes: list[str]
+    duration_seconds: float = Field(ge=0)
+
+
+class AutoMLMarketSearchSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    budget_name: Literal["quick", "standard", "deep"]
+    budget_seconds: Literal[300, 900, 1800]
+    max_trials: Literal[12, 35, 70]
+    completed_trials: int = Field(ge=0)
+    failed_trials: int = Field(ge=0)
+    seed: Literal[42]
+    stopped: bool
+    top_trials: list[AutoMLTrialSnapshot] = Field(max_length=10)
+    trial_file: str
+    trial_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    shortlisted_trial_numbers: list[int] = Field(max_length=3)
+    selected_trial_number: int | None = Field(default=None, ge=0)
+    release_blockers: list[str] = Field(default_factory=list)
+
+
+class AutoMLRunSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["automl"]
+    markets: dict[Literal["resale", "presale"], AutoMLMarketSearchSnapshot]
+
+
 class TrainingManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    schema_version: Literal[1, 2, 3] = 1
+    schema_version: Literal[1, 2, 3, 4] = 1
     run_id: UUID
     created_at: datetime
     markets: list[Literal["resale", "presale"]]
@@ -91,9 +128,22 @@ class TrainingManifest(BaseModel):
     results: list[MarketTrainingResult]
     tuning_plan_version: int | None = Field(default=None, ge=1)
     profiles: list[TrainingProfileSnapshot] = Field(default_factory=list)
+    automl: AutoMLRunSnapshot | None = None
 
     @model_validator(mode="after")
     def require_complete_v3_evidence(self) -> "TrainingManifest":
+        if self.schema_version == 4:
+            if self.tuning_plan_version != 2:
+                raise ValueError("schema v4 requires tuning_plan_version == 2")
+            if self.profiles:
+                raise ValueError("schema v4 requires empty profiles")
+            if self.automl is None:
+                raise ValueError("schema v4 requires automl snapshot")
+            return self
+        if self.automl is not None:
+            raise ValueError(
+                f"schema_version {self.schema_version} does not support automl"
+            )
         if self.schema_version != 3:
             return self
         if self.tuning_plan_version is None or not self.profiles:
@@ -207,6 +257,24 @@ class CandidateArtifactStore:
                 actual_hash = sha256_file(report_path)
                 if actual_hash != expected_hash:
                     raise ValueError(f"Hash mismatch for report {report_rel}")
+
+        if manifest.schema_version == 4 and manifest.automl is not None:
+            stage_resolved = stage.resolve()
+            for _, m_snapshot in manifest.automl.markets.items():
+                trial_path = (stage / m_snapshot.trial_file).resolve()
+                if not str(trial_path).startswith(str(stage_resolved)):
+                    raise ValueError(
+                        f"Trial file {m_snapshot.trial_file} escapes stage directory"
+                    )
+                if not trial_path.exists():
+                    raise FileNotFoundError(
+                        f"Trial file {m_snapshot.trial_file} not found"
+                    )
+                actual_hash = sha256_file(trial_path)
+                if actual_hash != m_snapshot.trial_sha256:
+                    raise ValueError(
+                        f"Hash mismatch for trial file {m_snapshot.trial_file}"
+                    )
 
         os.replace(str(stage), str(final))
         return final

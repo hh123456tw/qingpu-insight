@@ -6,6 +6,7 @@ from typing import Any
 import joblib
 import pandas as pd
 
+from qingpu_insight.automl_outputs import AutoMLRunOutputStore
 from qingpu_insight.jobs import JobService
 from qingpu_insight.model_artifacts import (
     CandidateArtifactStore,
@@ -95,6 +96,7 @@ class ModelObservatory:
         job_service: JobService,
         input_path: Path | None = None,
         official_store: OfficialModelStore | None = None,
+        automl_output_store: AutoMLRunOutputStore | None = None,
     ) -> None:
         self._artifact_dir = artifact_dir
         self._candidate_store = candidate_store
@@ -104,6 +106,7 @@ class ModelObservatory:
         self._cached_snapshot: dict[str, Any] | None = None
         self._cached_snapshot_key: tuple[str, int, float] | None = None
         self._official_store = official_store
+        self._automl_output_store = automl_output_store
 
     def _legacy_model_status(self, market: str) -> dict[str, Any] | None:
         path = self._artifact_dir / f"{market}.joblib"
@@ -350,5 +353,19 @@ class ModelObservatory:
                 }
 
             result["markets"] = markets_info
+
+            if manifest.automl is not None:
+                result["manifest"]["automl"] = manifest.automl.model_dump(mode="json")
+
+        if manifest is None and self._automl_output_store is not None:
+            for market in ("resale", "presale"):
+                automl_data = self._automl_output_store.get(run_id, market)
+                if automl_data is not None:
+                    result["automl"] = {
+                        "candidate_available": False,
+                        "markets": {},
+                        "stopped": True,
+                    }
+                    break
 
         return result

@@ -8,8 +8,11 @@ from uuid import uuid4
 import joblib
 import pandas as pd
 
+from qingpu_insight.automl_outputs import AutoMLRunOutputStore
 from qingpu_insight.jobs import JobRun, JobService
 from qingpu_insight.model_artifacts import (
+    AutoMLMarketSearchSnapshot,
+    AutoMLRunSnapshot,
     CandidateArtifactStore,
     DataSnapshot,
     MarketTrainingResult,
@@ -154,6 +157,7 @@ def observatory_fixture(
     official_models: dict[str, ValuationBundle] | None = None,
     candidate_runs: list[TrainingManifest] | None = None,
     latest_data_date: pd.Timestamp | None = None,
+    automl_output_store: AutoMLRunOutputStore | None = None,
 ) -> ModelObservatory:
     artifact_dir = tmp_path / "artifacts"
     artifact_dir.mkdir()
@@ -236,6 +240,7 @@ def observatory_fixture(
         job_service=FakeJobService(),
         input_path=input_path,
         official_store=official_store,
+        automl_output_store=automl_output_store,
     )
 
 
@@ -546,6 +551,95 @@ def test_official_model_status_marks_2024_model_stale(tmp_path: Path) -> None:
     assert resale["stale"] is True
     assert resale["age_days"] > 180
     assert resale["stale_after_days"] == 180
+
+
+def test_get_run_includes_automl_for_v4_manifest(tmp_path: Path) -> None:
+    manifest = manifest_fixture(markets=["resale"])
+    v4_manifest = manifest.model_copy(update={
+        "schema_version": 4,
+        "tuning_plan_version": 2,
+        "profiles": [],
+        "automl": AutoMLRunSnapshot(
+            mode="automl",
+            markets={
+                "resale": AutoMLMarketSearchSnapshot(
+                    budget_name="quick",
+                    budget_seconds=300,
+                    max_trials=12,
+                    completed_trials=0,
+                    failed_trials=0,
+                    seed=42,
+                    stopped=False,
+                    top_trials=[],
+                    trial_file="automl/resale-trials.json",
+                    trial_sha256="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                    shortlisted_trial_numbers=[],
+                )
+            },
+        ),
+    })
+    observatory = observatory_fixture(tmp_path, candidate_runs=[v4_manifest])
+    result = observatory.get_run(str(v4_manifest.run_id))
+    assert result is not None
+    m = result["manifest"]
+    assert "automl" in m
+    assert m["automl"]["mode"] == "automl"
+
+def test_get_run_fallback_automl_when_no_manifest(tmp_path: Path) -> None:
+    run_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    store_base = tmp_path / "automl_outputs"
+    store_base.mkdir(parents=True)
+    output_store = AutoMLRunOutputStore(store_base)
+    output_store.write(run_id, "resale", {"trials": [], "stopped": True})
+
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir()
+    candidate_store_dir = tmp_path / "candidates"
+    candidate_store_dir.mkdir()
+    candidate_store = CandidateArtifactStore(candidate_store_dir)
+
+    from datetime import UTC
+    now = datetime.now(UTC)
+    job_runs: dict[str, JobRun] = {
+        run_id: JobRun(
+            run_id=run_id,
+            job_type="model_training",
+            trigger="manual",
+            idempotency_key="",
+            status="skipped",
+            started_at=now,
+            finished_at=now,
+            attempt=1,
+            input_version=None,
+            output_version=run_id,
+            summary={},
+            error_code=None,
+            error_message=None,
+        )
+    }
+
+    class FakeJob(JobService):
+        def __init__(self):
+            self._runs = job_runs
+        def list_recent(self, limit=20, job_type=None):
+            return list(self._runs.values())[:limit]
+        def get(self, run_id):
+            return self._runs.get(run_id)
+
+    dummy_service = type("FakeModelTrainingService", (), {})()
+    observatory = ModelObservatory(
+        artifact_dir=artifact_dir,
+        candidate_store=candidate_store,
+        model_training_service=dummy_service,
+        job_service=FakeJob(),
+        automl_output_store=output_store,
+    )
+    result = observatory.get_run(run_id)
+    assert result is not None
+    assert "automl" in result
+    assert result["automl"]["candidate_available"] is False
+    assert result["automl"]["markets"] == {}
+    assert result["automl"]["stopped"] is True
 
 
 def test_schema_v1_run_detail_has_safe_empty_analysis(tmp_path: Path) -> None:

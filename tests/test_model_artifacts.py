@@ -10,6 +10,8 @@ import pytest
 
 from qingpu_insight.model_artifacts import (
     REPORT_TYPES,
+    AutoMLMarketSearchSnapshot,
+    AutoMLRunSnapshot,
     CandidateArtifactStore,
     DataSnapshot,
     MarketTrainingResult,
@@ -425,6 +427,244 @@ class TestSchemaV2:
         assert loaded.schema_version == 2
         assert loaded.results[0].feature_contract_version == 2
         assert loaded.results[0].release_checks["a18_improved"] is True
+
+
+# ---------------------------------------------------------------------------
+# Schema v4 — AutoML evidence helpers & fixtures
+# ---------------------------------------------------------------------------
+
+
+def automl_snapshot_data(trial_sha256: str | None = None) -> dict[str, object]:
+    sha = trial_sha256 or "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    return {
+        "mode": "automl",
+        "markets": {
+            "resale": {
+                "budget_name": "quick",
+                "budget_seconds": 300,
+                "max_trials": 12,
+                "completed_trials": 0,
+                "failed_trials": 0,
+                "seed": 42,
+                "stopped": False,
+                "top_trials": [],
+                "trial_file": "automl/resale-trials.json",
+                "trial_sha256": sha,
+                "shortlisted_trial_numbers": [],
+                "release_blockers": [],
+            },
+        },
+    }
+
+
+def staged_v4_candidate(tmp_path: Path):
+    import hashlib
+    import json
+
+    store = CandidateArtifactStore(tmp_path / "candidates")
+    run_id = "77777777-7777-4777-8777-777777777777"
+    stage = store.begin(run_id)
+
+    automl_dir = stage / "automl"
+    automl_dir.mkdir()
+    trial_content = json.dumps({"trials": []}).encode()
+    (automl_dir / "resale-trials.json").write_bytes(trial_content)
+    trial_sha256 = hashlib.sha256(trial_content).hexdigest()
+
+    artifact_bytes = _make_bundle("resale")
+    artifact = stage / "resale.joblib"
+    artifact.write_bytes(artifact_bytes)
+
+    report = stage / "reports" / "resale-evaluation.json"
+    report.parent.mkdir(parents=True)
+    report.write_text('{"selected_model":"ridge"}', encoding="utf-8")
+
+    manifest = TrainingManifest(
+        schema_version=4,
+        run_id=UUID(run_id),
+        created_at=datetime.now(UTC),
+        markets=["resale"],
+        source_commit="abc123",
+        source_dirty=False,
+        runtime_versions={"python": "3.11"},
+        data_snapshot=DataSnapshot(
+            sha256=_TEST_SHA256,
+            raw_count=100,
+            usable_counts={"resale": 80, "presale": 0},
+            excluded_counts={"resale": 20, "presale": 0},
+            station_counts={"A17": 30, "A18": 25, "A19": 25},
+            min_date=date(2024, 1, 1),
+            max_date=date(2024, 12, 31),
+        ),
+        results=[
+            MarketTrainingResult(
+                market="resale",
+                selected_model="ridge",
+                recommended=True,
+                reason_codes=["best_cv_score"],
+                selection_metrics={"cv": {"mae": 1000.0}},
+                final_test_metrics={"test": {"mae": 1200.0}},
+                artifact_file="resale.joblib",
+                artifact_sha256=sha256_file(artifact),
+                report_files={"resale-evaluation": "reports/resale-evaluation.json"},
+                report_sha256={"resale-evaluation": sha256_file(report)},
+            )
+        ],
+        tuning_plan_version=2,
+        profiles=[],
+        automl=AutoMLRunSnapshot(
+            mode="automl",
+            markets={
+                "resale": AutoMLMarketSearchSnapshot(
+                    budget_name="quick",
+                    budget_seconds=300,
+                    max_trials=12,
+                    completed_trials=0,
+                    failed_trials=0,
+                    seed=42,
+                    stopped=False,
+                    top_trials=[],
+                    trial_file="automl/resale-trials.json",
+                    trial_sha256=trial_sha256,
+                    shortlisted_trial_numbers=[],
+                )
+            },
+        ),
+    )
+
+    (stage / "manifest.json").write_text(
+        manifest.model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+
+    return store, run_id, manifest
+
+
+@pytest.fixture
+def valid_manifest_data() -> dict[str, object]:
+    return {
+        "run_id": "66666666-6666-4666-8666-666666666666",
+        "created_at": "2024-06-15T12:00:00Z",
+        "markets": ["resale"],
+        "source_commit": "abc123",
+        "source_dirty": False,
+        "runtime_versions": {"python": "3.11"},
+        "data_snapshot": {
+            "sha256": _TEST_SHA256,
+            "raw_count": 100,
+            "usable_counts": {"resale": 80, "presale": 0},
+            "excluded_counts": {"resale": 20, "presale": 0},
+            "station_counts": {"A17": 30, "A18": 25, "A19": 25},
+            "min_date": "2024-01-01",
+            "max_date": "2024-12-31",
+        },
+        "results": [
+            {
+                "market": "resale",
+                "selected_model": "ridge",
+                "recommended": True,
+                "reason_codes": ["best_cv_score"],
+                "selection_metrics": {"cv": {"mae": 1000.0}},
+                "final_test_metrics": {"test": {"mae": 1200.0}},
+                "artifact_file": "resale.joblib",
+                "artifact_sha256": _TEST_SHA256,
+                "report_files": {
+                    "resale-evaluation": "reports/resale-evaluation.json"
+                },
+                "report_sha256": {"resale-evaluation": _TEST_SHA256},
+            }
+        ],
+    }
+
+
+class TestSchemaV4:
+    def test_schema_v4_requires_automl_and_allows_no_profiles(
+        self, valid_manifest_data: dict[str, object]
+    ) -> None:
+        data = {
+            **valid_manifest_data,
+            "schema_version": 4,
+            "tuning_plan_version": 2,
+            "profiles": [],
+            "automl": automl_snapshot_data(),
+        }
+        manifest = TrainingManifest.model_validate(data)
+        assert manifest.automl is not None
+        assert manifest.automl.markets["resale"].budget_name == "quick"
+
+    def test_candidate_store_rejects_tampered_trial_file(self, tmp_path: Path) -> None:
+        store, run_id, manifest = staged_v4_candidate(tmp_path)
+        trial_path = tmp_path / "candidates" / f".tmp-{run_id}" / "automl" / "resale-trials.json"
+        trial_path.write_text("tampered", encoding="utf-8")
+        with pytest.raises(ValueError, match="Hash mismatch"):
+            store.commit(run_id, manifest)
+
+    def test_schema_v1_rejects_non_null_automl(
+        self, schema_v1_manifest_json: str
+    ) -> None:
+        data = json.loads(schema_v1_manifest_json)
+        data["automl"] = automl_snapshot_data()
+        with pytest.raises(ValueError, match="schema_version.*automl"):
+            TrainingManifest.model_validate(data)
+
+    def test_schema_v2_rejects_non_null_automl(self, manifest_v2) -> None:
+        data = manifest_v2.model_dump()
+        data["automl"] = automl_snapshot_data()
+        with pytest.raises(ValueError, match="schema_version.*automl"):
+            TrainingManifest.model_validate(data)
+
+    def test_schema_v3_still_validates_profiles(self) -> None:
+        h = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        quick = TrainingProfileSnapshot(
+            name="quick",
+            source="preset",
+            hgb_learning_rate=0.08,
+            hgb_max_iter=180,
+            rf_n_estimators=160,
+            recency_half_life_months=48,
+        )
+        result = manifest_fixture(
+            run_id="00000000-0000-4000-8000-000000000001",
+            artifact_hash=h,
+            report_hash=h,
+        ).results[0].model_copy(update={
+            "selected_profile": "quick",
+            "profile_results": [
+                ProfileTrainingResult(
+                    profile_name="quick",
+                    parameters={
+                        "hgb_learning_rate": 0.08,
+                        "hgb_max_iter": 180,
+                        "rf_n_estimators": 160,
+                        "recency_half_life_months": 48,
+                    },
+                    selection_metrics={"ridge": {"overall": {"mae": 50_000}}},
+                    candidate_errors={},
+                )
+            ],
+            "test_coverage": 0.9,
+            "average_interval_width_twd_per_ping": 120_000,
+        })
+        manifest_v1 = manifest_fixture(
+            run_id="00000000-0000-4000-8000-000000000002",
+            artifact_hash=h,
+            report_hash=h,
+        )
+        v3_manifest = manifest_v1.model_copy(update={
+            "schema_version": 3,
+            "tuning_plan_version": 1,
+            "profiles": [quick],
+            "results": [result],
+        })
+        loaded = TrainingManifest.model_validate(v3_manifest.model_dump())
+        assert loaded.schema_version == 3
+
+    def test_v4_commits_happy_path(self, tmp_path: Path) -> None:
+        store, run_id, manifest = staged_v4_candidate(tmp_path)
+        result = store.commit(run_id, manifest)
+        assert result.exists()
+        assert (result / "manifest.json").exists()
+        assert (result / "automl" / "resale-trials.json").exists()
 
 
 def test_manifest_parking_policy_roundtrip():
