@@ -18,8 +18,10 @@ from qingpu_insight.model_features import (
 )
 from qingpu_insight.model_training import recency_weights
 from qingpu_insight.parking_valuation import (
+    ParkingPriceEstimate,
     ParkingPricePolicy,
     build_parking_price_policy,
+    estimate_parking_price,
 )
 
 
@@ -141,6 +143,18 @@ def model_age_days(bundle: ValuationBundle, latest_data_date: pd.Timestamp) -> i
 def prediction_interval(bundle: ValuationBundle, unit_price: float) -> tuple[float, float]:
     radius = bundle.interval_abs_residual_twd_per_ping
     return max(0.0, unit_price - radius), unit_price + radius
+
+
+def compose_total_price(
+    building_unit_price_twd: float,
+    building_area_ping: float,
+    parking_estimate: ParkingPriceEstimate | None,
+) -> tuple[int, int | None, int]:
+    building = round(building_unit_price_twd * building_area_ping)
+    if parking_estimate is None:
+        return building, None, building
+    parking = parking_estimate.price_twd
+    return building, parking, building + parking
 
 
 def local_factors(bundle: ValuationBundle, row: pd.DataFrame) -> list[dict[str, object]]:
@@ -366,15 +380,26 @@ def valuate(
         median_price = float(cohort["unit_price_per_ping_twd"].median())
         deviations = (cohort["unit_price_per_ping_twd"] - median_price).abs()
         interval_radius = float(deviations.quantile(0.90))
-        total_price = median_price * input_.building_area_ping
+        market_policy = build_parking_price_policy(recent) if "parking_type" in recent.columns else None
+        parking_estimate = estimate_parking_price(market_policy, input_.parking_type)
+        building_price, parking_price, total_price = compose_total_price(median_price, input_.building_area_ping, parking_estimate)
+        low_unit = max(0, median_price - interval_radius)
+        high_unit = median_price + interval_radius
+        building_low = round(low_unit * input_.building_area_ping)
+        building_high = round(high_unit * input_.building_area_ping)
+        interval_total = (building_low + parking_price, building_high + parking_price) if parking_price is not None else (building_low, building_high)
         return {
             "transaction_type": input_.transaction_type,
             "estimated_unit_price_per_ping_twd": round(median_price),
             "estimated_total_price_twd": round(total_price),
-            "interval_total_price_twd": (
-                round(max(0, median_price - interval_radius) * input_.building_area_ping),
-                round((median_price + interval_radius) * input_.building_area_ping),
+            "estimated_building_price_twd": building_price,
+            "estimated_parking_price_twd": parking_price,
+            "parking_price_policy": (
+                {"parking_type": parking_estimate.parking_type, "sample_size": parking_estimate.sample_size, "source": parking_estimate.source}
+                if parking_estimate and parking_estimate.source != "none"
+                else None
             ),
+            "interval_total_price_twd": interval_total,
             "confidence": "low",
             "confidence_reasons": ["模型 artifact 不可用，使用近期中位數降級估價"],
             "factors": [],
@@ -422,7 +447,8 @@ def valuate(
         baseline = RecentMedianBaseline(months=12).fit(recent)
         row = input_frame(input_, latest_data_date)
         unit_price = float(baseline.predict(row)[0])
-        total_price = unit_price * input_.building_area_ping
+        parking_estimate = estimate_parking_price(bundle.parking_price_policy, input_.parking_type)
+        building_price, parking_price, total_price = compose_total_price(unit_price, input_.building_area_ping, parking_estimate)
         fallback_predictions = baseline.predict(recent)
         interval_radius = float(
             np.quantile(
@@ -441,14 +467,24 @@ def valuate(
             "正式模型資料過舊",
             "使用最新官方資料的近期中位數降級估價",
         ]
+        if bundle.parking_price_policy is None:
+            confidence_reasons.append("legacy_parking")
+        low, high = interval
+        building_low = round(low * input_.building_area_ping)
+        building_high = round(high * input_.building_area_ping)
+        interval_total = (building_low + parking_price, building_high + parking_price) if parking_price is not None else (building_low, building_high)
         result: dict[str, Any] = {
             "transaction_type": input_.transaction_type,
             "estimated_unit_price_per_ping_twd": round(unit_price),
             "estimated_total_price_twd": round(total_price),
-            "interval_total_price_twd": (
-                round(interval[0] * input_.building_area_ping),
-                round(interval[1] * input_.building_area_ping),
+            "estimated_building_price_twd": building_price,
+            "estimated_parking_price_twd": parking_price,
+            "parking_price_policy": (
+                {"parking_type": parking_estimate.parking_type, "sample_size": parking_estimate.sample_size, "source": parking_estimate.source}
+                if parking_estimate and parking_estimate.source != "none"
+                else None
             ),
+            "interval_total_price_twd": interval_total,
             "confidence": "low",
             "confidence_reasons": confidence_reasons,
             "factors": factors,
@@ -480,7 +516,8 @@ def valuate(
     row = input_frame(input_, data_date)
 
     unit_price = float(bundle.pipeline.predict(row)[0])
-    total_price = unit_price * input_.building_area_ping
+    parking_estimate = estimate_parking_price(bundle.parking_price_policy, input_.parking_type)
+    building_price, parking_price, total_price = compose_total_price(unit_price, input_.building_area_ping, parking_estimate)
     interval = prediction_interval(bundle, unit_price)
 
     factors = local_factors(bundle, row)
@@ -489,15 +526,26 @@ def valuate(
     comparable_scope = comparables_result["comparable_scope"]
 
     assessing = confidence_assessment(bundle, row, unit_price, interval, comparables_list)
+    if bundle.parking_price_policy is None:
+        assessing["confidence_reasons"].append("legacy_parking")
+
+    low, high = interval
+    building_low = round(low * input_.building_area_ping)
+    building_high = round(high * input_.building_area_ping)
+    interval_total = (building_low + parking_price, building_high + parking_price) if parking_price is not None else (building_low, building_high)
 
     result: dict[str, Any] = {
         "transaction_type": input_.transaction_type,
         "estimated_unit_price_per_ping_twd": round(unit_price),
         "estimated_total_price_twd": round(total_price),
-        "interval_total_price_twd": (
-            round(interval[0] * input_.building_area_ping),
-            round(interval[1] * input_.building_area_ping),
+        "estimated_building_price_twd": building_price,
+        "estimated_parking_price_twd": parking_price,
+        "parking_price_policy": (
+            {"parking_type": parking_estimate.parking_type, "sample_size": parking_estimate.sample_size, "source": parking_estimate.source}
+            if parking_estimate and parking_estimate.source != "none"
+            else None
         ),
+        "interval_total_price_twd": interval_total,
         "confidence": assessing["confidence"],
         "confidence_reasons": assessing["confidence_reasons"],
         "factors": factors,

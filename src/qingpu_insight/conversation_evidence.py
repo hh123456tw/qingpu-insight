@@ -286,6 +286,16 @@ class ConversationEvidenceBuilder:
                         observed_at=None,
                     )
                 )
+        building = valuation.get("estimated_building_price_twd")
+        if building is not None:
+            facts.append(EvidenceFact(id="valuation.building", label="房屋本體估值", value=format_total_price_wan(building), source="估值模型"))
+        parking = valuation.get("estimated_parking_price_twd")
+        if parking is not None:
+            facts.append(EvidenceFact(id="valuation.parking", label="車位估值", value=format_total_price_wan(parking), source="估值模型"))
+        total = valuation.get("estimated_total_price_twd")
+        if total is not None:
+            facts.append(EvidenceFact(id="valuation.total", label="總估值", value=format_total_price_wan(total), source="估值模型"))
+
         low = valuation.get("low_estimate_twd")
         high = valuation.get("high_estimate_twd")
         if low is not None and high is not None:

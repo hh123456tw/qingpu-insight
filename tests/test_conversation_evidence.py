@@ -194,6 +194,9 @@ def test_model_version_recorded() -> None:
             "low_estimate_twd": 13500000,
             "high_estimate_twd": 16500000,
             "confidence": "medium",
+            "estimated_building_price_twd": 15000000,
+            "estimated_parking_price_twd": 1700000,
+            "estimated_total_price_twd": 16700000,
         }
 
     builder = ConversationEvidenceBuilder(
@@ -216,6 +219,9 @@ def test_runtime_valuation_versions_and_limitations_are_preserved() -> None:
             "low_estimate_twd": 13500000,
             "high_estimate_twd": 16500000,
             "confidence": "medium",
+            "estimated_building_price_twd": 15000000,
+            "estimated_parking_price_twd": 1700000,
+            "estimated_total_price_twd": 16700000,
             "model_version": "official-v3",
             "dataset_version": "2026-06-13",
             "limitations": ["捷運距離為推定值"],
@@ -272,6 +278,9 @@ def test_valuation_and_comparable_facts_present() -> None:
             "low_estimate_twd": 13500000,
             "high_estimate_twd": 16500000,
             "confidence": "medium",
+            "estimated_building_price_twd": 15000000,
+            "estimated_parking_price_twd": 1700000,
+            "estimated_total_price_twd": 16700000,
         }
 
     def market(payload: dict) -> list[dict]:
@@ -346,6 +355,9 @@ def test_valuation_asking_price_comparison() -> None:
             "low_estimate_twd": 15380000,
             "high_estimate_twd": 24410000,
             "confidence": "low",
+            "estimated_building_price_twd": 19890000,
+            "estimated_parking_price_twd": 1700000,
+            "estimated_total_price_twd": 21590000,
         }
 
     builder = ConversationEvidenceBuilder(valuation_service=valuate)
@@ -370,6 +382,9 @@ def test_asking_price_below_range() -> None:
             "low_estimate_twd": 15380000,
             "high_estimate_twd": 24410000,
             "confidence": "medium",
+            "estimated_building_price_twd": 19890000,
+            "estimated_parking_price_twd": 1700000,
+            "estimated_total_price_twd": 21590000,
         }
 
     builder = ConversationEvidenceBuilder(valuation_service=valuate)
@@ -390,6 +405,9 @@ def test_asking_price_above_range() -> None:
             "low_estimate_twd": 15380000,
             "high_estimate_twd": 24410000,
             "confidence": "high",
+            "estimated_building_price_twd": 19890000,
+            "estimated_parking_price_twd": 1700000,
+            "estimated_total_price_twd": 21590000,
         }
 
     builder = ConversationEvidenceBuilder(valuation_service=valuate)
@@ -410,6 +428,9 @@ def test_asking_price_equal_to_point() -> None:
             "low_estimate_twd": 15380000,
             "high_estimate_twd": 24410000,
             "confidence": "low",
+            "estimated_building_price_twd": 19890000,
+            "estimated_parking_price_twd": 1700000,
+            "estimated_total_price_twd": 21590000,
         }
 
     builder = ConversationEvidenceBuilder(valuation_service=valuate)

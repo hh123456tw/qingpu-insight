@@ -95,7 +95,7 @@ def compare_listing_to_model(
             floor=listing.floor,
             total_floors=listing.total_floors,
             parking_type=listing.parking_type or "",
-            parking_area_ping=0,
+            parking_area_ping=getattr(listing, "parking_area_ping", None) or 0,
             asking_total_price_twd=listing.asking_price_twd,
         )
     except (ValueError, TypeError) as exc:

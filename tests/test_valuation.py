@@ -9,6 +9,7 @@ import pytest
 from sklearn.dummy import DummyRegressor
 
 from qingpu_insight.model_features import FEATURE_COLUMNS, ValuationInput
+from qingpu_insight.parking_valuation import ParkingPricePolicy, ParkingPriceStat
 from qingpu_insight.valuation import (
     ModelRegistry,
     ModelUnavailableError,
@@ -72,6 +73,11 @@ def bundle() -> ValuationBundle:
         data_min_date="2024-01-01",
         data_max_date="2026-06-01",
         metrics={"overall": {"mae": 45000}},
+        parking_price_policy=ParkingPricePolicy(
+            version=1, minimum_type_samples=20,
+            by_type={"坡道平面": ParkingPriceStat(1_700_000, 40), "坡道機械": ParkingPriceStat(800_000, 15)},
+            market_fallback=ParkingPriceStat(1_200_000, 60),
+        ),
     )
 
 
@@ -415,6 +421,23 @@ def test_degraded_valuation_refuses_to_invent_price_without_market_data(valid_re
     )
     with pytest.raises(ModelUnavailableError, match="market data"):
         valuate(valid_resale_input, UnavailableRegistry(), empty)
+
+
+def test_parking_is_additive_and_does_not_change_building_estimate(bundle, market, valid_resale_input):
+    from dataclasses import replace
+    no_parking = valuate(replace(valid_resale_input, parking_type="", parking_area_ping=0), FakeRegistry(bundle), market)
+    flat = valuate(replace(valid_resale_input, parking_type="坡道平面", parking_area_ping=8), FakeRegistry(bundle), market)
+
+    assert flat["estimated_building_price_twd"] == no_parking["estimated_building_price_twd"]
+    assert flat["estimated_total_price_twd"] == flat["estimated_building_price_twd"] + flat["estimated_parking_price_twd"]
+    assert flat["estimated_total_price_twd"] > no_parking["estimated_total_price_twd"]
+
+
+def test_legacy_bundle_no_parking_policy(bundle, market, valid_resale_input):
+    bundle.__dict__.pop("parking_price_policy", None)
+    result = valuate(valid_resale_input, FakeRegistry(bundle), market)
+    assert result["estimated_parking_price_twd"] is None
+    assert result["estimated_building_price_twd"] == result["estimated_total_price_twd"]
 
 
 # --- Task 3: Parking policy ---
