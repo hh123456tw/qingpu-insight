@@ -8,8 +8,10 @@ from sklearn.base import clone
 
 from qingpu_insight.model_features import BASE_FEATURE_COLUMNS, FEATURE_COLUMNS
 from qingpu_insight.model_training import (
+    ModelFitSpec,
     RecentMedianBaseline,
     TimeSplit,
+    build_estimator,
     candidate_estimators,
     evaluate_candidate,
     evaluate_fitted_candidate,
@@ -241,6 +243,7 @@ def run_annual_backtests(
     selected_model_name,
     feature_columns=FEATURE_COLUMNS,
     profile: TrainingProfile = BALANCED_PROFILE,
+    fit_spec: ModelFitSpec | None = None,
 ):
     max_date = frame["transaction_date"].max()
     max_year = max_date.year
@@ -263,21 +266,36 @@ def run_annual_backtests(
         except ValueError:
             continue
 
-        estimators = candidate_estimators(
-            feature_columns=feature_columns,
-            profile=profile,
-        )
-        candidate_est = estimators[selected_model_name]
+        if fit_spec is not None:
+            candidate_est = build_estimator(
+                fit_spec,
+                feature_columns=feature_columns,
+            )
+            candidate_result = evaluate_candidate(
+                selected_model_name,
+                candidate_est,
+                split.train,
+                split.test,
+                feature_columns=feature_columns,
+                use_recency_weights=fit_spec.recency_half_life_months is not None,
+                recency_half_life_months=fit_spec.recency_half_life_months or 48,
+            )
+        else:
+            estimators = candidate_estimators(
+                feature_columns=feature_columns,
+                profile=profile,
+            )
+            candidate_est = estimators[selected_model_name]
 
-        candidate_result = evaluate_candidate(
-            selected_model_name,
-            candidate_est,
-            split.train,
-            split.test,
-            feature_columns=feature_columns,
-            use_recency_weights=profile.recency_half_life_months is not None,
-            recency_half_life_months=profile.recency_half_life_months or 48,
-        )
+            candidate_result = evaluate_candidate(
+                selected_model_name,
+                candidate_est,
+                split.train,
+                split.test,
+                feature_columns=feature_columns,
+                use_recency_weights=profile.recency_half_life_months is not None,
+                recency_half_life_months=profile.recency_half_life_months or 48,
+            )
 
         baseline = RecentMedianBaseline(months=12)
         baseline.fit(split.train)

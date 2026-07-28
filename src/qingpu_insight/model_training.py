@@ -1,7 +1,7 @@
 import inspect
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -208,6 +208,110 @@ class ProfileEvaluationError(Exception):
 
 class BaselineEvaluationError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class ModelFitSpec:
+    model_name: Literal["random_forest", "hist_gradient_boosting"]
+    parameters: dict[str, int | float]
+    recency_half_life_months: int | None
+
+    def snapshot(self) -> dict[str, object]:
+        return {
+            "model_name": self.model_name,
+            "parameters": dict(self.parameters),
+            "recency_half_life_months": self.recency_half_life_months,
+        }
+
+
+def build_estimator(
+    spec: ModelFitSpec,
+    feature_columns=FEATURE_COLUMNS,
+    seed: int = 42,
+) -> Pipeline:
+    valid = frozenset({"ridge", "random_forest", "hist_gradient_boosting"})
+    if spec.model_name not in valid:
+        raise ValueError(f"unknown model: {spec.model_name}")
+
+    if spec.model_name in ("random_forest", "hist_gradient_boosting") and not spec.parameters:
+        raise ValueError(f"{spec.model_name} requires non-empty parameters")
+
+    preprocessor = make_preprocessor(feature_columns)
+
+    if spec.model_name == "ridge":
+        return Pipeline([("features", preprocessor), ("model", Ridge(alpha=10.0))])
+
+    if spec.model_name == "random_forest":
+        rf_params = {
+            "n_estimators": spec.parameters.get("n_estimators", 100),
+            "min_samples_leaf": spec.parameters.get("min_samples_leaf", 5),
+            "max_features": spec.parameters.get("max_features", 0.8),
+            "random_state": seed,
+            "n_jobs": -1,
+        }
+        return Pipeline([
+            ("features", preprocessor),
+            ("model", RandomForestRegressor(**rf_params)),
+        ])
+
+    hgb_params = {
+        "learning_rate": spec.parameters.get("learning_rate", 0.1),
+        "max_iter": spec.parameters.get("max_iter", 100),
+        "max_leaf_nodes": spec.parameters.get("max_leaf_nodes", 31),
+        "l2_regularization": spec.parameters.get("l2_regularization", 1.0),
+        "random_state": seed,
+    }
+    return Pipeline([
+        ("features", preprocessor),
+        ("model", HistGradientBoostingRegressor(**hgb_params)),
+    ])
+
+
+def evaluate_fit_spec(
+    split: TimeSplit,
+    spec: ModelFitSpec,
+    feature_columns=FEATURE_COLUMNS,
+    baseline_months: int = 12,
+) -> ModelExperiment:
+    est = build_estimator(spec, feature_columns)
+
+    weights = None
+    if spec.recency_half_life_months is not None:
+        weights = recency_weights(
+            split.train,
+            half_life_months=spec.recency_half_life_months,
+        )
+
+    fit_candidate(
+        est,
+        split.train[list(feature_columns)],
+        split.train["target_unit_price_twd"],
+        sample_weight=weights,
+    )
+
+    calibration_eval = evaluate_fitted_candidate(
+        spec.model_name,
+        est,
+        split.calibration,
+        feature_columns=feature_columns,
+    )
+
+    final_eval = evaluate_fitted_candidate(
+        spec.model_name,
+        est,
+        split.test,
+        feature_columns=feature_columns,
+    )
+
+    return ModelExperiment(
+        selection_results=(calibration_eval,),
+        selected_name=spec.model_name,
+        selected_estimator=est,
+        final_test_results={spec.model_name: final_eval},
+        candidate_errors={},
+        recommended=False,
+        reason_codes=(),
+    )
 
 
 def fit_candidate(est, X, y, sample_weight=None):
