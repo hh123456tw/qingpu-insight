@@ -15,4 +15,10 @@ assert.equal(
 );
 assert.equal(ui.firstErrorControlId({}, {}), null);
 
+assert.deepEqual(ui.parkingState("", 8), {
+  disabled: true, normalizedArea: 0, valid: true, message: "",
+});
+assert.equal(ui.parkingState("坡道平面", 0).valid, false);
+assert.equal(ui.parkingState("坡道平面", 8).valid, true);
+
 process.stdout.write("valuation form contract passed\n");

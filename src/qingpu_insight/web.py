@@ -480,6 +480,15 @@ def parse_valuation_payload(payload: dict[str, Any]) -> ValuationInput:
     missing = {name: "required" for name in required if payload.get(name) in (None, "")}
     if missing:
         raise ApiInputError("請完整填寫估價條件。", missing)
+    parking_type = payload.get("parking_type", "")
+    parking_area = float(payload.get("parking_area_ping", 0))
+    if not parking_type:
+        parking_area = 0
+    elif parking_area <= 0:
+        raise ApiInputError(
+            "有車位時請填寫大於 0 的車位面積。",
+            {"parking_area_ping": "positive_when_parking_selected"},
+        )
     try:
         return ValuationInput(
             transaction_type=str(payload["transaction_type"]),
@@ -495,8 +504,8 @@ def parse_valuation_payload(payload: dict[str, Any]) -> ValuationInput:
             else None,
             floor=int(payload["floor"]),
             total_floors=int(payload["total_floors"]),
-            parking_type=payload.get("parking_type"),
-            parking_area_ping=float(payload.get("parking_area_ping", 0)),
+            parking_type=parking_type,
+            parking_area_ping=parking_area,
             asking_total_price_twd=int(payload["asking_total_price_twd"])
             if payload.get("asking_total_price_twd")
             else None,

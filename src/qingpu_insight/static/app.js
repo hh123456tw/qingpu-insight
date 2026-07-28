@@ -379,6 +379,30 @@ document.addEventListener("DOMContentLoaded", async function () {
 
   var display = typeof QingpuDisplayFormat !== "undefined" ? QingpuDisplayFormat : null;
 
+  // Parking type/area interaction
+  var parkingTypeSelect = document.getElementById("valuation-parking-type");
+  var parkingAreaInput = document.getElementById("valuation-parking-area");
+  if (parkingTypeSelect && parkingAreaInput) {
+    function updateParkingArea() {
+      var state = QingpuValuationForm.parkingState(parkingTypeSelect.value, parseFloat(parkingAreaInput.value) || 0);
+      if (state.disabled) {
+        parkingAreaInput.value = 0;
+        parkingAreaInput.disabled = true;
+        parkingAreaInput.setCustomValidity("");
+      } else {
+        parkingAreaInput.disabled = false;
+        if (!state.valid) {
+          parkingAreaInput.setCustomValidity(state.message);
+        } else {
+          parkingAreaInput.setCustomValidity("");
+        }
+      }
+    }
+    parkingTypeSelect.addEventListener("change", updateParkingArea);
+    parkingAreaInput.addEventListener("input", updateParkingArea);
+    updateParkingArea();
+  }
+
   function money(val) {
     return new Intl.NumberFormat("zh-TW", {
       style: "currency", currency: "TWD", maximumFractionDigits: 0,
@@ -443,14 +467,31 @@ document.addEventListener("DOMContentLoaded", async function () {
     var cards = [];
 
     // Price interval card
-    var priceCard = el("div", { "class": "valuation-card" }, [
+    var building = result.estimated_building_price_twd;
+    var parking = result.estimated_parking_price_twd;
+    var policy = result.parking_price_policy;
+
+    var priceCardChildren = [
       el("h3", {}, ["估價結果"]),
       el("p", { "class": "estimated-price" }, [display ? display.formatTotalWan(result.estimated_total_price_twd) : money(result.estimated_total_price_twd)]),
-      el("p", { "class": "price-range" }, [
-        "合理區間：" + (display ? display.formatTotalWan(result.interval_total_price_twd[0]) : money(result.interval_total_price_twd[0])) +
-        " ~ " + (display ? display.formatTotalWan(result.interval_total_price_twd[1]) : money(result.interval_total_price_twd[1]))
-      ]),
-    ]);
+    ];
+
+    var breakdownHtml = '<div class="price-breakdown">';
+    breakdownHtml += '<div class="breakdown-row">房屋本體　' + display.formatTotalWan(building) + '</div>';
+    if (parking !== null && parking !== undefined) {
+      var policyLabel = policy ? (policy.source === 'market_median' ? '（市場車位中位數）' : '（' + policy.parking_type + '，有效車位價樣本 ' + policy.sample_size.toLocaleString() + ' 筆）') : '';
+      breakdownHtml += '<div class="breakdown-row">車位　　' + display.formatTotalWan(parking) + policyLabel + '</div>';
+    }
+    breakdownHtml += '<div class="breakdown-row breakdown-total">估計總價　' + display.formatTotalWan(result.estimated_total_price_twd) + '</div>';
+    breakdownHtml += '</div>';
+    priceCardChildren.push(el("div", { "class": "price-breakdown-container" }));
+    priceCardChildren[priceCardChildren.length - 1].innerHTML = breakdownHtml;
+
+    priceCardChildren.push(el("p", { "class": "price-range" }, [
+      "合理區間：" + (display ? display.formatTotalWan(result.interval_total_price_twd[0]) : money(result.interval_total_price_twd[0])) +
+      " ~ " + (display ? display.formatTotalWan(result.interval_total_price_twd[1]) : money(result.interval_total_price_twd[1]))
+    ]));
+    var priceCard = el("div", { "class": "valuation-card" }, priceCardChildren);
     var pricePosition = renderPricePosition(
       result.interval_total_price_twd[0],
       result.estimated_total_price_twd,

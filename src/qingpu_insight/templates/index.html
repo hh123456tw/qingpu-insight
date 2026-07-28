@@ -117,7 +117,7 @@
             <option value="A19">A19</option>
           </select>
         </label>
-        <label>坪數
+        <label>房屋坪數（不含車位）
           <input id="valuation-area" type="number" min="5" max="200" step="0.1" required>
         </label>
         <label>建物類型
@@ -177,8 +177,9 @@
             <option value="其他">其他</option>
           </select>
         </label>
-        <label>車位面積（坪）
+        <label id="parking-area-label">車位面積（坪）
           <input id="valuation-parking-area" type="number" min="0" max="60" step="0.1" value="0">
+          <small style="display:block;font-weight:400;color:#666">僅供資料合理性檢查，不會直接改變房屋每坪單價。</small>
         </label>
       </fieldset>
       <button type="submit">開始估價</button>

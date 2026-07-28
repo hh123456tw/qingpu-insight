@@ -1041,6 +1041,7 @@ def test_unknown_route_preserves_http_404(client: FlaskClient) -> None:
 @pytest.fixture
 def trained_registry(tmp_path) -> ModelRegistry:
     import joblib
+    from qingpu_insight.parking_valuation import ParkingPricePolicy, ParkingPriceStat
 
     dummy = DummyRegressor(strategy="constant", constant=500_000)
     dummy.fit(np.zeros((5, 5)), np.ones(5))
@@ -1088,6 +1089,12 @@ def trained_registry(tmp_path) -> ModelRegistry:
         data_min_date="2024-01-01",
         data_max_date="2026-06-01",
         metrics={},
+        parking_price_policy=ParkingPricePolicy(
+            version=1,
+            minimum_type_samples=1,
+            by_type={"坡道平面": ParkingPriceStat(price_twd=1700000, sample_size=50)},
+            market_fallback=ParkingPriceStat(price_twd=1500000, sample_size=200),
+        ),
     )
     joblib.dump(bundle, tmp_path / "resale.joblib")
     return ModelRegistry(tmp_path)
@@ -1160,6 +1167,25 @@ def test_post_valuation_reports_field_errors(valuation_client):
     response = valuation_client.post("/api/valuations", json={"transaction_type": "resale"})
     assert response.status_code == 400
     assert "building_area_ping" in response.get_json()["error"]["fields"]
+
+
+@pytest.fixture
+def valid_payload():
+    return dict(VALID_RESALE_PAYLOAD)
+
+
+def test_valuation_rejects_selected_parking_with_zero_area(client, valid_payload):
+    valid_payload.update(parking_type="坡道平面", parking_area_ping=0)
+    response = client.post("/api/valuations", json=valid_payload)
+    assert response.status_code == 400
+    assert response.json["error"]["fields"]["parking_area_ping"] == "positive_when_parking_selected"
+
+
+def test_valuation_normalizes_no_parking_area(valuation_client, valid_payload):
+    valid_payload.update(parking_type="", parking_area_ping=8)
+    response = valuation_client.post("/api/valuations", json=valid_payload)
+    assert response.status_code == 201
+    assert response.json["estimated_parking_price_twd"] == 0
 
 
 def test_missing_artifact_uses_explicit_baseline(client_without_models):
