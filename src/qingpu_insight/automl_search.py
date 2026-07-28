@@ -20,7 +20,8 @@ from qingpu_insight.model_training import (
     passes_release_gate,
 )
 
-TrialStateLit = Literal["completed", "rejected", "failed"]
+TrialState = Literal["completed", "rejected", "failed"]
+AutoMLSearchStopped = bool
 
 
 def json_safe(value: object) -> object:
@@ -42,7 +43,7 @@ def json_safe(value: object) -> object:
 @dataclass(frozen=True)
 class AutoMLTrialResult:
     trial_number: int
-    state: TrialStateLit
+    state: TrialState
     fit_spec: ModelFitSpec | None
     estimator: Any | None
     metrics: dict[str, dict[str, int | float]]

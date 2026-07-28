@@ -271,7 +271,6 @@ def evaluate_fit_spec(
     split: TimeSplit,
     spec: ModelFitSpec,
     feature_columns=FEATURE_COLUMNS,
-    baseline_months: int = 12,
 ) -> ModelExperiment:
     est = build_estimator(spec, feature_columns)
 

@@ -317,3 +317,24 @@ def test_search_respects_max_trials(fake_split) -> None:
     )
     assert len(result.trials) == 3
     assert result.completed_trials == 3
+
+
+def test_snapshot_omits_estimator() -> None:
+    result = AutoMLTrialResult(
+        trial_number=1,
+        state="completed",
+        fit_spec=None,
+        estimator=DummyEstimator(),
+        metrics={},
+        overall_mae=40_000.0,
+        overall_mape=5.0,
+        station_mape={"A17": 5.0},
+        calibration_passed=True,
+        reason_codes=(),
+        duration_seconds=1.5,
+    )
+    snap = result.snapshot()
+    assert "estimator" not in snap
+    assert snap["trial_number"] == 1
+    assert snap["state"] == "completed"
+    assert snap["calibration_passed"] is True
