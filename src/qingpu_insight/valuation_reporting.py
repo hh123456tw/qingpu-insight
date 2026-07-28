@@ -118,10 +118,10 @@ def write_evaluation(
     policy = bundle.parking_price_policy
     if policy is not None:
         report["parking_policy"] = {
-            "version": policy.version,
-            "minimum_type_samples": policy.minimum_type_samples,
-            "by_type": {k: {"price_twd": v.price_twd, "sample_size": v.sample_size} for k, v in policy.by_type.items()},
-            "market_fallback": {"price_twd": policy.market_fallback.price_twd, "sample_size": policy.market_fallback.sample_size} if policy.market_fallback else None,
+            "version": int(policy.version),
+            "minimum_type_samples": int(policy.minimum_type_samples),
+            "by_type": {k: {"price_twd": int(v.price_twd), "sample_size": int(v.sample_size)} for k, v in policy.by_type.items()},
+            "market_fallback": {"price_twd": int(policy.market_fallback.price_twd), "sample_size": int(policy.market_fallback.sample_size)} if policy.market_fallback else None,
         }
     if diagnostics is not None:
         report["diagnostics"] = diagnostics

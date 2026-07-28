@@ -380,7 +380,7 @@ def valuate(
         median_price = float(cohort["unit_price_per_ping_twd"].median())
         deviations = (cohort["unit_price_per_ping_twd"] - median_price).abs()
         interval_radius = float(deviations.quantile(0.90))
-        market_policy = build_parking_price_policy(recent) if "parking_type" in recent.columns else None
+        market_policy = build_parking_price_policy(recent) if "parking_type" in recent.columns and "parking_price_twd" in recent.columns else None
         parking_estimate = estimate_parking_price(market_policy, input_.parking_type)
         building_price, parking_price, total_price = compose_total_price(median_price, input_.building_area_ping, parking_estimate)
         low_unit = max(0, median_price - interval_radius)

@@ -476,16 +476,26 @@ document.addEventListener("DOMContentLoaded", async function () {
       el("p", { "class": "estimated-price" }, [display ? display.formatTotalWan(result.estimated_total_price_twd) : money(result.estimated_total_price_twd)]),
     ];
 
-    var breakdownHtml = '<div class="price-breakdown">';
-    breakdownHtml += '<div class="breakdown-row">房屋本體　' + display.formatTotalWan(building) + '</div>';
-    if (parking !== null && parking !== undefined) {
-      var policyLabel = policy ? (policy.source === 'market_median' ? '（市場車位中位數）' : '（' + policy.parking_type + '，有效車位價樣本 ' + policy.sample_size.toLocaleString() + ' 筆）') : '';
-      breakdownHtml += '<div class="breakdown-row">車位　　' + display.formatTotalWan(parking) + policyLabel + '</div>';
-    }
-    breakdownHtml += '<div class="breakdown-row breakdown-total">估計總價　' + display.formatTotalWan(result.estimated_total_price_twd) + '</div>';
-    breakdownHtml += '</div>';
-    priceCardChildren.push(el("div", { "class": "price-breakdown-container" }));
-    priceCardChildren[priceCardChildren.length - 1].innerHTML = breakdownHtml;
+    var breakdownEl = el("div", { "class": "price-breakdown" });
+    (function buildBreakdown() {
+      var row;
+      row = document.createElement("div");
+      row.className = "breakdown-row";
+      row.textContent = "房屋本體　" + display.formatTotalWan(building);
+      breakdownEl.appendChild(row);
+      if (parking !== null && parking !== undefined) {
+        row = document.createElement("div");
+        row.className = "breakdown-row";
+        var policyLabel = policy ? (policy.source === 'market_median' ? '（市場車位中位數）' : '（' + policy.parking_type + '，有效車位價樣本 ' + policy.sample_size.toLocaleString() + ' 筆）') : '';
+        row.textContent = "車位　　" + display.formatTotalWan(parking) + policyLabel;
+        breakdownEl.appendChild(row);
+      }
+      row = document.createElement("div");
+      row.className = "breakdown-row breakdown-total";
+      row.textContent = "估計總價　" + display.formatTotalWan(result.estimated_total_price_twd);
+      breakdownEl.appendChild(row);
+    })();
+    priceCardChildren.push(breakdownEl);
 
     priceCardChildren.push(el("p", { "class": "price-range" }, [
       "合理區間：" + (display ? display.formatTotalWan(result.interval_total_price_twd[0]) : money(result.interval_total_price_twd[0])) +
