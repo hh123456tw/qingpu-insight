@@ -10,17 +10,23 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from qingpu_insight.automl_control import AutoMLControlRegistry
+from qingpu_insight.automl_outputs import AutoMLRunOutputStore
 from qingpu_insight.jobs import ACTIVE_STATUSES, JobRun, JobService, JobStatus
 from qingpu_insight.model_artifacts import CandidateArtifactStore, sha256_file
 from qingpu_insight.model_features import BASE_FEATURE_COLUMNS
-from qingpu_insight.model_training import ProfileEvaluationError
+from qingpu_insight.model_training import ModelFitSpec, ProfileEvaluationError
 from qingpu_insight.model_training_service import (
     ModelTrainingError,
     ModelTrainingRequest,
     ModelTrainingService,
     SourceVersionProvider,
 )
-from qingpu_insight.model_tuning import parse_tuning_plan
+from qingpu_insight.model_tuning import (
+    AutoMLBudget,
+    AutoMLTuningPlan,
+    parse_tuning_plan,
+)
 
 
 class FakeJobRepository:
@@ -448,3 +454,482 @@ def test_presale_training_does_not_run_resale_analysis(tmp_path, market_parquet)
     assert result.backtests == []
     artifact = joblib.load(tmp_path / "candidates" / run.run_id / result.artifact_file)
     assert artifact.feature_columns == BASE_FEATURE_COLUMNS
+
+
+@pytest.fixture
+def automl_plan() -> AutoMLTuningPlan:
+    return AutoMLTuningPlan(2, "automl", AutoMLBudget("quick", 300, 12))
+
+
+@pytest.fixture
+def automl_service_fixture(
+    tmp_path: Path, market_parquet: Path,
+) -> tuple[ModelTrainingService, JobService, AutoMLControlRegistry, AutoMLRunOutputStore]:
+    repo = FakeJobRepository()
+    jobs = JobService(repo)
+    store = CandidateArtifactStore(tmp_path / "candidates")
+    registry = AutoMLControlRegistry()
+    output_store = AutoMLRunOutputStore(tmp_path / "automl_outputs")
+    service = ModelTrainingService(
+        jobs=jobs,
+        store=store,
+        input_path=market_parquet,
+        source_version_provider=SourceVersionProvider(commit="test-hash", dirty=False),
+        automl_registry=registry,
+        automl_output_store=output_store,
+    )
+    return service, jobs, registry, output_store
+
+
+DUMMY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+from sklearn.base import BaseEstimator as _SkBaseEst
+
+
+class _FakeEstimator(_SkBaseEst):
+    def predict(self, X):
+        import numpy as np
+        return np.full(len(X), 500000.0)
+    def fit(self, X, y, sample_weight=None):
+        return self
+
+
+class TestAutoMLOrchestration:
+
+    def _make_trial(
+        self,
+        trial_number: int,
+        fit_spec: Any,
+        metrics: dict,
+        overall_mae: float,
+        station_mape: dict,
+    ) -> Any:
+        from qingpu_insight.automl_search import AutoMLTrialResult
+        return AutoMLTrialResult(
+            trial_number=trial_number,
+            state="completed",
+            fit_spec=fit_spec,
+            estimator=None,
+            metrics=metrics,
+            overall_mae=overall_mae,
+            overall_mape=float(metrics.get("overall", {}).get("mape", 0)),
+            station_mape=dict(station_mape),
+            calibration_passed=True,
+            reason_codes=(),
+            duration_seconds=1.0,
+        )
+
+    def _make_search_result(
+        self,
+        market: str,
+        trials: list,
+        stopped: bool = False,
+    ) -> Any:
+        from qingpu_insight.automl_search import AutoMLSearchResult
+        from qingpu_insight.automl_search import rank_trials, shortlist_trials
+        all_trials = tuple(trials)
+        ranked = rank_trials(all_trials)
+        shortlisted = shortlist_trials(ranked)
+        return AutoMLSearchResult(
+            market=market,
+            budget_name="quick",
+            budget_seconds=300,
+            max_trials=12,
+            seed=42,
+            elapsed_seconds=10.0,
+            stopped=stopped,
+            trials=all_trials,
+            ranked_trials=ranked,
+            shortlisted_trials=shortlisted,
+        )
+
+    def _patch_automl_pipeline(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        passing: bool = True,
+        n_trials: int = 1,
+        market: str = "resale",
+    ) -> None:
+        import qingpu_insight.model_training_service as mts
+
+        fit_spec = ModelFitSpec(
+            model_name="hist_gradient_boosting",
+            parameters={
+                "learning_rate": 0.1,
+                "max_iter": 200,
+                "max_leaf_nodes": 31,
+                "l2_regularization": 1.0,
+            },
+            recency_half_life_months=48 if market == "resale" else None,
+        )
+
+        dummy_metrics = {
+            "overall": {"mae": 45000, "mape": 8.5, "rmse": 55000, "r2": 0.72, "count": 200},
+            "station:A17": {"mae": 42000, "mape": 7.8, "rmse": 51000, "r2": 0.75, "count": 80},
+            "station:A18": {"mae": 43000, "mape": 8.0, "rmse": 52000, "r2": 0.74, "count": 70},
+            "station:A19": {"mae": 44000, "mape": 8.2, "rmse": 53000, "r2": 0.73, "count": 50},
+        }
+        station_mape = {"A17": 7.8, "A18": 8.0, "A19": 8.2}
+
+        trials = [
+            self._make_trial(i, fit_spec, dummy_metrics, 45000 + i * 1000, station_mape)
+            for i in range(n_trials)
+        ]
+        search_result = self._make_search_result(market, trials)
+
+        monkeypatch.setattr(mts, "run_automl_search", lambda *a, **kw: search_result)
+        monkeypatch.setattr(
+            mts, "run_feature_experiments",
+            lambda split: (
+                type("FE", (), {"name": "base", "feature_columns": list(BASE_FEATURE_COLUMNS), "selected_model": "ridge", "metrics": {}, "candidate_errors": {}})(),
+                type("FE", (), {"name": "enhanced", "feature_columns": list(BASE_FEATURE_COLUMNS), "selected_model": "ridge", "metrics": {}, "candidate_errors": {}})(),
+            ),
+        )
+
+        import joblib as _jl
+        from qingpu_insight.valuation import ValuationBundle
+
+        def _fake_train_artifact(transaction_type, selected, split, bundle, artifact_dir, **kw):
+            result_bundle = ValuationBundle(
+                transaction_type=transaction_type,
+                model_name=selected.name,
+                model_version="test-v1",
+                pipeline=selected.estimator,
+                interval_abs_residual_twd_per_ping=50000,
+                feature_ranges={},
+                feature_hard_ranges={},
+                feature_medians={},
+                global_importance=[],
+                reference_rows=split.calibration,
+                data_min_date=str(split.calibration["transaction_date"].min().date()),
+                data_max_date=str(split.calibration["transaction_date"].max().date()),
+                metrics={"overall": {"mae": 45000, "count": 100}},
+                feature_columns=tuple(bundle.feature_columns),
+            )
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            p = artifact_dir / f"{transaction_type}.joblib"
+            _jl.dump(result_bundle, p)
+            return p
+
+        monkeypatch.setattr(mts, "train_artifact", _fake_train_artifact)
+
+        def _fake_backtests(*a, **kw):
+            return [
+                {
+                    "cutoff_date": "2025-01-01",
+                    "train_max_date": "2024-06-01",
+                    "test_min_date": "2025-01-01",
+                    "source_max_date": "2025-12-31",
+                    "passed": passing,
+                    "stations_within_limit": passing,
+                    "candidate_metrics": {"overall": {"mae": 45000}},
+                    "baseline_metrics": {"overall": {"mae": 50000}},
+                }
+            ]
+
+        monkeypatch.setattr(mts, "run_annual_backtests", _fake_backtests)
+
+        class MockExp:
+            def __init__(self):
+                self.selected_name = "hist_gradient_boosting"
+                self.selection_results = [self._make_candidate_eval("hist_gradient_boosting", _FakeEstimator())]
+                self.selected_estimator = _FakeEstimator()
+                self.final_test_results = {
+                    "hist_gradient_boosting": self._make_candidate_eval("hist_gradient_boosting", _FakeEstimator()),
+                    "baseline": self._make_candidate_eval("baseline", _FakeEstimator()),
+                }
+                self.recommended = passing
+                self.reason_codes = ()
+                self.candidate_errors = {}
+
+            def _make_candidate_eval(self, name, estimator):
+                import pandas as pd
+                from qingpu_insight.model_training import CandidateEvaluation
+                return CandidateEvaluation(
+                    name=name,
+                    estimator=estimator,
+                    overall_mae=45000,
+                    station_mape=station_mape,
+                    metrics=pd.DataFrame(dummy_metrics).T,
+                )
+
+        monkeypatch.setattr(mts, "evaluate_fit_spec", lambda *a, **kw: MockExp())
+
+        if market == "resale":
+            fake_checks = {
+                "overall_mae_improved": passing,
+                "stations_within_limit": passing,
+                "a18_improved": passing,
+                "backtests_passed": passing,
+                "backtest_stations_within_limit": passing,
+                "candidate_fresh": passing,
+                "recommended": passing,
+            }
+            monkeypatch.setattr(
+                mts, "evaluate_release_checks", lambda *a, **kw: fake_checks
+            )
+
+    def test_automl_executes_search_and_returns_candidate(
+        self,
+        tmp_path: Path,
+        market_parquet: Path,
+        automl_plan: AutoMLTuningPlan,
+        automl_service_fixture: tuple,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import qingpu_insight.model_training_service as mts
+
+        service, jobs, registry, output_store = automl_service_fixture
+        self._patch_automl_pipeline(monkeypatch, passing=True, market="resale")
+
+        request = ModelTrainingRequest(("resale",), tuning_plan=automl_plan)
+        run = service.submit(request).run
+        jobs.start(run.run_id)
+        manifest = service.execute(run.run_id, request)
+
+        status = jobs.get(run.run_id)
+        if manifest is None:
+            import json
+            print(f"\nJob status: {status.status if status else 'N/A'}")
+            print(f"Job summary: {json.dumps(status.summary, indent=2, default=str) if status else 'N/A'}")
+
+        assert manifest is not None
+        assert manifest.automl is not None
+        assert manifest.automl.mode == "automl"
+        assert "resale" in manifest.automl.markets
+        resale_snap = manifest.automl.markets["resale"]
+        assert resale_snap.selected_trial_number is not None
+        assert resale_snap.completed_trials > 0
+        assert not resale_snap.stopped
+
+        assert len(manifest.results) == 1
+        result = manifest.results[0]
+        assert result.market == "resale"
+        assert result.artifact_sha256 is not None
+
+    def test_automl_stop_returns_none_and_skips_job(
+        self,
+        tmp_path: Path,
+        market_parquet: Path,
+        automl_plan: AutoMLTuningPlan,
+        automl_service_fixture: tuple,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import qingpu_insight.model_training_service as mts
+        import pandas as pd
+
+        service, jobs, registry, output_store = automl_service_fixture
+
+        # Build a raw search result with stopped=True
+        fit_spec = ModelFitSpec(
+            model_name="hist_gradient_boosting",
+            parameters={"learning_rate": 0.1, "max_iter": 200, "max_leaf_nodes": 31, "l2_regularization": 1.0},
+            recency_half_life_months=48,
+        )
+        trial = self._make_trial(0, fit_spec, {}, 45000, {})
+        search_result = self._make_search_result("resale", [trial], stopped=True)
+        monkeypatch.setattr(mts, "run_automl_search", lambda *a, **kw: search_result)
+
+        request = ModelTrainingRequest(("resale",), tuning_plan=automl_plan)
+        run = service.submit(request).run
+        jobs.start(run.run_id)
+
+        manifest = service.execute(run.run_id, request)
+
+        assert manifest is None
+        status = jobs.get(run.run_id)
+        assert status is not None
+        assert status.status == "skipped"
+
+    def test_automl_no_pass_returns_none(
+        self,
+        tmp_path: Path,
+        market_parquet: Path,
+        automl_plan: AutoMLTuningPlan,
+        automl_service_fixture: tuple,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import qingpu_insight.model_training_service as mts
+
+        service, jobs, registry, output_store = automl_service_fixture
+        self._patch_automl_pipeline(monkeypatch, passing=False, market="resale", n_trials=3)
+
+        request = ModelTrainingRequest(("resale",), tuning_plan=automl_plan)
+        run = service.submit(request).run
+        jobs.start(run.run_id)
+
+        manifest = service.execute(run.run_id, request)
+
+        assert manifest is None
+        status = jobs.get(run.run_id)
+        assert status is not None
+        assert status.status == "succeeded"
+        assert not status.summary.get("candidate_available", True)
+
+    def test_automl_mixed_market_partial_pass(
+        self,
+        tmp_path: Path,
+        market_parquet: Path,
+        automl_plan: AutoMLTuningPlan,
+        automl_service_fixture: tuple,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import qingpu_insight.model_training_service as mts
+        import joblib as _jl
+        from qingpu_insight.valuation import ValuationBundle
+
+        service, jobs, registry, output_store = automl_service_fixture
+
+        fit_spec = ModelFitSpec(
+            model_name="hist_gradient_boosting",
+            parameters={"learning_rate": 0.1, "max_iter": 200, "max_leaf_nodes": 31, "l2_regularization": 1.0},
+            recency_half_life_months=48,
+        )
+        dummy_metrics = {
+            "overall": {"mae": 45000, "mape": 8.5, "rmse": 55000, "r2": 0.72, "count": 200},
+            "station:A17": {"mae": 42000, "mape": 7.8, "rmse": 51000, "r2": 0.75, "count": 80},
+        }
+        station_mape = {"A17": 7.8, "A18": 8.0, "A19": 8.2}
+
+        passing_trial = self._make_trial(0, fit_spec, dummy_metrics, 45000, station_mape)
+        failing_trial = self._make_trial(0, fit_spec, dummy_metrics, 45000, station_mape)
+        passing_result = self._make_search_result("resale", [passing_trial])
+        failing_result = self._make_search_result("presale", [failing_trial])
+
+        call_count = [0]
+
+        def side_effect_search(split, plan, feature_columns, use_recency_weights,
+                                baseline_months, should_stop, on_progress, **kw):
+            call_count[0] += 1
+            return passing_result if call_count[0] == 1 else failing_result
+
+        monkeypatch.setattr(mts, "run_automl_search", side_effect_search)
+        monkeypatch.setattr(
+            mts, "run_feature_experiments",
+            lambda split: (
+                type("FE", (), {"name": "base", "feature_columns": list(BASE_FEATURE_COLUMNS), "selected_model": "ridge", "metrics": {}, "candidate_errors": {}})(),
+                type("FE", (), {"name": "enhanced", "feature_columns": list(BASE_FEATURE_COLUMNS), "selected_model": "ridge", "metrics": {}, "candidate_errors": {}})(),
+            ),
+        )
+
+        def _fake_train_artifact(transaction_type, selected, split, bundle, artifact_dir, **kw):
+            result_bundle = ValuationBundle(
+                transaction_type=transaction_type,
+                model_name=selected.name,
+                model_version="test-v1",
+                pipeline=selected.estimator,
+                interval_abs_residual_twd_per_ping=50000,
+                feature_ranges={},
+                feature_hard_ranges={},
+                feature_medians={},
+                global_importance=[],
+                reference_rows=split.calibration,
+                data_min_date=str(split.calibration["transaction_date"].min().date()),
+                data_max_date=str(split.calibration["transaction_date"].max().date()),
+                metrics={"overall": {"mae": 45000, "count": 100}},
+                feature_columns=tuple(bundle.feature_columns),
+            )
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            p = artifact_dir / f"{transaction_type}.joblib"
+            _jl.dump(result_bundle, p)
+            return p
+
+        monkeypatch.setattr(mts, "train_artifact", _fake_train_artifact)
+        monkeypatch.setattr(mts, "run_annual_backtests", lambda *a, **kw: [])
+
+        from qingpu_insight.model_training import CandidateEvaluation
+        import pandas as pd
+        import numpy as np
+
+        passing_checks = {
+            "overall_mae_improved": True,
+            "stations_within_limit": True,
+            "a18_improved": True,
+            "backtests_passed": True,
+            "backtest_stations_within_limit": True,
+            "candidate_fresh": True,
+            "recommended": True,
+        }
+        monkeypatch.setattr(mts, "evaluate_release_checks", lambda *a, **kw: passing_checks)
+
+        def _make_exp(recommended=True):
+            est = _FakeEstimator()
+            metrics_df = pd.DataFrame(dummy_metrics).T
+            ce = CandidateEvaluation(
+                name="hist_gradient_boosting",
+                estimator=est,
+                overall_mae=45000,
+                station_mape=station_mape,
+                metrics=metrics_df,
+            )
+            exp = type("MockExp", (), {
+                "selected_name": "hist_gradient_boosting",
+                "selection_results": [ce],
+                "selected_estimator": est,
+                "final_test_results": {
+                    "hist_gradient_boosting": ce,
+                    "baseline": ce,
+                },
+                "recommended": recommended,
+                "reason_codes": (),
+                "candidate_errors": {},
+            })()
+            return exp
+
+        exp_call_count = [0]
+
+        def side_effect_evaluate(*a, **kw):
+            exp_call_count[0] += 1
+            return _make_exp(recommended=(exp_call_count[0] == 1))
+
+        monkeypatch.setattr(mts, "evaluate_fit_spec", side_effect_evaluate)
+
+        request = ModelTrainingRequest(("resale", "presale"), tuning_plan=automl_plan)
+        run = service.submit(request).run
+        jobs.start(run.run_id)
+
+        manifest = service.execute(run.run_id, request)
+
+        assert manifest is not None
+        assert len(manifest.results) == 1
+        assert manifest.results[0].market == "resale"
+
+    def test_guided_path_unchanged(
+        self, tmp_path: Path, market_parquet: Path
+    ) -> None:
+        service, jobs = service_fixture(tmp_path, input_path=market_parquet)
+        run = service.submit(ModelTrainingRequest(("resale",))).run
+        jobs.start(run.run_id)
+        manifest = service.execute(run.run_id, ModelTrainingRequest(("resale",)))
+        result = manifest.results[0]
+        assert manifest.schema_version == 3
+        assert result.selected_profile is not None
+        assert len(result.profile_results) == 3
+
+    def test_automl_presale_returns_candidate(
+        self,
+        tmp_path: Path,
+        market_parquet: Path,
+        automl_plan: AutoMLTuningPlan,
+        automl_service_fixture: tuple,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import qingpu_insight.model_training_service as mts
+
+        service, jobs, registry, output_store = automl_service_fixture
+        self._patch_automl_pipeline(monkeypatch, passing=True, market="presale")
+
+        request = ModelTrainingRequest(("presale",), tuning_plan=automl_plan)
+        run = service.submit(request).run
+        jobs.start(run.run_id)
+        manifest = service.execute(run.run_id, request)
+
+        assert manifest is not None
+        assert manifest.automl is not None
+        assert "presale" in manifest.automl.markets
+        snap = manifest.automl.markets["presale"]
+        assert snap.selected_trial_number is not None
+        assert not snap.stopped
+
+        assert len(manifest.results) == 1
+        assert manifest.results[0].market == "presale"

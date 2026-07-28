@@ -42,6 +42,7 @@ def write_evaluation(
     backtests: list[dict[str, object]] | None = None,
     release_checks: dict[str, bool] | None = None,
     reason_codes: list[str] | None = None,
+    automl_info: dict[str, object] | None = None,
 ) -> Path:
     leakage = leakage_audit(split)
     selected_name = getattr(
@@ -120,8 +121,17 @@ def write_evaluation(
         report["parking_policy"] = {
             "version": int(policy.version),
             "minimum_type_samples": int(policy.minimum_type_samples),
-            "by_type": {k: {"price_twd": int(v.price_twd), "sample_size": int(v.sample_size)} for k, v in policy.by_type.items()},
-            "market_fallback": {"price_twd": int(policy.market_fallback.price_twd), "sample_size": int(policy.market_fallback.sample_size)} if policy.market_fallback else None,
+            "by_type": {
+                k: {"price_twd": int(v.price_twd), "sample_size": int(v.sample_size)}
+                for k, v in policy.by_type.items()
+            },
+            "market_fallback": (
+                {
+                    "price_twd": int(policy.market_fallback.price_twd),
+                    "sample_size": int(policy.market_fallback.sample_size),
+                }
+                if policy.market_fallback else None
+            ),
         }
     if diagnostics is not None:
         report["diagnostics"] = diagnostics
@@ -162,6 +172,9 @@ def write_evaluation(
                 "half_life_months": selected_profile.recency_half_life_months,
             }
 
+    if automl_info is not None:
+        report["automl_info"] = automl_info
+
     report_dir.mkdir(parents=True, exist_ok=True)
     path = report_dir / f"{bundle.transaction_type}-evaluation.json"
     path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -178,6 +191,7 @@ def write_model_card(
     backtests: list[dict[str, object]] | None = None,
     release_checks: dict[str, bool] | None = None,
     reason_codes: list[str] | None = None,
+    automl_info: dict[str, object] | None = None,
 ) -> Path:
     lines = [
         f"# {bundle.transaction_type} 估價模型卡",
@@ -195,7 +209,10 @@ def write_model_card(
         for pt, stat in _policy.by_type.items():
             lines.append(f"- {pt}：{stat.price_twd:,} 元（樣本數 {stat.sample_size}）")
         if _policy.market_fallback:
-            lines.append(f"- 市場中位數：{_policy.market_fallback.price_twd:,} 元（樣本數 {_policy.market_fallback.sample_size}）")
+            lines.append(
+                f"- 市場中位數：{_policy.market_fallback.price_twd:,} 元"
+                f"（樣本數 {_policy.market_fallback.sample_size}）"
+            )
         lines.append("")
 
     lines.extend([
@@ -314,6 +331,29 @@ def write_model_card(
         lines.append(
             f"- 近期交易加權半衰期：{selected_profile.recency_half_life_months} 個月"
         )
+        lines.append("")
+
+    if automl_info is not None:
+        lines.append("## AutoML 搜尋")
+        budget_name = automl_info.get("budget_name", "unknown")
+        completed_trials = automl_info.get("completed_trials", 0)
+        selected_trial = automl_info.get("selected_trial_number")
+        fit_spec = automl_info.get("fit_spec")
+        blockers = automl_info.get("release_blockers", [])
+        lines.append(f"- 預算方案：{budget_name}")
+        lines.append(f"- 完成試驗數：{completed_trials} 次")
+        if selected_trial is not None:
+            lines.append(f"- 入選試驗編號：{selected_trial}")
+        else:
+            lines.append("- 入選試驗：無")
+        if fit_spec:
+            model_name = fit_spec.get("model_name", "unknown")
+            params = fit_spec.get("parameters", {})
+            lines.append(f"- 入選模型：{model_name}")
+            for k, v in params.items():
+                lines.append(f"  - {k}: {v}")
+        if blockers:
+            lines.append(f"- 釋出阻斷：{', '.join(blockers)}")
         lines.append("")
 
     lines.extend(

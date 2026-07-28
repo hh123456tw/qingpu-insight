@@ -10,6 +10,9 @@ from uuid import UUID
 import joblib
 import pandas as pd
 
+from qingpu_insight.automl_control import AutoMLControlRegistry
+from qingpu_insight.automl_outputs import AutoMLRunOutputStore
+from qingpu_insight.automl_search import run_automl_search
 from qingpu_insight.job_executor import LocalJobExecutor
 from qingpu_insight.jobs import JobService, JobSubmission
 from qingpu_insight.model_analysis import (
@@ -20,6 +23,9 @@ from qingpu_insight.model_analysis import (
     run_feature_experiments,
 )
 from qingpu_insight.model_artifacts import (
+    AutoMLMarketSearchSnapshot,
+    AutoMLRunSnapshot,
+    AutoMLTrialSnapshot,
     CandidateArtifactStore,
     DataSnapshot,
     MarketTrainingResult,
@@ -34,13 +40,18 @@ from qingpu_insight.model_features import (
 )
 from qingpu_insight.model_training import (
     BaselineEvaluationError,
+    ModelFitSpec,
     ProfileEvaluationError,
-    TunedModelExperiment,
+    evaluate_fit_spec,
     leakage_audit,
     run_tuned_model_experiment,
     split_by_time,
 )
-from qingpu_insight.model_tuning import TrainingPlan, parse_tuning_plan
+from qingpu_insight.model_tuning import (
+    AutoMLTuningPlan,
+    TrainingPlan,
+    parse_tuning_plan,
+)
 from qingpu_insight.valuation import ValuationBundle, train_artifact
 from qingpu_insight.valuation_reporting import (
     compute_interval_summary,
@@ -118,7 +129,7 @@ def build_data_snapshot(input_path: Path, frame: pd.DataFrame) -> DataSnapshot:
 def market_result_from_files(
     market: Literal["resale", "presale"],
     bundle: ValuationBundle,
-    experiment: TunedModelExperiment,
+    experiment: Any,
     artifact_path: Path,
     evaluation_path: Path,
     card_path: Path,
@@ -134,15 +145,17 @@ def market_result_from_files(
     test_coverage: float | None = None,
     average_interval_width_twd_per_ping: float | None = None,
     parking_policy: dict[str, object] | None = None,
+    model_name: str | None = None,
 ) -> MarketTrainingResult:
     selection_metrics: dict[str, dict[str, object]] = {}
-    for profile_eval in experiment.profile_results:
-        for candidate in profile_eval.candidates:
-            selection_metrics[
-                f"{profile_eval.profile.name}:{candidate.evaluation.name}"
-            ] = (
-                candidate.evaluation.metrics.to_dict(orient="index")
-            )
+    if hasattr(experiment, "profile_results"):
+        for profile_eval in experiment.profile_results:
+            for candidate in profile_eval.candidates:
+                selection_metrics[
+                    f"{profile_eval.profile.name}:{candidate.evaluation.name}"
+                ] = (
+                    candidate.evaluation.metrics.to_dict(orient="index")
+                )
 
     final_test_metrics: dict[str, dict[str, object]] = {}
     for name, c in experiment.final_test_results.items():
@@ -157,9 +170,15 @@ def market_result_from_files(
         report_files[report_type] = rel
         report_sha256[report_type] = sha256_file(stage / rel)
 
+    selected_model_name = (
+        model_name
+        or getattr(experiment, "selected_model", None)
+        or getattr(experiment, "selected_name", bundle.model_name)
+    )
+
     return MarketTrainingResult(
         market=market,
-        selected_model=experiment.selected_model,
+        selected_model=selected_model_name,
         recommended=(
             release_checks.get("recommended", experiment.recommended)
             if release_checks
@@ -263,12 +282,571 @@ class ModelTrainingService:
         input_path: Path,
         source_version_provider: SourceVersionProvider,
         clock: Any | None = None,
+        automl_registry: AutoMLControlRegistry | None = None,
+        automl_output_store: AutoMLRunOutputStore | None = None,
     ) -> None:
         self._jobs = jobs
         self._store = store
         self._input_path = input_path
         self._source_version_provider = source_version_provider
         self._clock = clock or (lambda: datetime.now())
+        self._automl_registry = automl_registry or AutoMLControlRegistry()
+        self._automl_output_store = automl_output_store
+
+    def _finalize_candidate(
+        self,
+        run_id: str,
+        market: str,
+        stage: Path,
+        locked_eval: Any,
+        model_name: str,
+        split: Any,
+        experiment: Any,
+        seed_bundle: ValuationBundle,
+        enhanced_features: tuple[str, ...],
+        model_frame: pd.DataFrame,
+        is_resale: bool,
+        recency_half_life_months: int,
+        diagnostics: dict[str, object] | None = None,
+        analysis_experiments: list[dict[str, object]] | None = None,
+        selected_profile: Any | None = None,
+        profile_results: list[ProfileTrainingResult] | None = None,
+        automl_info: dict[str, object] | None = None,
+        fit_spec: ModelFitSpec | None = None,
+        feature_contract_version: int = 0,
+    ) -> MarketTrainingResult:
+        diagnostics = diagnostics or {}
+        analysis_experiments = analysis_experiments or []
+
+        try:
+            artifact_path = train_artifact(
+                market,
+                locked_eval,
+                split,
+                seed_bundle,
+                stage,
+                feature_columns=enhanced_features,
+                training_frame=model_frame if is_resale else None,
+                use_recency_weights=is_resale,
+                recency_half_life_months=recency_half_life_months,
+            )
+            bundle: ValuationBundle = joblib.load(artifact_path)
+            parking_policy_dict = None
+            if bundle.parking_price_policy is not None:
+                pp = bundle.parking_price_policy
+                parking_policy_dict = {
+                    "version": pp.version,
+                    "minimum_type_samples": pp.minimum_type_samples,
+                    "by_type": {
+                        k: {
+                            "price_twd": int(v.price_twd),
+                            "sample_size": int(v.sample_size),
+                        }
+                        for k, v in pp.by_type.items()
+                    },
+                    "market_fallback": (
+                        {
+                            "price_twd": int(pp.market_fallback.price_twd),
+                            "sample_size": int(pp.market_fallback.sample_size),
+                        }
+                        if pp.market_fallback else None
+                    ),
+                }
+        except Exception as exc:
+            raise ModelTrainingError("candidate_write_failed", str(exc)) from exc
+
+        serialized_backtests: list[dict[str, object]] = []
+        release_checks: dict[str, bool] = {}
+        if is_resale:
+            try:
+                raw_backtests = run_annual_backtests(
+                    model_frame,
+                    model_name,
+                    enhanced_features,
+                    fit_spec=fit_spec,
+                )
+                serialized_backtests = []
+                for bt in raw_backtests:
+                    bt_copy = dict(bt)
+                    for key in (
+                        "cutoff_date",
+                        "train_max_date",
+                        "test_min_date",
+                        "source_max_date",
+                    ):
+                        if key in bt_copy and isinstance(bt_copy[key], pd.Timestamp):
+                            bt_copy[key] = str(bt_copy[key].date())
+                    serialized_backtests.append(bt_copy)
+
+                baseline_metrics = experiment.final_test_results[
+                    "baseline"
+                ].metrics.to_dict(orient="index")
+                candidate_metrics = experiment.final_test_results[
+                    model_name
+                ].metrics.to_dict(orient="index")
+                data_max_ts = pd.Timestamp(bundle.data_max_date)
+                latest_official_ts = pd.Timestamp(model_frame["transaction_date"].max())
+                release_checks = evaluate_release_checks(
+                    candidate_metrics,
+                    baseline_metrics,
+                    serialized_backtests,
+                    data_max_ts,
+                    latest_official_ts,
+                )
+            except Exception as exc:
+                raise ModelTrainingError("candidate_write_failed", str(exc)) from exc
+
+        self._jobs.progress(
+            run_id,
+            {
+                "stage": f"evaluating_{market}",
+                "completed_markets": [],
+            },
+        )
+
+        try:
+            report_dir = stage / "reports"
+            evaluation_path = write_evaluation(
+                bundle,
+                experiment,
+                split,
+                report_dir,
+                selected_profile=selected_profile,
+                diagnostics=diagnostics if is_resale else None,
+                feature_experiments=(analysis_experiments if is_resale else None),
+                backtests=(serialized_backtests if is_resale else None),
+                release_checks=(release_checks if is_resale else None),
+                reason_codes=(release_reason_codes(release_checks) if is_resale else None),
+                automl_info=automl_info,
+            )
+            card_path = write_model_card(
+                bundle,
+                experiment,
+                leakage_audit(split),
+                report_dir,
+                selected_profile=selected_profile,
+                feature_experiments=(analysis_experiments if is_resale else None),
+                backtests=(serialized_backtests if is_resale else None),
+                release_checks=(release_checks if is_resale else None),
+                reason_codes=(release_reason_codes(release_checks) if is_resale else None),
+                automl_info=automl_info,
+            )
+            interval_summary = compute_interval_summary(
+                bundle,
+                experiment.final_test_results[model_name],
+                split,
+            )
+        except Exception as exc:
+            raise ModelTrainingError("candidate_write_failed", str(exc)) from exc
+
+        try:
+            return market_result_from_files(
+                market=market,
+                bundle=bundle,
+                experiment=experiment,
+                artifact_path=artifact_path,
+                evaluation_path=evaluation_path,
+                card_path=card_path,
+                stage=stage,
+                selected_profile=(
+                    selected_profile.name if selected_profile is not None else None
+                ),
+                profile_results=profile_results or [],
+                diagnostics=diagnostics if is_resale else None,
+                feature_experiments=(analysis_experiments if is_resale else None),
+                backtests=(serialized_backtests if is_resale else None),
+                release_checks=(release_checks if is_resale else None),
+                feature_columns=list(enhanced_features),
+                feature_contract_version=feature_contract_version,
+                test_coverage=interval_summary["test_coverage"],
+                average_interval_width_twd_per_ping=(
+                    interval_summary["average_interval_width_twd_per_ping"]
+                ),
+                parking_policy=parking_policy_dict,
+                model_name=model_name,
+            )
+        except Exception as exc:
+            raise ModelTrainingError("candidate_validation_failed", str(exc)) from exc
+
+    def _execute_guided_market(
+        self,
+        run_id: str,
+        market: str,
+        frame: pd.DataFrame,
+        stage: Path,
+        plan: TrainingPlan,
+    ) -> MarketTrainingResult:
+        is_resale = market == "resale"
+        model_frame = build_model_frame(frame, market)
+        split = split_by_time(model_frame)
+
+        diagnostics: dict[str, object] = {}
+        analysis_experiments: list[dict[str, object]] = []
+        enhanced_features: tuple[str, ...] = BASE_FEATURE_COLUMNS
+        feature_contract_ver = 0
+
+        try:
+            if is_resale:
+                exp_list = run_feature_experiments(split)
+                analysis_experiments = [
+                    {
+                        "name": fe.name,
+                        "feature_columns": list(fe.feature_columns),
+                        "selected_model": fe.selected_model,
+                        "metrics": fe.metrics,
+                        "candidate_errors": fe.candidate_errors,
+                    }
+                    for fe in exp_list
+                ]
+                enhanced_features = exp_list[1].feature_columns
+                feature_contract_ver = 2
+
+            experiment = run_tuned_model_experiment(
+                split,
+                profiles=plan.profiles,
+                feature_columns=(
+                    enhanced_features if is_resale else BASE_FEATURE_COLUMNS
+                ),
+                use_recency_weights=is_resale,
+                baseline_months=12 if is_resale else 24,
+                on_profile_start=lambda pn, _m=market: self._jobs.progress(
+                    run_id,
+                    {
+                        "stage": f"training_{_m}",
+                        "profile": pn,
+                        "completed_markets": [],
+                    },
+                ),
+            )
+        except ProfileEvaluationError as exc:
+            raise ModelTrainingError(
+                "profile_failed",
+                f"{market} 設定檔 {exc.profile_name} 無法完成",
+            ) from exc
+        except BaselineEvaluationError as exc:
+            raise ModelTrainingError("baseline_failed", str(exc)) from exc
+
+        locked = experiment.selected_evaluation
+        winning_profile = next(
+            p for p in plan.profiles if p.name == experiment.selected_profile
+        )
+
+        if is_resale:
+            diagnostics = build_resale_diagnostics(
+                model_frame,
+                split,
+                candidate=experiment.final_test_results[
+                    experiment.selected_model
+                ],
+                feature_columns=enhanced_features,
+            )
+
+        selected_profile_obj = winning_profile
+        profile_results = [
+            ProfileTrainingResult(
+                profile_name=pe.profile.name,
+                parameters={
+                    "hgb_learning_rate": pe.profile.hgb_learning_rate,
+                    "hgb_max_iter": pe.profile.hgb_max_iter,
+                    "rf_n_estimators": pe.profile.rf_n_estimators,
+                    "recency_half_life_months": pe.profile.recency_half_life_months,
+                },
+                selection_metrics={
+                    c.model_name: c.evaluation.metrics.to_dict(orient="index")
+                    for c in pe.candidates
+                },
+                candidate_errors=pe.candidate_errors,
+            )
+            for pe in experiment.profile_results
+        ]
+
+        seed_bundle = ValuationBundle(
+            transaction_type=market,
+            model_name="",
+            model_version="",
+            pipeline=None,
+            interval_abs_residual_twd_per_ping=0,
+            feature_ranges={},
+            feature_hard_ranges={},
+            feature_medians={},
+            global_importance=[],
+            reference_rows=pd.DataFrame(),
+            data_min_date="",
+            data_max_date=str(
+                (model_frame if is_resale else split.train)["transaction_date"].max().date()
+            ),
+            metrics={},
+            feature_columns=enhanced_features,
+        )
+
+        return self._finalize_candidate(
+            run_id=run_id,
+            market=market,
+            stage=stage,
+            locked_eval=locked,
+            model_name=experiment.selected_model,
+            split=split,
+            experiment=experiment,
+            seed_bundle=seed_bundle,
+            enhanced_features=enhanced_features,
+            model_frame=model_frame,
+            is_resale=is_resale,
+            recency_half_life_months=(
+                winning_profile.recency_half_life_months or 48
+            ),
+            diagnostics=diagnostics,
+            analysis_experiments=analysis_experiments,
+            selected_profile=selected_profile_obj,
+            profile_results=profile_results,
+            feature_contract_version=feature_contract_ver,
+        )
+
+    def _execute_automl_market(
+        self,
+        run_id: str,
+        market: str,
+        frame: pd.DataFrame,
+        stage: Path,
+        plan: AutoMLTuningPlan,
+    ) -> tuple[MarketTrainingResult | None, AutoMLMarketSearchSnapshot]:
+        is_resale = market == "resale"
+        model_frame = build_model_frame(frame, market)
+        split = split_by_time(model_frame)
+
+        diagnostics: dict[str, object] = {}
+        analysis_experiments: list[dict[str, object]] = []
+        enhanced_features: tuple[str, ...] = BASE_FEATURE_COLUMNS
+
+        if is_resale:
+            exp_list = run_feature_experiments(split)
+            analysis_experiments = [
+                {
+                    "name": fe.name,
+                    "feature_columns": list(fe.feature_columns),
+                    "selected_model": fe.selected_model,
+                    "metrics": fe.metrics,
+                    "candidate_errors": fe.candidate_errors,
+                }
+                for fe in exp_list
+            ]
+            enhanced_features = exp_list[1].feature_columns
+
+        feature_columns = (
+            list(enhanced_features) if is_resale else list(BASE_FEATURE_COLUMNS)
+        )
+
+        self._automl_registry.register(run_id)
+        try:
+            self._jobs.progress(
+                run_id,
+                {
+                    "stage": f"automl_search_{market}",
+                    "market": market,
+                },
+            )
+
+            search_result = run_automl_search(
+                split,
+                plan,
+                feature_columns,
+                use_recency_weights=is_resale,
+                baseline_months=12 if is_resale else 24,
+                should_stop=lambda: self._automl_registry.should_stop(run_id),
+                on_progress=lambda p: self._jobs.progress(
+                    run_id,
+                    {
+                        "stage": f"automl_trial_{market}",
+                        "market": market,
+                        **p,
+                    },
+                ),
+            )
+
+            if self._automl_output_store is not None:
+                snapshot_dict = {
+                    "budget_name": search_result.budget_name,
+                    "budget_seconds": search_result.budget_seconds,
+                    "max_trials": search_result.max_trials,
+                    "completed_trials": search_result.completed_trials,
+                    "failed_trials": search_result.failed_trials,
+                    "seed": search_result.seed,
+                    "stopped": search_result.stopped,
+                    "elapsed_seconds": search_result.elapsed_seconds,
+                    "trials": [t.snapshot() for t in search_result.trials],
+                    "ranked_trials": [t.snapshot() for t in search_result.ranked_trials],
+                    "shortlisted_trials": [t.snapshot() for t in search_result.shortlisted_trials],
+                }
+                self._automl_output_store.write(run_id, market, snapshot_dict)
+
+            if search_result.stopped or self._automl_registry.should_stop(run_id):
+                market_snapshot = self._build_market_snapshot(
+                    search_result, [], None, [], stopped=True,
+                    trial_file="", trial_sha256="",
+                )
+                return (None, market_snapshot)
+
+            shortlisted = list(search_result.shortlisted_trials)
+            self._jobs.progress(
+                run_id,
+                {
+                    "stage": f"validating_shortlist_{market}",
+                    "market": market,
+                    "shortlist_count": len(shortlisted),
+                    "shortlisted_trial_numbers": [t.trial_number for t in shortlisted],
+                },
+            )
+
+            for trial in shortlisted:
+                if trial.fit_spec is None:
+                    continue
+
+                trial_experiment = evaluate_fit_spec(
+                    split, trial.fit_spec, feature_columns
+                )
+                locked_eval = trial_experiment.selection_results[0]
+                model_name = trial_experiment.selected_name
+
+                seed_bundle = ValuationBundle(
+                    transaction_type=market,
+                    model_name="",
+                    model_version="",
+                    pipeline=None,
+                    interval_abs_residual_twd_per_ping=0,
+                    feature_ranges={},
+                    feature_hard_ranges={},
+                    feature_medians={},
+                    global_importance=[],
+                    reference_rows=pd.DataFrame(),
+                    data_min_date="",
+                    data_max_date=str(
+                        (model_frame if is_resale else split.train)["transaction_date"].max().date()
+                    ),
+                    metrics={},
+                    feature_columns=tuple(feature_columns),
+                )
+
+                recency_half_life = (
+                    trial.fit_spec.recency_half_life_months or 48
+                )
+
+                try:
+                    result = self._finalize_candidate(
+                        run_id=run_id,
+                        market=market,
+                        stage=stage,
+                        locked_eval=locked_eval,
+                        model_name=model_name,
+                        split=split,
+                        experiment=trial_experiment,
+                        seed_bundle=seed_bundle,
+                        enhanced_features=tuple(feature_columns),
+                        model_frame=model_frame,
+                        is_resale=is_resale,
+                        recency_half_life_months=recency_half_life,
+                        diagnostics=diagnostics,
+                        analysis_experiments=analysis_experiments,
+                        automl_info={
+                            "mode": "automl",
+                            "budget_name": search_result.budget_name,
+                            "budget_seconds": search_result.budget_seconds,
+                            "completed_trials": search_result.completed_trials,
+                            "selected_trial_number": trial.trial_number,
+                            "fit_spec": trial.fit_spec.snapshot(),
+                            "release_blockers": [],
+                        },
+                        fit_spec=trial.fit_spec,
+                    )
+
+                    if not result.recommended:
+                        continue
+
+                    trial_file_rel, trial_file_sha = "", ""
+                    if self._automl_output_store is not None:
+                        try:
+                            trial_file_rel, trial_file_sha = (
+                                self._automl_output_store.copy_trials_to(
+                                    run_id, market, str(stage)
+                                )
+                            )
+                        except (FileNotFoundError, ValueError):
+                            pass
+
+                    market_snapshot = self._build_market_snapshot(
+                        search_result, shortlisted, trial.trial_number, [], stopped=False,
+                        trial_file=trial_file_rel, trial_sha256=trial_file_sha,
+                    )
+                    return (result, market_snapshot)
+                except Exception:
+                    continue
+
+            trial_file_rel, trial_file_sha = "", ""
+            if self._automl_output_store is not None:
+                try:
+                    trial_file_rel, trial_file_sha = (
+                        self._automl_output_store.copy_trials_to(
+                            run_id, market, str(stage)
+                        )
+                    )
+                except (FileNotFoundError, ValueError):
+                    pass
+
+            market_snapshot = self._build_market_snapshot(
+                search_result, shortlisted, None, [], stopped=False,
+                trial_file=trial_file_rel, trial_sha256=trial_file_sha,
+            )
+            return (None, market_snapshot)
+        finally:
+            self._automl_registry.unregister(run_id)
+
+    def _build_market_snapshot(
+        self,
+        search_result: Any,
+        shortlisted: list[Any],
+        selected_trial_number: int | None,
+        release_blockers: list[str],
+        stopped: bool,
+        trial_file: str,
+        trial_sha256: str,
+    ) -> AutoMLMarketSearchSnapshot:
+        top_trials = [
+            AutoMLTrialSnapshot(
+                trial_number=t.trial_number,
+                state=t.state,
+                fit_spec=t.fit_spec.snapshot() if t.fit_spec else None,
+                metrics=t.metrics,
+                overall_mae=t.overall_mae,
+                overall_mape=t.overall_mape,
+                station_mape=dict(t.station_mape),
+                calibration_passed=t.calibration_passed,
+                reason_codes=list(t.reason_codes),
+                duration_seconds=t.duration_seconds,
+            )
+            for t in (
+                search_result.ranked_trials[:10]
+                if hasattr(search_result, 'ranked_trials') else []
+            )
+        ]
+
+        file_sha = (
+            trial_sha256 if trial_sha256
+            else "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        )
+
+        return AutoMLMarketSearchSnapshot(
+            budget_name=search_result.budget_name,
+            budget_seconds=search_result.budget_seconds,
+            max_trials=search_result.max_trials,
+            completed_trials=search_result.completed_trials,
+            failed_trials=search_result.failed_trials,
+            seed=search_result.seed,
+            stopped=stopped or search_result.stopped,
+            top_trials=top_trials,
+            trial_file=trial_file,
+            trial_sha256=file_sha,
+            shortlisted_trial_numbers=[t.trial_number for t in shortlisted],
+            selected_trial_number=selected_trial_number,
+            release_blockers=release_blockers,
+        )
 
     def start_run(self, run_id: str) -> Any:
         return self._jobs.start(run_id)
@@ -292,9 +870,8 @@ class ModelTrainingService:
             lambda: self.execute(run_id, request),
         )
 
-    def execute(self, run_id: str, request: ModelTrainingRequest) -> TrainingManifest:
+    def execute(self, run_id: str, request: ModelTrainingRequest) -> TrainingManifest | None:
         markets = list(request.markets)
-        completed: list[str] = []
 
         self._jobs.progress(run_id, {"stage": "validating_data", "markets": markets})
 
@@ -318,297 +895,18 @@ class ModelTrainingService:
         source_version = self._source_version_provider.read()
         stage = self._store.begin(run_id)
 
+        is_automl = isinstance(request.tuning_plan, AutoMLTuningPlan)
+        plan = request.tuning_plan
+
         try:
-            results: list[MarketTrainingResult] = []
-            for market in markets:
-                is_resale = market == "resale"
-                model_frame = build_model_frame(frame, market)
-                split = split_by_time(model_frame)
-
-                diagnostics: dict[str, object] = {}
-                analysis_experiments: list[dict[str, object]] = []
-                serialized_backtests: list[dict[str, object]] = []
-                release_checks: dict[str, bool] = {}
-                enhanced_features: tuple[str, ...] = BASE_FEATURE_COLUMNS
-                feature_contract_ver = 0
-
-                try:
-                    if is_resale:
-                        exp_list = run_feature_experiments(split)
-                        analysis_experiments = [
-                            {
-                                "name": fe.name,
-                                "feature_columns": list(fe.feature_columns),
-                                "selected_model": fe.selected_model,
-                                "metrics": fe.metrics,
-                                "candidate_errors": fe.candidate_errors,
-                            }
-                            for fe in exp_list
-                        ]
-                        enhanced_features = exp_list[1].feature_columns
-                        feature_contract_ver = 2
-
-                    experiment = run_tuned_model_experiment(
-                        split,
-                        profiles=request.tuning_plan.profiles,
-                        feature_columns=(
-                            enhanced_features if is_resale else BASE_FEATURE_COLUMNS
-                        ),
-                        use_recency_weights=is_resale,
-                        baseline_months=12 if is_resale else 24,
-                        on_profile_start=lambda pn, _m=market: self._jobs.progress(
-                            run_id,
-                            {
-                                "stage": f"training_{_m}",
-                                "profile": pn,
-                                "completed_markets": list(completed),
-                            },
-                        ),
-                    )
-                except ProfileEvaluationError as exc:
-                    raise ModelTrainingError(
-                        "profile_failed",
-                        f"{market} 設定檔 {exc.profile_name} 無法完成",
-                    ) from exc
-                except BaselineEvaluationError as exc:
-                    raise ModelTrainingError("baseline_failed", str(exc)) from exc
-                locked = experiment.selected_evaluation
-                winning_profile = next(
-                    p
-                    for p in request.tuning_plan.profiles
-                    if p.name == experiment.selected_profile
+            if is_automl:
+                return self._execute_automl(
+                    run_id, frame, stage, plan, markets, snapshot, source_version,
                 )
-                if is_resale:
-                    diagnostics = build_resale_diagnostics(
-                        model_frame,
-                        split,
-                        candidate=experiment.final_test_results[
-                            experiment.selected_model
-                        ],
-                        feature_columns=enhanced_features,
-                    )
-                seed_bundle = ValuationBundle(
-                    transaction_type=market,
-                    model_name="",
-                    model_version="",
-                    pipeline=None,
-                    interval_abs_residual_twd_per_ping=0,
-                    feature_ranges={},
-                    feature_hard_ranges={},
-                    feature_medians={},
-                    global_importance=[],
-                    reference_rows=pd.DataFrame(),
-                    data_min_date="",
-                    data_max_date=str(
-                        (model_frame if is_resale else split.train)["transaction_date"].max().date()
-                    ),
-                    metrics={},
-                    feature_columns=enhanced_features,
+            else:
+                return self._execute_guided(
+                    run_id, frame, stage, plan, markets, snapshot, source_version,
                 )
-                try:
-                    artifact_path = train_artifact(
-                        market,
-                        locked,
-                        split,
-                        seed_bundle,
-                        stage,
-                        feature_columns=enhanced_features,
-                        training_frame=model_frame if is_resale else None,
-                        use_recency_weights=is_resale,
-                        recency_half_life_months=(
-                            winning_profile.recency_half_life_months or 48
-                        ),
-                    )
-                    bundle: ValuationBundle = joblib.load(artifact_path)
-                    parking_policy_dict = None
-                    if bundle.parking_price_policy is not None:
-                        pp = bundle.parking_price_policy
-                        parking_policy_dict = {
-                            "version": pp.version,
-                            "minimum_type_samples": pp.minimum_type_samples,
-                            "by_type": {
-                                k: {
-                                    "price_twd": int(v.price_twd),
-                                    "sample_size": int(v.sample_size),
-                                }
-                                for k, v in pp.by_type.items()
-                            },
-                            "market_fallback": (
-                                {
-                                    "price_twd": int(pp.market_fallback.price_twd),
-                                    "sample_size": int(pp.market_fallback.sample_size),
-                                }
-                                if pp.market_fallback else None
-                            ),
-                        }
-                except Exception as exc:
-                    raise ModelTrainingError("candidate_write_failed", str(exc)) from exc
-
-                if is_resale:
-                    try:
-                        raw_backtests = run_annual_backtests(
-                            model_frame,
-                            experiment.selected_model,
-                            enhanced_features,
-                            profile=winning_profile,
-                        )
-                        serialized_backtests = []
-                        for bt in raw_backtests:
-                            bt_copy = dict(bt)
-                            for key in (
-                                "cutoff_date",
-                                "train_max_date",
-                                "test_min_date",
-                                "source_max_date",
-                            ):
-                                if key in bt_copy and isinstance(bt_copy[key], pd.Timestamp):
-                                    bt_copy[key] = str(bt_copy[key].date())
-                            serialized_backtests.append(bt_copy)
-
-                        baseline_metrics = experiment.final_test_results[
-                            "baseline"
-                        ].metrics.to_dict(orient="index")
-                        candidate_metrics = experiment.final_test_results[
-                            experiment.selected_model
-                        ].metrics.to_dict(orient="index")
-                        data_max_ts = pd.Timestamp(bundle.data_max_date)
-                        latest_official_ts = pd.Timestamp(model_frame["transaction_date"].max())
-                        release_checks = evaluate_release_checks(
-                            candidate_metrics,
-                            baseline_metrics,
-                            serialized_backtests,
-                            data_max_ts,
-                            latest_official_ts,
-                        )
-                    except Exception as exc:
-                        raise ModelTrainingError("candidate_write_failed", str(exc)) from exc
-
-                self._jobs.progress(
-                    run_id,
-                    {
-                        "stage": f"evaluating_{market}",
-                        "completed_markets": list(completed),
-                    },
-                )
-
-                try:
-                    report_dir = stage / "reports"
-                    selected_profile = next(
-                        (
-                            p
-                            for p in request.tuning_plan.profiles
-                            if p.name == experiment.selected_profile
-                        ),
-                        None,
-                    )
-
-                    profile_results = [
-                        ProfileTrainingResult(
-                            profile_name=pe.profile.name,
-                            parameters={
-                                "hgb_learning_rate": pe.profile.hgb_learning_rate,
-                                "hgb_max_iter": pe.profile.hgb_max_iter,
-                                "rf_n_estimators": pe.profile.rf_n_estimators,
-                                "recency_half_life_months": pe.profile.recency_half_life_months,
-                            },
-                            selection_metrics={
-                                c.model_name: c.evaluation.metrics.to_dict(orient="index")
-                                for c in pe.candidates
-                            },
-                            candidate_errors=pe.candidate_errors,
-                        )
-                        for pe in experiment.profile_results
-                    ]
-
-                    evaluation_path = write_evaluation(
-                        bundle,
-                        experiment,
-                        split,
-                        report_dir,
-                        selected_profile=selected_profile,
-                        diagnostics=diagnostics if is_resale else None,
-                        feature_experiments=(analysis_experiments if is_resale else None),
-                        backtests=(serialized_backtests if is_resale else None),
-                        release_checks=(release_checks if is_resale else None),
-                        reason_codes=(release_reason_codes(release_checks) if is_resale else None),
-                    )
-                    card_path = write_model_card(
-                        bundle,
-                        experiment,
-                        leakage_audit(split),
-                        report_dir,
-                        selected_profile=selected_profile,
-                        feature_experiments=(analysis_experiments if is_resale else None),
-                        backtests=(serialized_backtests if is_resale else None),
-                        release_checks=(release_checks if is_resale else None),
-                        reason_codes=(release_reason_codes(release_checks) if is_resale else None),
-                    )
-                    interval_summary = compute_interval_summary(
-                        bundle,
-                        experiment.final_test_results[experiment.selected_model],
-                        split,
-                    )
-                except Exception as exc:
-                    raise ModelTrainingError("candidate_write_failed", str(exc)) from exc
-
-                try:
-                    results.append(
-                        market_result_from_files(
-                            market=market,
-                            bundle=bundle,
-                            experiment=experiment,
-                            artifact_path=artifact_path,
-                            evaluation_path=evaluation_path,
-                            card_path=card_path,
-                            stage=stage,
-                            selected_profile=experiment.selected_profile,
-                            profile_results=profile_results,
-                            diagnostics=diagnostics if is_resale else None,
-                            feature_experiments=(analysis_experiments if is_resale else None),
-                            backtests=(serialized_backtests if is_resale else None),
-                            release_checks=(release_checks if is_resale else None),
-                            feature_columns=list(enhanced_features),
-                            feature_contract_version=feature_contract_ver,
-                            test_coverage=interval_summary["test_coverage"],
-                            average_interval_width_twd_per_ping=(
-                                interval_summary[
-                                    "average_interval_width_twd_per_ping"
-                                ]
-                            ),
-                            parking_policy=parking_policy_dict,
-                        )
-                    )
-                except Exception as exc:
-                    raise ModelTrainingError("candidate_validation_failed", str(exc)) from exc
-                completed.append(market)
-
-            self._jobs.progress(
-                run_id,
-                {"stage": "writing_artifacts", "completed_markets": list(completed)},
-            )
-            manifest = TrainingManifest(
-                schema_version=3,
-                tuning_plan_version=request.tuning_plan.version,
-                profiles=[
-                    TrainingProfileSnapshot.model_validate(profile.snapshot())
-                    for profile in request.tuning_plan.profiles
-                ],
-                run_id=UUID(run_id),
-                created_at=self._clock(),
-                markets=list(markets),
-                source_commit=source_version.commit,
-                source_dirty=source_version.dirty,
-                runtime_versions=runtime_versions(),
-                data_snapshot=snapshot,
-                results=results,
-            )
-            (stage / "manifest.json").write_text(
-                manifest.model_dump_json(indent=2),
-                encoding="utf-8",
-            )
-            self._store.commit(run_id, manifest)
-            self._jobs.succeed(run_id, run_id, public_training_summary(manifest))
-            return manifest
         except ModelTrainingError as error:
             self._store.discard_staging(run_id)
             self._jobs.fail(run_id, error.error_code, error.safe_message)
@@ -617,3 +915,121 @@ class ModelTrainingService:
             self._store.discard_staging(run_id)
             self._jobs.fail(run_id, "training_failed", "模型訓練意外失敗")
             raise
+
+    def _execute_guided(
+        self,
+        run_id: str,
+        frame: pd.DataFrame,
+        stage: Path,
+        plan: TrainingPlan,
+        markets: list[str],
+        snapshot: DataSnapshot,
+        source_version: SourceVersionProvider,
+    ) -> TrainingManifest:
+        results: list[MarketTrainingResult] = []
+        completed: list[str] = []
+
+        for market in markets:
+            result = self._execute_guided_market(run_id, market, frame, stage, plan)
+            results.append(result)
+            completed.append(market)
+            self._jobs.progress(
+                run_id,
+                {"stage": f"evaluating_{market}", "completed_markets": list(completed)},
+            )
+
+        self._jobs.progress(
+            run_id,
+            {"stage": "writing_artifacts", "completed_markets": list(completed)},
+        )
+        manifest = TrainingManifest(
+            schema_version=3,
+            tuning_plan_version=plan.version,
+            profiles=[
+                TrainingProfileSnapshot.model_validate(profile.snapshot())
+                for profile in plan.profiles
+            ],
+            run_id=UUID(run_id),
+            created_at=self._clock(),
+            markets=list(markets),
+            source_commit=source_version.commit,
+            source_dirty=source_version.dirty,
+            runtime_versions=runtime_versions(),
+            data_snapshot=snapshot,
+            results=results,
+        )
+        (stage / "manifest.json").write_text(
+            manifest.model_dump_json(indent=2),
+            encoding="utf-8",
+        )
+        self._store.commit(run_id, manifest)
+        self._jobs.succeed(run_id, run_id, public_training_summary(manifest))
+        return manifest
+
+    def _execute_automl(
+        self,
+        run_id: str,
+        frame: pd.DataFrame,
+        stage: Path,
+        plan: AutoMLTuningPlan,
+        markets: list[str],
+        snapshot: DataSnapshot,
+        source_version: SourceVersionProvider,
+    ) -> TrainingManifest | None:
+        results: list[MarketTrainingResult] = []
+        automl_market_snapshots: dict[str, AutoMLMarketSearchSnapshot] = {}
+        any_candidate = False
+        any_stopped = False
+
+        for market in markets:
+            mresult, m_snapshot = self._execute_automl_market(
+                run_id, market, frame, stage, plan,
+            )
+            automl_market_snapshots[market] = m_snapshot
+            if m_snapshot.stopped:
+                any_stopped = True
+            if mresult is not None:
+                results.append(mresult)
+                any_candidate = True
+
+        if any_stopped and not any_candidate:
+            self._store.discard_staging(run_id)
+            self._jobs.skip(run_id, {"markets": markets, "stopped": True})
+            return None
+
+        if not any_candidate:
+            self._store.discard_staging(run_id)
+            self._jobs.succeed(run_id, run_id, {
+                "candidate_available": False,
+                "markets": markets,
+            })
+            return None
+
+        self._jobs.progress(
+            run_id,
+            {"stage": "writing_artifacts", "completed_markets": [r.market for r in results]},
+        )
+        manifest = TrainingManifest(
+            schema_version=4,
+            tuning_plan_version=2,
+            profiles=[],
+            run_id=UUID(run_id),
+            created_at=self._clock(),
+            markets=list(markets),
+            source_commit=source_version.commit,
+            source_dirty=source_version.dirty,
+            runtime_versions=runtime_versions(),
+            data_snapshot=snapshot,
+            results=results,
+            automl=AutoMLRunSnapshot(
+                mode="automl",
+                markets=automl_market_snapshots,
+            ),
+        )
+        (stage / "manifest.json").write_text(
+            manifest.model_dump_json(indent=2),
+            encoding="utf-8",
+        )
+        self._store.commit(run_id, manifest)
+        self._jobs.succeed(run_id, run_id, public_training_summary(manifest))
+        return manifest

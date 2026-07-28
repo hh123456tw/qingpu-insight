@@ -258,3 +258,94 @@ def test_model_card_with_profile_uses_exact_half_life(
     )
     text = path.read_text(encoding="utf-8")
     assert "24 個月" not in text
+
+
+def test_write_evaluation_with_automl_info(tmp_path, trained_bundle, experiment):
+    import json
+    from dataclasses import replace
+
+    split = _build_experiment_frame(300, 100, 200, seed=99)
+    exp = run_model_experiment(split)
+    exp = replace(exp, recommended=True, reason_codes=())
+
+    automl_info = {
+        "mode": "automl",
+        "budget_name": "quick",
+        "budget_seconds": 300,
+        "completed_trials": 10,
+        "selected_trial_number": 5,
+        "fit_spec": {
+            "model_name": "hist_gradient_boosting",
+            "parameters": {"learning_rate": 0.1, "max_iter": 200},
+            "recency_half_life_months": 48,
+        },
+        "release_blockers": [],
+    }
+    path = write_evaluation(
+        trained_bundle, exp, split, tmp_path, automl_info=automl_info
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["automl_info"]["mode"] == "automl"
+    assert payload["automl_info"]["budget_name"] == "quick"
+    assert payload["automl_info"]["completed_trials"] == 10
+    assert payload["automl_info"]["selected_trial_number"] == 5
+    assert "selected_profile" not in payload
+
+
+def test_write_evaluation_with_automl_blockers(tmp_path, trained_bundle, experiment):
+    import json
+    from dataclasses import replace
+
+    split = _build_experiment_frame(300, 100, 200, seed=99)
+    exp = run_model_experiment(split)
+    exp = replace(exp, recommended=True, reason_codes=())
+
+    automl_info = {
+        "mode": "automl",
+        "budget_name": "standard",
+        "budget_seconds": 900,
+        "completed_trials": 25,
+        "selected_trial_number": None,
+        "fit_spec": None,
+        "release_blockers": ["overall_mae_not_improved", "backtest_insufficient"],
+    }
+    path = write_evaluation(
+        trained_bundle, exp, split, tmp_path, automl_info=automl_info
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["automl_info"]["release_blockers"] == [
+        "overall_mae_not_improved",
+        "backtest_insufficient",
+    ]
+    assert payload["automl_info"]["selected_trial_number"] is None
+    assert "selected_profile" not in payload
+
+
+def test_model_card_with_automl_info(tmp_path, trained_bundle, experiment, leakage):
+    from dataclasses import replace
+
+    split = _build_experiment_frame(300, 100, 200, seed=99)
+    exp = run_model_experiment(split)
+    exp = replace(exp, recommended=True, reason_codes=())
+
+    automl_info = {
+        "mode": "automl",
+        "budget_name": "deep",
+        "budget_seconds": 1800,
+        "completed_trials": 55,
+        "selected_trial_number": 3,
+        "fit_spec": {
+            "model_name": "random_forest",
+            "parameters": {"n_estimators": 500},
+            "recency_half_life_months": 48,
+        },
+        "release_blockers": [],
+    }
+    path = write_model_card(
+        trained_bundle, exp, leakage, tmp_path, automl_info=automl_info
+    )
+    text = path.read_text(encoding="utf-8")
+    assert "AutoML" in text
+    assert "deep" in text
+    assert "55 次" in text
+    assert "隨機森林" in text or "random_forest" in text
