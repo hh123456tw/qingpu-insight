@@ -67,15 +67,11 @@ def test_conversation_model_catalog_tracks_secret_changes(
     client = app.test_client()
     secret_store = LocalSecretsStore(tmp_path / "instance" / "secrets.env")
 
-    assert client.get("/api/conversation-models").get_json()[
-        "gemini_configured"
-    ] is False
+    assert client.get("/api/conversation-models").get_json()["gemini_configured"] is False
 
     secret_store.set_gemini_key("test-dynamic-key")
 
-    assert client.get("/api/conversation-models").get_json()[
-        "gemini_configured"
-    ] is True
+    assert client.get("/api/conversation-models").get_json()["gemini_configured"] is True
 
 
 def test_conversation_schema_applies_fallback_metadata_migration(
@@ -90,8 +86,7 @@ def test_conversation_schema_applies_fallback_metadata_migration(
         encoding="utf-8",
     )
     (database / "009_conversation_fallback_metadata.sql").write_text(
-        "ALTER TABLE conversation_messages "
-        "ADD COLUMN fallback_reason VARCHAR(64);",
+        "ALTER TABLE conversation_messages ADD COLUMN fallback_reason VARCHAR(64);",
         encoding="utf-8",
     )
     executed: list[str] = []
@@ -198,17 +193,19 @@ def test_conversation_valuation_maps_591_elevator_building_type(
 
     captured: dict[str, Any] = {}
     market = pd.DataFrame(
-        [{
-            "transaction_type": "resale",
-            "transaction_date": pd.Timestamp("2026-06-13"),
-            "latitude": 25.01,
-            "longitude": 121.21,
-            "building_area_ping": 34.0,
-            "total_price_twd": 13580000,
-            "unit_price_per_ping_twd": 399000,
-            "station_code": "A18",
-            "station_distance_m": 500.0,
-        }]
+        [
+            {
+                "transaction_type": "resale",
+                "transaction_date": pd.Timestamp("2026-06-13"),
+                "latitude": 25.01,
+                "longitude": 121.21,
+                "building_area_ping": 34.0,
+                "total_price_twd": 13580000,
+                "unit_price_per_ping_twd": 399000,
+                "station_code": "A18",
+                "station_distance_m": 500.0,
+            }
+        ]
     )
     monkeypatch.setattr(
         web,
@@ -305,7 +302,8 @@ class FakeReportService:
             content={
                 "summary": {
                     "text": f"摘要 {request.candidate_ids[0]}",
-                    "fact_ids": ["f1"], "numeric_fact_ids": [],
+                    "fact_ids": ["f1"],
+                    "numeric_fact_ids": [],
                 },
                 "advantages": [{"text": "優點 1", "fact_ids": ["f1"], "numeric_fact_ids": []}],
                 "risks": [{"text": "風險 1", "fact_ids": ["f1"], "numeric_fact_ids": []}],
@@ -333,7 +331,7 @@ def _report_post(client: FlaskClient, json_data=None, **kwargs) -> Any:
     return client.post("/api/reports", **kw)
 
 
-@ pytest.fixture
+@pytest.fixture
 def report_app(market_frame: pd.DataFrame) -> FlaskClient:
     from qingpu_insight.web import create_app
 
@@ -369,56 +367,72 @@ class TestReportApi:
 
     def test_post_report_rejects_missing_candidate_ids(self, report_app: FlaskClient) -> None:
         response = _report_post(
-            report_app, {"intended_use": "self_use", "provider": "rule"},
+            report_app,
+            {"intended_use": "self_use", "provider": "rule"},
         )
         assert response.status_code == 400
         fields = response.get_json()["error"].get("fields", {})
         assert "candidate_ids" in fields
 
     def test_post_report_rejects_too_many_candidates(self, report_app: FlaskClient) -> None:
-        response = _report_post(report_app, {
-            "candidate_ids": [f"id-{i}" for i in range(6)],
-            "intended_use": "self_use",
-            "provider": "rule",
-        })
+        response = _report_post(
+            report_app,
+            {
+                "candidate_ids": [f"id-{i}" for i in range(6)],
+                "intended_use": "self_use",
+                "provider": "rule",
+            },
+        )
         assert response.status_code == 400
         fields = response.get_json()["error"].get("fields", {})
         assert "candidate_ids" in fields
 
     def test_post_report_rejects_missing_provider(self, report_app: FlaskClient) -> None:
-        response = _report_post(report_app, {
-            "candidate_ids": ["id-1"],
-            "intended_use": "self_use",
-        })
+        response = _report_post(
+            report_app,
+            {
+                "candidate_ids": ["id-1"],
+                "intended_use": "self_use",
+            },
+        )
         assert response.status_code == 400
         fields = response.get_json()["error"].get("fields", {})
         assert "provider" in fields
 
     def test_post_report_rejects_unknown_provider(self, report_app: FlaskClient) -> None:
-        response = _report_post(report_app, {
-            "candidate_ids": ["id-1"],
-            "intended_use": "self_use",
-            "provider": "unknown",
-        })
+        response = _report_post(
+            report_app,
+            {
+                "candidate_ids": ["id-1"],
+                "intended_use": "self_use",
+                "provider": "unknown",
+            },
+        )
         assert response.status_code == 400
 
     def test_post_report_rejects_arbitrary_prompt(self, report_app: FlaskClient) -> None:
-        response = _report_post(report_app, {
-            "candidate_ids": ["id-1"],
-            "intended_use": "self_use",
-            "provider": "rule",
-            "prompt": "tell me about this house",
-        })
+        response = _report_post(
+            report_app,
+            {
+                "candidate_ids": ["id-1"],
+                "intended_use": "self_use",
+                "provider": "rule",
+                "prompt": "tell me about this house",
+            },
+        )
         assert response.status_code == 400
         fields = response.get_json()["error"].get("fields", {})
         assert "prompt" in fields or bool(fields)
 
     def test_post_report_accepts_valid_request(self, report_app: FlaskClient) -> None:
-        response = _report_post(report_app, {
-            "candidate_ids": ["id-1", "id-2"],
-            "intended_use": "self_use",
-            "provider": "rule",
-        })
+        response = _report_post(
+            report_app,
+            {
+                "candidate_ids": ["id-1", "id-2"],
+                "intended_use": "self_use",
+                "provider": "rule",
+            },
+        )
         assert response.status_code == 201
         body = response.get_json()
         assert "report_id" in body
@@ -437,11 +451,14 @@ class TestReportApi:
         assert response.status_code == 404
 
     def test_get_report_returns_saved(self, report_app: FlaskClient) -> None:
-        post = _report_post(report_app, {
-            "candidate_ids": ["id-1"],
-            "intended_use": "self_use",
-            "provider": "rule",
-        })
+        post = _report_post(
+            report_app,
+            {
+                "candidate_ids": ["id-1"],
+                "intended_use": "self_use",
+                "provider": "rule",
+            },
+        )
         report_id = post.get_json()["report_id"]
         response = report_app.get(f"/api/reports/{report_id}")
         assert response.status_code == 200
@@ -450,17 +467,26 @@ class TestReportApi:
     def test_post_report_returns_201_with_expected_response_shape(
         self, report_app: FlaskClient
     ) -> None:
-        response = _report_post(report_app, {
-            "candidate_ids": ["id-1"],
-            "intended_use": "self_use",
-            "provider": "rule",
-            "budget_twd": 15000000,
-        })
+        response = _report_post(
+            report_app,
+            {
+                "candidate_ids": ["id-1"],
+                "intended_use": "self_use",
+                "provider": "rule",
+                "budget_twd": 15000000,
+            },
+        )
         assert response.status_code == 201
         body = response.get_json()
         expected_keys = {
-            "report_id", "provider", "model", "dataset_version",
-            "evidence_pack_id", "fallback_reason", "content", "created_at",
+            "report_id",
+            "provider",
+            "model",
+            "dataset_version",
+            "evidence_pack_id",
+            "fallback_reason",
+            "content",
+            "created_at",
         }
         assert expected_keys.issubset(body.keys())
         assert body["fallback_reason"] is None
@@ -690,11 +716,10 @@ class TestMarketApi:
             assert field not in raw
 
     def test_map_points_reports_complete_counts_and_public_groups(
-        self, client: FlaskClient,
+        self,
+        client: FlaskClient,
     ) -> None:
-        response = client.get(
-            "/api/market/map-points?transaction_type=resale&station=A18&zoom=14"
-        )
+        response = client.get("/api/market/map-points?transaction_type=resale&station=A18&zoom=14")
 
         assert response.status_code == 200
         payload = response.get_json()
@@ -713,7 +738,8 @@ class TestMarketApi:
         }
 
     def test_map_points_bounds_do_not_change_complete_filtered_count(
-        self, client: FlaskClient,
+        self,
+        client: FlaskClient,
     ) -> None:
         base = client.get(
             "/api/market/map-points?transaction_type=resale&station=A18&zoom=14"
@@ -746,9 +772,7 @@ class TestMarketApi:
     def test_map_points_rejects_invalid_view_parameters(
         self, client: FlaskClient, query: str, fields: dict[str, str]
     ) -> None:
-        response = client.get(
-            f"/api/market/map-points?transaction_type=resale&{query}"
-        )
+        response = client.get(f"/api/market/map-points?transaction_type=resale&{query}")
 
         assert response.status_code == 400
         assert response.get_json()["error"]["fields"] == fields
@@ -791,57 +815,88 @@ class InMemoryListingRepo:
 def listing_client(market_frame: pd.DataFrame) -> FlaskClient:
     from qingpu_insight.web import create_app
 
-    listing_df = pd.DataFrame([
-        {
-            "source": "591", "source_listing_id": "L001", "listing_type": "sale",
-            "snapshot_at": pd.Timestamp("2026-07-20 10:00", tz="UTC"),
-            "source_url": "https://sale.591.com.tw/L001",
-            "title": "青埔三房", "asking_price_twd": 18_000_000,
-            "building_area_ping": 35.5, "station_code": "A18",
-            "latitude": 25.0123, "longitude": 121.2018,
-            "location_eligible": True, "active": True,
-        },
-        {
-            "source": "591", "source_listing_id": "L002", "listing_type": "sale",
-            "snapshot_at": pd.Timestamp("2026-07-20 10:00", tz="UTC"),
-            "source_url": "https://sale.591.com.tw/L002",
-            "title": "A17大樓", "asking_price_twd": 22_000_000,
-            "building_area_ping": 48.0, "station_code": "A17",
-            "latitude": 25.0156, "longitude": 121.2078,
-            "location_eligible": True, "active": True,
-        },
-        {
-            "source": "591", "source_listing_id": "N001", "listing_type": "newhouse",
-            "snapshot_at": pd.Timestamp("2026-07-20 10:00", tz="UTC"),
-            "source_url": "https://newhouse.591.com.tw/N001",
-            "title": "青埔預售案", "asking_price_twd": None,
-            "asking_unit_price_low_twd_per_ping": 500_000,
-            "asking_unit_price_high_twd_per_ping": 560_000,
-            "building_area_min_ping": 19.0, "building_area_max_ping": 30.0,
-            "station_code": "A18", "latitude": 25.0123, "longitude": 121.2018,
-            "location_eligible": True, "active": True,
-        },
-        {
-            "source": "591", "source_listing_id": "OUT001", "listing_type": "newhouse",
-            "snapshot_at": pd.Timestamp("2026-07-20 10:00", tz="UTC"),
-            "source_url": "https://newhouse.591.com.tw/OUT001",
-            "title": "圈外預售案", "asking_price_twd": 20_000_000,
-            "station_code": "A18", "latitude": 25.0123, "longitude": 121.2018,
-            "location_eligible": False, "active": True,
-        },
-    ])
-    events_df = pd.DataFrame([
-        {
-            "event_key": "a" * 64, "source": "591",
-            "listing_type": "sale", "source_listing_id": "L001",
-            "event_type": "price_decrease",
-            "event_data": (
-                '{"previous_price":20000000,"new_price":18000000,'
-                '"absolute_change":-2000000,"percentage_change":-10.0}'
-            ),
-            "occurred_at": pd.Timestamp("2026-07-19 10:00", tz="UTC"),
-        },
-    ])
+    listing_df = pd.DataFrame(
+        [
+            {
+                "source": "591",
+                "source_listing_id": "L001",
+                "listing_type": "sale",
+                "snapshot_at": pd.Timestamp("2026-07-20 10:00", tz="UTC"),
+                "source_url": "https://sale.591.com.tw/L001",
+                "title": "青埔三房",
+                "asking_price_twd": 18_000_000,
+                "building_area_ping": 35.5,
+                "station_code": "A18",
+                "latitude": 25.0123,
+                "longitude": 121.2018,
+                "location_eligible": True,
+                "active": True,
+            },
+            {
+                "source": "591",
+                "source_listing_id": "L002",
+                "listing_type": "sale",
+                "snapshot_at": pd.Timestamp("2026-07-20 10:00", tz="UTC"),
+                "source_url": "https://sale.591.com.tw/L002",
+                "title": "A17大樓",
+                "asking_price_twd": 22_000_000,
+                "building_area_ping": 48.0,
+                "station_code": "A17",
+                "latitude": 25.0156,
+                "longitude": 121.2078,
+                "location_eligible": True,
+                "active": True,
+            },
+            {
+                "source": "591",
+                "source_listing_id": "N001",
+                "listing_type": "newhouse",
+                "snapshot_at": pd.Timestamp("2026-07-20 10:00", tz="UTC"),
+                "source_url": "https://newhouse.591.com.tw/N001",
+                "title": "青埔預售案",
+                "asking_price_twd": None,
+                "asking_unit_price_low_twd_per_ping": 500_000,
+                "asking_unit_price_high_twd_per_ping": 560_000,
+                "building_area_min_ping": 19.0,
+                "building_area_max_ping": 30.0,
+                "station_code": "A18",
+                "latitude": 25.0123,
+                "longitude": 121.2018,
+                "location_eligible": True,
+                "active": True,
+            },
+            {
+                "source": "591",
+                "source_listing_id": "OUT001",
+                "listing_type": "newhouse",
+                "snapshot_at": pd.Timestamp("2026-07-20 10:00", tz="UTC"),
+                "source_url": "https://newhouse.591.com.tw/OUT001",
+                "title": "圈外預售案",
+                "asking_price_twd": 20_000_000,
+                "station_code": "A18",
+                "latitude": 25.0123,
+                "longitude": 121.2018,
+                "location_eligible": False,
+                "active": True,
+            },
+        ]
+    )
+    events_df = pd.DataFrame(
+        [
+            {
+                "event_key": "a" * 64,
+                "source": "591",
+                "listing_type": "sale",
+                "source_listing_id": "L001",
+                "event_type": "price_decrease",
+                "event_data": (
+                    '{"previous_price":20000000,"new_price":18000000,'
+                    '"absolute_change":-2000000,"percentage_change":-10.0}'
+                ),
+                "occurred_at": pd.Timestamp("2026-07-19 10:00", tz="UTC"),
+            },
+        ]
+    )
     ds = InMemoryMarketDataSource(market_frame)
     app = create_app(data_source=ds, listing_repo=InMemoryListingRepo(listing_df, events_df))
     with app.test_client() as client:
@@ -879,9 +934,20 @@ class TestListingApi:
         assert len(data["items"]) == 1
         row = data["items"][0]
         expected = {
-            "listing_id", "type", "title", "source_url", "station",
-            "area", "price", "event", "status", "latitude", "longitude",
-            "model_evidence", "snapshot_time", "unit_price_range_twd_per_ping",
+            "listing_id",
+            "type",
+            "title",
+            "source_url",
+            "station",
+            "area",
+            "price",
+            "event",
+            "status",
+            "latitude",
+            "longitude",
+            "model_evidence",
+            "snapshot_time",
+            "unit_price_range_twd_per_ping",
             "area_range_ping",
         }
         assert set(row.keys()) == expected
@@ -1004,12 +1070,8 @@ class TestListingApi:
             )
 
         incomplete = detect_listing_events(initial, empty, batch("B2", False)).state
-        first_absence = detect_listing_events(
-            incomplete, empty, batch("B3", True)
-        ).state
-        second_absence = detect_listing_events(
-            first_absence, empty, batch("B4", True)
-        ).state
+        first_absence = detect_listing_events(incomplete, empty, batch("B3", True)).state
+        second_absence = detect_listing_events(first_absence, empty, batch("B4", True)).state
 
         for state, expected_count in (
             (incomplete, 1),
@@ -1021,12 +1083,8 @@ class TestListingApi:
                 listing_repo=InMemoryListingRepo(state),
             )
             with app.test_client() as api:
-                summary = api.get(
-                    "/api/listings/summary?listing_type=sale&station=A18"
-                ).get_json()
-                listings = api.get(
-                    "/api/listings?listing_type=sale&station=A18"
-                ).get_json()
+                summary = api.get("/api/listings/summary?listing_type=sale&station=A18").get_json()
+                listings = api.get("/api/listings?listing_type=sale&station=A18").get_json()
             assert summary["active_count"] == expected_count
             assert len(listings["items"]) == expected_count
 
@@ -1261,7 +1319,9 @@ class MemoryAdminJobRepository:
     def find_active_by_key(self, idempotency_key: str) -> JobRun | None:
         for run in self._runs.values():
             if run.idempotency_key == idempotency_key and run.status in (
-                "pending", "running", "retry_wait",
+                "pending",
+                "running",
+                "retry_wait",
             ):
                 return run
         return None
@@ -1274,7 +1334,8 @@ class MemoryAdminJobRepository:
 
     def list_active(self, job_type: str) -> list[JobRun]:
         return [
-            r for r in self._runs.values()
+            r
+            for r in self._runs.values()
             if r.job_type == job_type and r.status in ("pending", "running", "retry_wait")
         ]
 
@@ -1316,6 +1377,7 @@ class MemoryAdminJobRepository:
 class FakeAdminExecutor:
     def __init__(self) -> None:
         self.submitted: list[str] = []
+        self.shutdown_calls = 0
 
     def submit(self, run_id: str, callable) -> Future:
         self.submitted.append(run_id)
@@ -1323,6 +1385,7 @@ class FakeAdminExecutor:
 
     def shutdown(self, wait: bool = True) -> None:
         del wait
+        self.shutdown_calls += 1
 
 
 class StubListingUpdateService:
@@ -1358,17 +1421,68 @@ def admin_app(market_frame: pd.DataFrame):
     app = create_app(
         data_source=InMemoryMarketDataSource(market_frame),
         admin_services=AdminServices(
-            job_service, listing_service, executor,
+            job_service,
+            listing_service,
+            executor,
             official_data_service=official_ds,
         ),
     )
     from dataclasses import replace
+
     app.extensions["qingpu_admin_runtime"] = replace(
         app.extensions["qingpu_admin_runtime"],
         dashboard_service=StubDashboardService(),
         llm_model_catalog=FakeLlmModelCatalog(),
     )
     return app, repo, listing_service, executor
+
+
+def test_conversation_runtime_owns_executor_separate_from_admin(
+    tmp_path: Path,
+    market_frame: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import qingpu_insight.cli as cli
+    import qingpu_insight.web as web
+    from qingpu_insight.jobs import JobService
+
+    jobs = JobService(MemoryAdminJobRepository())
+    admin_executor = FakeAdminExecutor()
+    conversation_executor = FakeAdminExecutor()
+    admin_services = web.AdminServices(
+        jobs,
+        StubListingUpdateService(jobs),
+        admin_executor,
+    )
+    monkeypatch.setenv(
+        "QINGPU_DATABASE_URL",
+        "mysql+pymysql://user:password@127.0.0.1:3306/qingpu_insight",
+    )
+    monkeypatch.setattr(
+        cli,
+        "create_mysql_connection_factory",
+        lambda: object(),
+    )
+    monkeypatch.setattr(web, "_ensure_conversation_schema", lambda root, factory: None)
+    monkeypatch.setattr(
+        web,
+        "LocalJobExecutor",
+        lambda job_service: conversation_executor,
+    )
+
+    app = web.create_app(
+        root=tmp_path,
+        data_source=InMemoryMarketDataSource(market_frame),
+        admin_services=admin_services,
+        conversation_repository=object(),
+    )
+
+    assert app.extensions["qingpu_conversation_executor"] is conversation_executor
+    assert app.extensions["qingpu_conversation_executor"] is not admin_executor
+
+    app.extensions["qingpu_admin_shutdown"]()
+    assert admin_executor.shutdown_calls == 1
+    assert conversation_executor.shutdown_calls == 1
 
 
 @pytest.fixture
@@ -1392,7 +1506,8 @@ def test_web_app_wires_catalog_and_benchmark_runner(tmp_path, monkeypatch) -> No
 
 
 def test_listing_update_returns_202_without_waiting(
-    admin_app, admin_client: FlaskClient,
+    admin_app,
+    admin_client: FlaskClient,
 ) -> None:
     _, _, service, executor = admin_app
     response = admin_client.post(
@@ -1408,7 +1523,8 @@ def test_listing_update_returns_202_without_waiting(
 
 
 def test_exact_active_duplicate_returns_existing_run_without_second_handoff(
-    admin_app, admin_client: FlaskClient,
+    admin_app,
+    admin_client: FlaskClient,
 ) -> None:
     _, _, service, executor = admin_app
     request = {
@@ -1426,7 +1542,8 @@ def test_exact_active_duplicate_returns_existing_run_without_second_handoff(
 
 
 def test_listing_update_defaults_to_sale_and_newhouse(
-    admin_app, admin_client: FlaskClient,
+    admin_app,
+    admin_client: FlaskClient,
 ) -> None:
     _, _, service, _ = admin_app
     response = admin_client.post(
@@ -1439,7 +1556,8 @@ def test_listing_update_defaults_to_sale_and_newhouse(
 
 
 def test_listing_update_rejects_rental_before_job_creation(
-    admin_app, admin_client: FlaskClient,
+    admin_app,
+    admin_client: FlaskClient,
 ) -> None:
     _, repo, service, executor = admin_app
     response = admin_client.post(
@@ -1467,7 +1585,8 @@ def test_admin_update_rejects_non_loopback(admin_client: FlaskClient) -> None:
     ["/api/admin/listing-updates", "/api/jobs", "/api/jobs/123"],
 )
 def test_admin_and_job_routes_reject_untrusted_host(
-    admin_client: FlaskClient, path: str,
+    admin_client: FlaskClient,
+    path: str,
 ) -> None:
     method = admin_client.post if path.startswith("/api/admin") else admin_client.get
     response = method(path, base_url="http://attacker.example")
@@ -1503,7 +1622,9 @@ def test_admin_update_rejects_wrong_csrf(admin_client: FlaskClient) -> None:
     ],
 )
 def test_admin_update_rejects_invalid_json_contract(
-    admin_client: FlaskClient, payload, field: str,
+    admin_client: FlaskClient,
+    payload,
+    field: str,
 ) -> None:
     response = admin_client.post(
         "/api/admin/listing-updates",
@@ -1540,7 +1661,8 @@ def test_admin_update_rejects_malformed_or_wrong_content_type(
 
 @pytest.mark.parametrize("trigger", ["manual", "scheduled", "web"])
 def test_admin_update_accepts_only_explicit_supported_triggers(
-    admin_client: FlaskClient, trigger: str,
+    admin_client: FlaskClient,
+    trigger: str,
 ) -> None:
     response = admin_client.post(
         "/api/admin/listing-updates",
@@ -1552,12 +1674,11 @@ def test_admin_update_accepts_only_explicit_supported_triggers(
 
 
 def test_synchronous_handoff_failure_returns_safe_503(
-    admin_app, admin_client: FlaskClient,
+    admin_app,
+    admin_client: FlaskClient,
 ) -> None:
     _, repo, service, _ = admin_app
-    service.handoff_error = RuntimeError(
-        "mysql://admin:password@localhost/db <html> 0912-345-678"
-    )
+    service.handoff_error = RuntimeError("mysql://admin:password@localhost/db <html> 0912-345-678")
     response = admin_client.post(
         "/api/admin/listing-updates",
         json={"types": ["sale"], "max_pages": 1},
@@ -1572,7 +1693,8 @@ def test_synchronous_handoff_failure_returns_safe_503(
 
 
 def test_job_detail_and_history_use_public_safe_contract(
-    admin_app, admin_client: FlaskClient,
+    admin_app,
+    admin_client: FlaskClient,
 ) -> None:
     _, repo, _, _ = admin_app
     from qingpu_insight.jobs import JobService
@@ -1607,7 +1729,8 @@ def test_job_detail_and_history_use_public_safe_contract(
 
 
 def test_job_detail_redacts_unsafe_nested_summary(
-    admin_app, admin_client: FlaskClient,
+    admin_app,
+    admin_client: FlaskClient,
 ) -> None:
     _, repo, _, _ = admin_app
     from qingpu_insight.jobs import JobService
@@ -1647,7 +1770,9 @@ def test_job_detail_redacts_unsafe_nested_summary(
     ],
 )
 def test_database_urls_are_fully_redacted_from_post_detail_and_history(
-    admin_app, admin_client: FlaskClient, database_url: str,
+    admin_app,
+    admin_client: FlaskClient,
+    database_url: str,
 ) -> None:
     _, repo, listing_service, _ = admin_app
     from qingpu_insight.jobs import JobService
@@ -1677,9 +1802,7 @@ def test_database_urls_are_fully_redacted_from_post_detail_and_history(
         assert payload["trigger"] == "redacted"
         assert payload["summary"]["connection"] == "redacted"
         assert payload["error_message"] == "redacted"
-        assert payload["summary"]["public_report"] == (
-            "https://public.example/results/v2"
-        )
+        assert payload["summary"]["public_report"] == ("https://public.example/results/v2")
     for response in (post, detail, history):
         serialized = response.get_data(as_text=True)
         assert database_url not in serialized
@@ -1697,7 +1820,9 @@ def test_database_urls_are_fully_redacted_from_post_detail_and_history(
     ],
 )
 def test_job_detail_and_history_do_not_echo_unsafe_persisted_trigger(
-    admin_app, admin_client: FlaskClient, unsafe_trigger: str,
+    admin_app,
+    admin_client: FlaskClient,
+    unsafe_trigger: str,
 ) -> None:
     _, repo, _, _ = admin_app
     from qingpu_insight.jobs import JobService
@@ -1715,16 +1840,15 @@ def test_job_detail_and_history_do_not_echo_unsafe_persisted_trigger(
 
 
 def test_secret_bearing_job_repository_value_error_returns_fixed_503(
-    admin_app, admin_client: FlaskClient,
+    admin_app,
+    admin_client: FlaskClient,
 ) -> None:
     _, repo, _, _ = admin_app
     repo.get = lambda run_id: (_ for _ in ()).throw(
         ValueError("mysql://admin:password@localhost/db SELECT * FROM job_runs")
     )
 
-    response = admin_client.get(
-        "/api/jobs/00000000-0000-4000-8000-000000000000"
-    )
+    response = admin_client.get("/api/jobs/00000000-0000-4000-8000-000000000000")
     body = response.get_data(as_text=True)
     assert response.status_code == 503
     assert response.json["error"]["code"] == "job_unavailable"
@@ -1752,18 +1876,14 @@ def test_secret_bearing_listing_repository_value_error_returns_fixed_503(
     class FailingListingRepository:
         def load_current(self, listing_type):
             del listing_type
-            raise ValueError(
-                "mysql://admin:password@localhost/db SELECT * FROM listing_current"
-            )
+            raise ValueError("mysql://admin:password@localhost/db SELECT * FROM listing_current")
 
     app = create_app(
         data_source=InMemoryMarketDataSource(market_frame),
         listing_repo=FailingListingRepository(),
     )
     with app.test_client() as client:
-        response = client.get(
-            "/api/listings/summary", query_string={"listing_type": "sale"}
-        )
+        response = client.get("/api/listings/summary", query_string={"listing_type": "sale"})
     body = response.get_data(as_text=True)
     assert response.status_code == 503
     assert response.json["error"]["code"] == "market_data_unavailable"
@@ -1773,7 +1893,8 @@ def test_secret_bearing_listing_repository_value_error_returns_fixed_503(
 
 @pytest.mark.parametrize("limit", ["", "zero", "0", "101", "1.5"])
 def test_job_history_rejects_invalid_limit(
-    admin_client: FlaskClient, limit: str,
+    admin_client: FlaskClient,
+    limit: str,
 ) -> None:
     response = admin_client.get("/api/jobs", query_string={"limit": limit})
     assert response.status_code == 400
@@ -1789,7 +1910,8 @@ def test_job_detail_validates_uuid_before_lookup(admin_client: FlaskClient) -> N
 
 
 def test_runtime_app_loads_dotenv_and_wires_listing_repository(
-    monkeypatch, tmp_path: Path,
+    monkeypatch,
+    tmp_path: Path,
 ) -> None:
     import qingpu_insight.cli as cli
     import qingpu_insight.web as web
@@ -1818,7 +1940,9 @@ def test_runtime_app_loads_dotenv_and_wires_listing_repository(
 
 
 def test_production_admin_composition_requires_database_and_strong_secret(
-    monkeypatch, tmp_path: Path, market_frame: pd.DataFrame,
+    monkeypatch,
+    tmp_path: Path,
+    market_frame: pd.DataFrame,
 ) -> None:
     import qingpu_insight.cli as cli
     import qingpu_insight.web as web
@@ -1836,9 +1960,7 @@ def test_production_admin_composition_requires_database_and_strong_secret(
     strong_secret = "Ab3!xY7@qR9#tU2$vW5&zC8*mN4+eH6@K7"
     monkeypatch.setenv("QINGPU_SECRET_KEY", strong_secret)
 
-    app = web.create_app(
-        root=tmp_path, data_source=InMemoryMarketDataSource(market_frame)
-    )
+    app = web.create_app(root=tmp_path, data_source=InMemoryMarketDataSource(market_frame))
     with app.test_client() as client:
         with client.session_transaction() as sess:
             sess["_csrf_token"] = "test-token"
@@ -1869,7 +1991,10 @@ def test_production_admin_composition_requires_database_and_strong_secret(
     ],
 )
 def test_production_admin_fails_closed_without_strong_secret(
-    monkeypatch, tmp_path: Path, market_frame: pd.DataFrame, secret: str | None,
+    monkeypatch,
+    tmp_path: Path,
+    market_frame: pd.DataFrame,
+    secret: str | None,
 ) -> None:
     import qingpu_insight.web as web
 
@@ -1884,9 +2009,7 @@ def test_production_admin_fails_closed_without_strong_secret(
         monkeypatch.delenv("QINGPU_SECRET_KEY", raising=False)
     else:
         monkeypatch.setenv("QINGPU_SECRET_KEY", secret)
-    app = web.create_app(
-        root=tmp_path, data_source=InMemoryMarketDataSource(market_frame)
-    )
+    app = web.create_app(root=tmp_path, data_source=InMemoryMarketDataSource(market_frame))
     with app.test_client() as client:
         with client.session_transaction() as sess:
             sess["_csrf_token"] = "test-token"
@@ -1917,27 +2040,33 @@ class FakeOpsProbes:
 
     def mysql(self):
         from qingpu_insight.health import HealthItem
+
         return HealthItem("mysql", "healthy", self._now, "ok", 1, "boolean")
 
     def market_dataset(self):
         from qingpu_insight.health import HealthItem
+
         return HealthItem("market_dataset", "healthy", self._now, "ok", 1, "boolean")
 
     def listing_dataset(self, listing_type: str):
         from qingpu_insight.health import HealthItem
+
         return HealthItem(f"listing_{listing_type}", "healthy", self._now, "ok", 1, "count")
 
     def latest_listing_job(self):
         from qingpu_insight.health import HealthItem
+
         return HealthItem("latest_listing_job", "healthy", self._now, "ok", None, None)
 
     def latest_backup(self):
         from qingpu_insight.health import HealthItem
+
         return HealthItem("latest_backup", "healthy", self._now, "backup exists", None, None)
 
     def disk_free(self):
         from qingpu_insight.health import HealthItem
-        return HealthItem("disk_free", "healthy", self._now, "ok", 100 * 1024 ** 3, "bytes")
+
+        return HealthItem("disk_free", "healthy", self._now, "ok", 100 * 1024**3, "bytes")
 
 
 @pytest.fixture
@@ -1955,12 +2084,11 @@ def ops_app(market_frame: pd.DataFrame):
 
         def latest(self):
             from qingpu_insight.health import HealthItem, HealthSummary
+
             return HealthSummary(
                 status="healthy",
                 checked_at=now,
-                items=(
-                    HealthItem("mysql", "healthy", now, "ok", 1, "boolean"),
-                ),
+                items=(HealthItem("mysql", "healthy", now, "ok", 1, "boolean"),),
             )
 
     from qingpu_insight.backups import BackupRecord
@@ -2131,7 +2259,8 @@ def test_ops_health_error_does_not_leak_secrets(market_frame) -> None:
 
 
 def test_market_composition_error_starts_with_fixed_safe_response(
-    monkeypatch, tmp_path: Path,
+    monkeypatch,
+    tmp_path: Path,
 ) -> None:
     import qingpu_insight.web as web
 
@@ -2144,9 +2273,7 @@ def test_market_composition_error_starts_with_fixed_safe_response(
     )
     app = web.create_app(root=tmp_path)
     with app.test_client() as client:
-        response = client.get(
-            "/api/market/summary", query_string={"transaction_type": "resale"}
-        )
+        response = client.get("/api/market/summary", query_string={"transaction_type": "resale"})
     body = response.get_data(as_text=True)
     assert response.status_code == 503
     assert response.json["error"]["code"] == "market_data_unavailable"
@@ -2155,15 +2282,15 @@ def test_market_composition_error_starts_with_fixed_safe_response(
 
 
 def test_admin_composition_error_returns_fixed_safe_message(
-    monkeypatch, tmp_path: Path, market_frame: pd.DataFrame,
+    monkeypatch,
+    tmp_path: Path,
+    market_frame: pd.DataFrame,
 ) -> None:
     import qingpu_insight.cli as cli
     import qingpu_insight.web as web
 
     monkeypatch.setenv("QINGPU_DATABASE_URL", "mysql://<user>:<password>@local/<db>")
-    monkeypatch.setenv(
-        "QINGPU_SECRET_KEY", "Bc4!yZ8@rS1#uV3%wX6&dE9*fG2+hJ5@L6"
-    )
+    monkeypatch.setenv("QINGPU_SECRET_KEY", "Bc4!yZ8@rS1#uV3%wX6&dE9*fG2+hJ5@L6")
     monkeypatch.setattr(
         cli,
         "_create_listing_update_service",
@@ -2171,9 +2298,7 @@ def test_admin_composition_error_returns_fixed_safe_message(
             RuntimeError("mysql://admin:password@localhost/db SELECT secret")
         ),
     )
-    app = web.create_app(
-        root=tmp_path, data_source=InMemoryMarketDataSource(market_frame)
-    )
+    app = web.create_app(root=tmp_path, data_source=InMemoryMarketDataSource(market_frame))
     with app.test_client() as client:
         with client.session_transaction() as sess:
             sess["_csrf_token"] = "test-token"
@@ -2221,12 +2346,14 @@ class GatePreparationRunner:
             reached_terminal_page=True,
         )
         rows = pd.DataFrame(
-            [{
-                "source": "591",
-                "listing_type": listing_type,
-                "source_listing_id": f"{listing_type}-1",
-                "snapshot_at": batch.started_at,
-            }]
+            [
+                {
+                    "source": "591",
+                    "listing_type": listing_type,
+                    "source_listing_id": f"{listing_type}-1",
+                    "snapshot_at": batch.started_at,
+                }
+            ]
         )
         events = pd.DataFrame(
             [{"event_key": f"event-{listing_type}", "listing_type": listing_type}]
@@ -2269,7 +2396,8 @@ class GateLock:
 
 
 def test_real_executor_web_flow_starts_once_and_shuts_down(
-    tmp_path: Path, market_frame: pd.DataFrame,
+    tmp_path: Path,
+    market_frame: pd.DataFrame,
 ) -> None:
     from qingpu_insight.job_executor import LocalJobExecutor
     from qingpu_insight.jobs import JobService
@@ -2338,7 +2466,9 @@ class StubModelTrainingService:
     def submit(self, request):
         self.requests.append(request)
         return self.job_service.create(
-            "model_training", "model_training:active", "web",
+            "model_training",
+            "model_training:active",
+            "web",
         )
 
     def handoff(self, submission, request, executor):
@@ -2406,7 +2536,9 @@ class StubOfficialDataService:
 
     def submit(self, request):
         return self.job_service.create(
-            "official_data_update", "official_data_update:active", request.trigger,
+            "official_data_update",
+            "official_data_update:active",
+            request.trigger,
         )
 
     def handoff(self, submission, request, executor):
@@ -2450,6 +2582,7 @@ def model_admin_client(market_frame: pd.DataFrame) -> FlaskClient:
         ),
     )
     from dataclasses import replace
+
     app.extensions["qingpu_admin_runtime"] = replace(
         app.extensions["qingpu_admin_runtime"],
         dashboard_service=StubDashboardService(),
@@ -2474,7 +2607,8 @@ class TestModelAdminApi:
         ],
     )
     def test_model_training_post_rejects_nonfixed_payload(
-        self, model_admin_client: FlaskClient,
+        self,
+        model_admin_client: FlaskClient,
         payload: dict[str, object],
         field: str,
     ) -> None:
@@ -2487,7 +2621,8 @@ class TestModelAdminApi:
         assert response.get_json()["error"]["fields"][field]
 
     def test_model_admin_get_rejects_untrusted_host(
-        self, model_admin_client: FlaskClient,
+        self,
+        model_admin_client: FlaskClient,
     ) -> None:
         response = model_admin_client.get(
             "/api/admin/models/status",
@@ -2496,7 +2631,8 @@ class TestModelAdminApi:
         assert response.status_code == 403
 
     def test_model_admin_training_runs_get_rejects_untrusted_host(
-        self, model_admin_client: FlaskClient,
+        self,
+        model_admin_client: FlaskClient,
     ) -> None:
         response = model_admin_client.get(
             "/api/admin/model-training-runs",
@@ -2505,7 +2641,8 @@ class TestModelAdminApi:
         assert response.status_code == 403
 
     def test_model_admin_training_run_get_rejects_untrusted_host(
-        self, model_admin_client: FlaskClient,
+        self,
+        model_admin_client: FlaskClient,
     ) -> None:
         response = model_admin_client.get(
             "/api/admin/model-training-runs/00000000-0000-4000-8000-000000000000",
@@ -2514,7 +2651,8 @@ class TestModelAdminApi:
         assert response.status_code == 403
 
     def test_model_admin_report_get_rejects_untrusted_host(
-        self, model_admin_client: FlaskClient,
+        self,
+        model_admin_client: FlaskClient,
     ) -> None:
         response = model_admin_client.get(
             "/api/admin/model-training-runs/00000000-0000-4000-8000-000000000000/reports/resale-evaluation",
@@ -2523,7 +2661,8 @@ class TestModelAdminApi:
         assert response.status_code == 403
 
     def test_model_admin_post_rejects_missing_csrf(
-        self, model_admin_client: FlaskClient,
+        self,
+        model_admin_client: FlaskClient,
     ) -> None:
         response = model_admin_client.post(
             "/api/admin/model-training-runs",
@@ -2532,7 +2671,8 @@ class TestModelAdminApi:
         assert response.status_code == 403
 
     def test_model_admin_post_rejects_wrong_csrf(
-        self, model_admin_client: FlaskClient,
+        self,
+        model_admin_client: FlaskClient,
     ) -> None:
         response = model_admin_client.post(
             "/api/admin/model-training-runs",
@@ -2542,7 +2682,8 @@ class TestModelAdminApi:
         assert response.status_code == 403
 
     def test_model_admin_post_submit_new_run_returns_202(
-        self, model_admin_client: FlaskClient,
+        self,
+        model_admin_client: FlaskClient,
     ) -> None:
         response = model_admin_client.post(
             "/api/admin/model-training-runs",
@@ -2556,7 +2697,8 @@ class TestModelAdminApi:
         assert body["status"] == "pending"
 
     def test_model_admin_post_repeat_while_active_returns_200(
-        self, model_admin_client: FlaskClient,
+        self,
+        model_admin_client: FlaskClient,
     ) -> None:
         first = model_admin_client.post(
             "/api/admin/model-training-runs",
@@ -2573,7 +2715,8 @@ class TestModelAdminApi:
         assert second.get_json()["run_id"] == first.get_json()["run_id"]
 
     def test_model_training_history_contains_only_model_training(
-        self, model_admin_client: FlaskClient,
+        self,
+        model_admin_client: FlaskClient,
     ) -> None:
         model_admin_client.post(
             "/api/admin/model-training-runs",
@@ -2591,7 +2734,8 @@ class TestModelAdminApi:
         assert all(item["status"] == "pending" for item in body["items"])
 
     def test_model_training_run_detail_validates_uuid(
-        self, model_admin_client: FlaskClient,
+        self,
+        model_admin_client: FlaskClient,
     ) -> None:
         bad = model_admin_client.get("/api/admin/model-training-runs/not-a-uuid")
         missing = model_admin_client.get(
@@ -2601,11 +2745,17 @@ class TestModelAdminApi:
         assert bad.get_json()["error"]["fields"] == {"run_id": "invalid_uuid"}
         assert missing.status_code == 404
 
-    @pytest.mark.parametrize("bad_type", [
-        "resale.joblib", "unknown",
-    ])
+    @pytest.mark.parametrize(
+        "bad_type",
+        [
+            "resale.joblib",
+            "unknown",
+        ],
+    )
     def test_model_admin_report_unknown_type_returns_400(
-        self, model_admin_client: FlaskClient, bad_type: str,
+        self,
+        model_admin_client: FlaskClient,
+        bad_type: str,
     ) -> None:
         response = model_admin_client.get(
             "/api/admin/model-training-runs/00000000-0000-4000-8000-000000000000"
@@ -2615,7 +2765,8 @@ class TestModelAdminApi:
         assert response.get_json()["error"]["fields"]["report_type"]
 
     def test_model_admin_status_returns_shape(
-        self, model_admin_client: FlaskClient,
+        self,
+        model_admin_client: FlaskClient,
     ) -> None:
         response = model_admin_client.get("/api/admin/models/status")
         assert response.status_code == 200
@@ -2624,7 +2775,8 @@ class TestModelAdminApi:
         assert "candidate_count" in body
 
     def test_model_training_post_canonicalizes_markets(
-        self, model_admin_client: FlaskClient,
+        self,
+        model_admin_client: FlaskClient,
     ) -> None:
         response = model_admin_client.post(
             "/api/admin/model-training-runs",
@@ -2635,7 +2787,8 @@ class TestModelAdminApi:
         assert data.get("created") is True
 
     def test_model_training_post_accepts_four_profile_plan(
-        self, model_admin_client: FlaskClient,
+        self,
+        model_admin_client: FlaskClient,
     ) -> None:
         response = model_admin_client.post(
             "/api/admin/model-training-runs",
@@ -2655,15 +2808,17 @@ class TestModelAdminApi:
             headers={"X-Qingpu-CSRF": "test-token"},
         )
         assert response.status_code == 202
-        service = model_admin_client.application.extensions[
-            "test_model_training_service"
-        ]
+        service = model_admin_client.application.extensions["test_model_training_service"]
         assert [p.name for p in service.requests[-1].tuning_plan.profiles] == [
-            "quick", "balanced", "thorough", "custom",
+            "quick",
+            "balanced",
+            "thorough",
+            "custom",
         ]
 
     def test_model_training_post_defaults_to_three_profiles(
-        self, model_admin_client: FlaskClient,
+        self,
+        model_admin_client: FlaskClient,
     ) -> None:
         response = model_admin_client.post(
             "/api/admin/model-training-runs",
@@ -2671,15 +2826,16 @@ class TestModelAdminApi:
             headers={"X-Qingpu-CSRF": "test-token"},
         )
         assert response.status_code == 202
-        service = model_admin_client.application.extensions[
-            "test_model_training_service"
-        ]
+        service = model_admin_client.application.extensions["test_model_training_service"]
         assert [p.name for p in service.requests[-1].tuning_plan.profiles] == [
-            "quick", "balanced", "thorough",
+            "quick",
+            "balanced",
+            "thorough",
         ]
 
     def test_model_training_post_rejects_invalid_tuning_field(
-        self, model_admin_client: FlaskClient,
+        self,
+        model_admin_client: FlaskClient,
     ) -> None:
         response = model_admin_client.post(
             "/api/admin/model-training-runs",
@@ -2693,7 +2849,8 @@ class TestModelAdminApi:
         assert response.get_json()["error"]["fields"]["tuning.mode"]
 
     def test_model_training_post_rejects_invalid_custom(
-        self, model_admin_client: FlaskClient,
+        self,
+        model_admin_client: FlaskClient,
     ) -> None:
         response = model_admin_client.post(
             "/api/admin/model-training-runs",
@@ -2716,11 +2873,12 @@ class TestModelAdminApi:
         assert response.get_json()["error"]["fields"]["tuning.custom.hgb_learning_rate"]
 
     def test_model_admin_report_download_success(
-        self, monkeypatch, model_admin_client: FlaskClient, tmp_path: Path,
+        self,
+        monkeypatch,
+        model_admin_client: FlaskClient,
+        tmp_path: Path,
     ) -> None:
-        obs = model_admin_client.application.extensions[
-            "qingpu_admin_services"
-        ].model_observatory
+        obs = model_admin_client.application.extensions["qingpu_admin_services"].model_observatory
         report_type = "presale-evaluation"
         report_dir = tmp_path / "reports"
         report_dir.mkdir(parents=True)
@@ -2741,7 +2899,8 @@ class TestModelAdminApi:
     # ------------------------------------------------------------------
 
     def test_model_training_stop_rejects_untrusted_host(
-        self, model_admin_client: FlaskClient,
+        self,
+        model_admin_client: FlaskClient,
     ) -> None:
         response = model_admin_client.post(
             "/api/admin/model-training-runs/00000000-0000-4000-8000-000000000000/stop",
@@ -2750,7 +2909,8 @@ class TestModelAdminApi:
         assert response.status_code == 403
 
     def test_model_training_stop_rejects_missing_csrf(
-        self, model_admin_client: FlaskClient,
+        self,
+        model_admin_client: FlaskClient,
     ) -> None:
         response = model_admin_client.post(
             "/api/admin/model-training-runs/00000000-0000-4000-8000-000000000000/stop",
@@ -2758,7 +2918,8 @@ class TestModelAdminApi:
         assert response.status_code == 403
 
     def test_model_training_stop_rejects_invalid_uuid(
-        self, model_admin_client: FlaskClient,
+        self,
+        model_admin_client: FlaskClient,
     ) -> None:
         response = model_admin_client.post(
             "/api/admin/model-training-runs/not-a-uuid/stop",
@@ -2768,7 +2929,8 @@ class TestModelAdminApi:
         assert response.get_json()["error"]["fields"]["run_id"] == "invalid_uuid"
 
     def test_model_training_stop_returns_404_for_unknown_run(
-        self, model_admin_client: FlaskClient,
+        self,
+        model_admin_client: FlaskClient,
     ) -> None:
         response = model_admin_client.post(
             "/api/admin/model-training-runs/00000000-0000-4000-8000-000000000000/stop",
@@ -2777,11 +2939,10 @@ class TestModelAdminApi:
         assert response.status_code == 404
 
     def test_model_training_stop_returns_404_for_wrong_job_type(
-        self, model_admin_client: FlaskClient,
+        self,
+        model_admin_client: FlaskClient,
     ) -> None:
-        js = model_admin_client.application.extensions[
-            "qingpu_admin_services"
-        ].job_service
+        js = model_admin_client.application.extensions["qingpu_admin_services"].job_service
         bad_run = js.create("listing_update", "lu:active", "web")
         bad_id = bad_run.run.run_id
         response = model_admin_client.post(
@@ -2791,11 +2952,10 @@ class TestModelAdminApi:
         assert response.status_code == 404
 
     def test_model_training_stop_returns_409_for_terminal_status(
-        self, model_admin_client: FlaskClient,
+        self,
+        model_admin_client: FlaskClient,
     ) -> None:
-        js = model_admin_client.application.extensions[
-            "qingpu_admin_services"
-        ].job_service
+        js = model_admin_client.application.extensions["qingpu_admin_services"].job_service
         submit_resp = model_admin_client.post(
             "/api/admin/model-training-runs",
             json={"markets": ["resale"]},
@@ -2813,11 +2973,10 @@ class TestModelAdminApi:
         assert response.get_json()["error"]["code"] == "not_stoppable"
 
     def test_model_training_stop_returns_409_for_guided_run(
-        self, model_admin_client: FlaskClient,
+        self,
+        model_admin_client: FlaskClient,
     ) -> None:
-        mts = model_admin_client.application.extensions[
-            "test_model_training_service"
-        ]
+        mts = model_admin_client.application.extensions["test_model_training_service"]
         mts.should_stop = False
         submit_resp = model_admin_client.post(
             "/api/admin/model-training-runs",
@@ -2834,11 +2993,10 @@ class TestModelAdminApi:
         mts.should_stop = True
 
     def test_model_training_stop_returns_202(
-        self, model_admin_client: FlaskClient,
+        self,
+        model_admin_client: FlaskClient,
     ) -> None:
-        mts = model_admin_client.application.extensions[
-            "test_model_training_service"
-        ]
+        mts = model_admin_client.application.extensions["test_model_training_service"]
         mts.should_stop = True
         submit_resp = model_admin_client.post(
             "/api/admin/model-training-runs",
@@ -2856,11 +3014,10 @@ class TestModelAdminApi:
         assert body["stop_requested"] is True
 
     def test_model_training_stop_repeated_request_returns_202(
-        self, model_admin_client: FlaskClient,
+        self,
+        model_admin_client: FlaskClient,
     ) -> None:
-        mts = model_admin_client.application.extensions[
-            "test_model_training_service"
-        ]
+        mts = model_admin_client.application.extensions["test_model_training_service"]
         mts.should_stop = True
         submit_resp = model_admin_client.post(
             "/api/admin/model-training-runs",
@@ -2884,13 +3041,15 @@ class TestModelAdminApi:
 class TestModelAdminPage:
     def test_model_admin_page_untrusted_host(self, model_admin_client) -> None:
         response = model_admin_client.get(
-            "/admin/models", base_url="http://attacker.example",
+            "/admin/models",
+            base_url="http://attacker.example",
         )
         assert response.status_code == 403
 
     def test_model_admin_page_untrusted_remote(self, model_admin_client) -> None:
         response = model_admin_client.get(
-            "/admin/models", environ_base={"REMOTE_ADDR": "10.0.0.2"},
+            "/admin/models",
+            environ_base={"REMOTE_ADDR": "10.0.0.2"},
         )
         assert response.status_code == 403
 
@@ -2912,15 +3071,15 @@ class TestModelAdminPage:
         assert "不會自動發布" in html
         assert 'id="ma-history-table"' in html
         assert 'id="ma-detail-content"' in html
-        assert 'job_polling.js' in html
-        assert 'models_admin.js' in html
+        assert "job_polling.js" in html
+        assert "models_admin.js" in html
         assert "查看詳細數據" in html
         assert "平均每坪估錯多少元" in html
         assert "重要特徵（前五項）" in html
         assert "renderTrainingDetail(detailRun, true)" in html
         assert 'var detailSection = document.getElementById("ma-detail-content")' in html
-        js_pos = html.index('job_polling.js')
-        ma_pos = html.index('models_admin.js')
+        js_pos = html.index("job_polling.js")
+        ma_pos = html.index("models_admin.js")
         assert js_pos < ma_pos, "job_polling.js must load before models_admin.js"
         assert 'id="ma-active-status"' in html
         assert 'id="ma-submit-btn"' in html
@@ -2939,8 +3098,14 @@ class TestModelAdminPage:
     def test_model_admin_page_no_freeform_inputs(self, model_admin_client) -> None:
         response = model_admin_client.get("/admin")
         html = response.get_data(as_text=True)
-        forbidden = ('name="path"', 'name="command"', 'name="estimator"',
-                     'name="hyperparameter"', 'name="publish"', 'name="rollback"')
+        forbidden = (
+            'name="path"',
+            'name="command"',
+            'name="estimator"',
+            'name="hyperparameter"',
+            'name="publish"',
+            'name="rollback"',
+        )
         for token in forbidden:
             assert token not in html, f"unexpected freeform input: {token}"
 
@@ -2949,10 +3114,12 @@ class TestModelAdminPage:
         html = response.get_data(as_text=True)
         assert "不會自動發布" in html
 
+
 def test_admin_page_is_local_only(model_admin_client):
-    assert model_admin_client.get(
-        "/admin", environ_base={"REMOTE_ADDR": "10.0.0.2"}
-    ).status_code == 403
+    assert (
+        model_admin_client.get("/admin", environ_base={"REMOTE_ADDR": "10.0.0.2"}).status_code
+        == 403
+    )
 
 
 def test_admin_listing_controls_exclude_rental(
@@ -2967,14 +3134,18 @@ def test_admin_listing_controls_exclude_rental(
 
 
 def test_admin_page_has_seven_classified_sections(model_admin_client):
-    
 
     response = model_admin_client.get("/admin")
     soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
     assert response.status_code == 200
     assert [node["id"] for node in soup.select("main > section[id]")] == [
-        "admin-overview", "admin-data", "admin-listings", "admin-models",
-        "admin-llm", "admin-jobs", "admin-diagnostics",
+        "admin-overview",
+        "admin-data",
+        "admin-listings",
+        "admin-models",
+        "admin-llm",
+        "admin-jobs",
+        "admin-diagnostics",
     ]
     assert soup.select_one('meta[name="csrf-token"]')["content"]
 
@@ -3005,24 +3176,48 @@ def test_admin_jobs_returns_job_history(admin_app, admin_client):
     now = datetime.now(UTC)
     run1 = JobRun(
         run_id="11111111-1111-4111-8111-111111111111",
-        job_type="listing_update", trigger="manual", idempotency_key="k1",
-        status="pending", started_at=None, finished_at=None,
-        attempt=1, input_version=None, output_version=None,
-        summary={}, error_code=None, error_message=None,
+        job_type="listing_update",
+        trigger="manual",
+        idempotency_key="k1",
+        status="pending",
+        started_at=None,
+        finished_at=None,
+        attempt=1,
+        input_version=None,
+        output_version=None,
+        summary={},
+        error_code=None,
+        error_message=None,
     )
     run2 = JobRun(
         run_id="22222222-2222-4222-8222-222222222222",
-        job_type="listing_update", trigger="manual", idempotency_key="k2",
-        status="succeeded", started_at=now, finished_at=now,
-        attempt=1, input_version=None, output_version="v1",
-        summary={}, error_code=None, error_message=None,
+        job_type="listing_update",
+        trigger="manual",
+        idempotency_key="k2",
+        status="succeeded",
+        started_at=now,
+        finished_at=now,
+        attempt=1,
+        input_version=None,
+        output_version="v1",
+        summary={},
+        error_code=None,
+        error_message=None,
     )
     run3 = JobRun(
         run_id="33333333-3333-4333-8333-333333333333",
-        job_type="model_training", trigger="manual", idempotency_key="k3",
-        status="failed", started_at=now, finished_at=now,
-        attempt=1, input_version=None, output_version=None,
-        summary={}, error_code="worker_interrupted", error_message="worker interrupted",
+        job_type="model_training",
+        trigger="manual",
+        idempotency_key="k3",
+        status="failed",
+        started_at=now,
+        finished_at=now,
+        attempt=1,
+        input_version=None,
+        output_version=None,
+        summary={},
+        error_code="worker_interrupted",
+        error_message="worker interrupted",
     )
     repo._runs[run1.run_id] = run1
     repo._runs[run2.run_id] = run2
@@ -3056,10 +3251,18 @@ def test_admin_jobs_filter_by_job_type(admin_app, admin_client):
     now = datetime.now(UTC)
     run = JobRun(
         run_id="44444444-4444-4444-8444-444444444444",
-        job_type="listing_update", trigger="manual", idempotency_key="k4",
-        status="succeeded", started_at=now, finished_at=now,
-        attempt=1, input_version=None, output_version="v1",
-        summary={}, error_code=None, error_message=None,
+        job_type="listing_update",
+        trigger="manual",
+        idempotency_key="k4",
+        status="succeeded",
+        started_at=now,
+        finished_at=now,
+        attempt=1,
+        input_version=None,
+        output_version="v1",
+        summary={},
+        error_code=None,
+        error_message=None,
     )
     repo._runs[run.run_id] = run
 
@@ -3148,26 +3351,25 @@ def test_official_update_rejects_when_mutation_not_ready(admin_client, monkeypat
 
 
 def test_official_data_quality_validates_uuid_format(admin_client):
-    response = admin_client.get(
-        "/api/admin/official-data-updates/not-a-uuid/reports/quality"
-    )
+    response = admin_client.get("/api/admin/official-data-updates/not-a-uuid/reports/quality")
     assert response.status_code == 400
     assert response.get_json()["error"]["fields"]["run_id"] == "invalid_uuid"
 
 
 def test_official_data_quality_returns_404_for_nonexistent_job(admin_client):
     response = admin_client.get(
-        "/api/admin/official-data-updates/"
-        "00000000-0000-4000-8000-000000000000/reports/quality"
+        "/api/admin/official-data-updates/00000000-0000-4000-8000-000000000000/reports/quality"
     )
     assert response.status_code == 404
 
 
 def test_official_data_quality_returns_404_for_non_succeeded_job(
-    admin_app, admin_client,
+    admin_app,
+    admin_client,
 ) -> None:
     _, repo, _, _ = admin_app
     from qingpu_insight.jobs import JobService
+
     service = JobService(repo)
     submission = service.create("official_data_update", "pending-job", "manual")
     response = admin_client.get(
@@ -3177,10 +3379,12 @@ def test_official_data_quality_returns_404_for_non_succeeded_job(
 
 
 def test_official_data_quality_returns_404_for_wrong_job_type(
-    admin_app, admin_client,
+    admin_app,
+    admin_client,
 ) -> None:
     _, repo, _, _ = admin_app
     from qingpu_insight.jobs import JobService
+
     service = JobService(repo)
     submission = service.create("listing_update", "wrong-type", "manual")
     service.start(submission.run.run_id)
@@ -3205,7 +3409,9 @@ def test_official_data_quality_happy_path(market_frame, tmp_path) -> None:
         root=tmp_path,
         data_source=InMemoryMarketDataSource(market_frame),
         admin_services=AdminServices(
-            job_service, listing_service, executor,
+            job_service,
+            listing_service,
+            executor,
             official_data_service=official_ds,
         ),
     )
@@ -3290,7 +3496,9 @@ class StubModelReleaseService:
 
         market = preview.payload["market"]
         submission = self.job_service.create(
-            "model_release", f"model_release:{market}:active", "manual",
+            "model_release",
+            f"model_release:{market}:active",
+            "manual",
         )
         self._submissions.append(submission)
         return submission
@@ -3318,6 +3526,7 @@ def model_release_client(market_frame: pd.DataFrame) -> FlaskClient:
         ),
     )
     from dataclasses import replace
+
     app.extensions["qingpu_admin_runtime"] = replace(
         app.extensions["qingpu_admin_runtime"],
         dashboard_service=StubDashboardService(),
@@ -3334,7 +3543,8 @@ class TestModelReleaseApi:
         response = model_release_client.post(
             "/api/admin/model-release-previews",
             json={
-                "action": "publish", "market": "resale",
+                "action": "publish",
+                "market": "resale",
                 "run_id": "00000000-0000-4000-8000-000000000000",
             },
             headers={"X-Qingpu-CSRF": "test-token"},
@@ -3388,8 +3598,10 @@ class TestModelReleaseApi:
         response = model_release_client.post(
             "/api/admin/model-release-previews",
             json={
-                "action": "publish", "market": "resale",
-                "run_id": "run-123", "estimator": "xgboost",
+                "action": "publish",
+                "market": "resale",
+                "run_id": "run-123",
+                "estimator": "xgboost",
             },
             headers={"X-Qingpu-CSRF": "test-token"},
         )
@@ -3426,7 +3638,8 @@ class TestModelReleaseApi:
         preview = model_release_client.post(
             "/api/admin/model-release-previews",
             json={
-                "action": "publish", "market": "resale",
+                "action": "publish",
+                "market": "resale",
                 "run_id": "00000000-0000-4000-8000-000000000000",
             },
             headers={"X-Qingpu-CSRF": "test-token"},
@@ -3576,6 +3789,7 @@ def backup_admin_app(market_frame: pd.DataFrame):
         ),
     )
     from dataclasses import replace
+
     app.extensions["qingpu_admin_runtime"] = replace(
         app.extensions["qingpu_admin_runtime"],
         dashboard_service=StubDashboardService(),
@@ -3606,7 +3820,8 @@ class TestBackupAdminApi:
         assert body["created"] is True
 
     def test_backup_create_duplicate_returns_existing(
-        self, backup_admin_client,
+        self,
+        backup_admin_client,
     ) -> None:
         first = backup_admin_client.post(
             "/api/admin/backups",
@@ -3625,7 +3840,8 @@ class TestBackupAdminApi:
         assert response.status_code == 403
 
     def test_backup_create_rejects_non_loopback(
-        self, backup_admin_client,
+        self,
+        backup_admin_client,
     ) -> None:
         response = backup_admin_client.post(
             "/api/admin/backups",
@@ -3644,7 +3860,8 @@ class TestBackupAdminApi:
         assert body["status"] == "pending"
 
     def test_restore_drill_duplicate_returns_existing(
-        self, backup_admin_client,
+        self,
+        backup_admin_client,
     ) -> None:
         backup_id = "00000000-0000-4000-8000-000000000000"
         first = backup_admin_client.post(
@@ -3659,7 +3876,8 @@ class TestBackupAdminApi:
         assert second.get_json()["run_id"] == first.get_json()["run_id"]
 
     def test_restore_drill_rejects_missing_csrf(
-        self, backup_admin_client,
+        self,
+        backup_admin_client,
     ) -> None:
         response = backup_admin_client.post(
             "/api/admin/backups/00000000-0000-4000-8000-000000000000/restore-drills",
@@ -3741,6 +3959,7 @@ def restore_app(market_frame: pd.DataFrame):
         ),
     )
     from dataclasses import replace
+
     app.extensions["qingpu_admin_runtime"] = replace(
         app.extensions["qingpu_admin_runtime"],
         dashboard_service=StubDashboardService(),
@@ -3895,6 +4114,7 @@ class TestProductionRestoreApi:
     def test_restore_preview_unavailable_without_service(self, admin_app, admin_client) -> None:
         app, _, _, _ = admin_app
         from dataclasses import replace
+
         app.extensions["qingpu_admin_runtime"] = replace(
             app.extensions["qingpu_admin_runtime"],
             restore_service=None,
@@ -3909,6 +4129,7 @@ class TestProductionRestoreApi:
     def test_restore_submit_unavailable_without_service(self, admin_app, admin_client) -> None:
         app, _, _, _ = admin_app
         from dataclasses import replace
+
         app.extensions["qingpu_admin_runtime"] = replace(
             app.extensions["qingpu_admin_runtime"],
             restore_service=None,
@@ -3957,6 +4178,7 @@ class TestProductionRestoreApi:
     def test_providers_unavailable_without_service(self, admin_app, admin_client) -> None:
         app, _, _, _ = admin_app
         from dataclasses import replace
+
         app.extensions["qingpu_admin_runtime"] = replace(
             app.extensions["qingpu_admin_runtime"],
             provider_ops_service=None,
@@ -4020,6 +4242,7 @@ class TestProductionRestoreApi:
     def test_delete_gemini_key(self, admin_app, admin_client) -> None:
         app, _, _, _ = admin_app
         from dataclasses import replace
+
         store = _SecretsStore()
         store.last_set = "existing-key"
         app.extensions["qingpu_admin_runtime"] = replace(
@@ -4085,7 +4308,8 @@ class TestProductionRestoreApi:
     # ------------------------------------------------------------------
 
     def test_admin_llm_models_returns_only_safe_catalog(
-        self, admin_client,
+        self,
+        admin_client,
     ) -> None:
         response = admin_client.get("/api/admin/llm-models")
 
@@ -4095,7 +4319,9 @@ class TestProductionRestoreApi:
         assert "digest" not in response.get_data(as_text=True).lower()
 
     def test_admin_benchmark_accepts_only_catalog_model_id(
-        self, admin_app, admin_client,
+        self,
+        admin_app,
+        admin_client,
     ) -> None:
         from dataclasses import replace
 
@@ -4129,7 +4355,9 @@ class TestProductionRestoreApi:
         assert response.get_json()["model"] == "gemma4:e2b"
 
     def test_admin_benchmark_rejects_unknown_or_spoofed_model(
-        self, admin_app, admin_client,
+        self,
+        admin_app,
+        admin_client,
     ) -> None:
         from dataclasses import replace
 
@@ -4301,11 +4529,12 @@ class TestProductionRestoreApi:
         assert response.get_json()["error"]["fields"]["report_type"] == "json_or_markdown"
 
     def test_benchmark_report_returns_404_for_nonexistent_job(
-        self, admin_app, admin_client,
+        self,
+        admin_app,
+        admin_client,
     ) -> None:
         response = admin_client.get(
-            "/api/admin/llm-benchmark-runs/"
-            "00000000-0000-4000-8000-000000000000/reports/json"
+            "/api/admin/llm-benchmark-runs/00000000-0000-4000-8000-000000000000/reports/json"
         )
         assert response.status_code == 404
 
@@ -4319,6 +4548,7 @@ class TestProductionRestoreApi:
         cases_dir.mkdir(parents=True, exist_ok=True)
         cases_path = cases_dir / "m44_cases.json"
         import json as _json
+
         cases_path.write_text(_json.dumps([]))
 
         repo = MemoryAdminJobRepository()
@@ -4330,10 +4560,13 @@ class TestProductionRestoreApi:
             root=tmp_path,
             data_source=InMemoryMarketDataSource(market_frame),
             admin_services=AdminServices(
-                job_service, listing_service, executor,
+                job_service,
+                listing_service,
+                executor,
             ),
         )
         from dataclasses import replace
+
         svc = ProviderOpsService(
             rule_provider=type("R", (), {"generate": lambda s, p, rc=(): None})(),
             provider_factory=lambda n: type("P", (), {"generate": lambda s, p, rc=(): None})(),
@@ -4374,14 +4607,16 @@ class TestProductionRestoreApi:
 class FakeLlmModelCatalog:
     def public_catalog(self):
         return {
-            "items": [{
-                "id": "ollama:gemma4:e2b",
-                "provider": "ollama",
-                "model": "gemma4:e2b",
-                "label": "Ollama｜gemma4:e2b",
-                "ready": True,
-                "note": "本機已安裝",
-            }],
+            "items": [
+                {
+                    "id": "ollama:gemma4:e2b",
+                    "provider": "ollama",
+                    "model": "gemma4:e2b",
+                    "label": "Ollama｜gemma4:e2b",
+                    "ready": True,
+                    "note": "本機已安裝",
+                }
+            ],
             "warnings": [],
         }
 
@@ -4389,6 +4624,7 @@ class FakeLlmModelCatalog:
         if model_id != "ollama:gemma4:e2b":
             raise ValueError("unknown_model_id")
         from qingpu_insight.llm_model_catalog import BenchmarkModelOption
+
         return BenchmarkModelOption(
             id=model_id,
             provider="ollama",
@@ -4405,10 +4641,10 @@ class _StubBenchmarkRunner:
         (output_dir / "benchmark_results.json").write_text('{"result": "ok"}')
         (output_dir / "benchmark_results.md").write_text("# Benchmark")
         return {
-            "schema_success": 1.0, "fact_accuracy": 0.95,
-            "required_section_success": 1.0, "p50_latency_ms": 150.0,
+            "schema_success": 1.0,
+            "fact_accuracy": 0.95,
+            "required_section_success": 1.0,
+            "p50_latency_ms": 150.0,
             "p95_latency_ms": 300.0,
             "reports": {"json": "benchmark_results.json", "markdown": "benchmark_results.md"},
         }
-
-

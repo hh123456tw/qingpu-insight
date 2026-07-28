@@ -964,6 +964,7 @@ def create_app(
     shutdown_lock = Lock()
     shutdown_complete = False
     conversation_owned_executor: LocalJobExecutor | None = None
+    conversation_executor: LocalJobExecutor | None = None
 
     def shutdown_admin() -> None:
         nonlocal shutdown_complete
@@ -1101,11 +1102,8 @@ def create_app(
                 else JobService(MySQLJobRepository(connection_factory))
             )
             conversation_job_service = conversation_jobs
-            if admin_services is not None:
-                conversation_executor = admin_services.executor
-            else:
-                conversation_owned_executor = LocalJobExecutor(conversation_jobs)
-                conversation_executor = conversation_owned_executor
+            conversation_owned_executor = LocalJobExecutor(conversation_jobs)
+            conversation_executor = conversation_owned_executor
             browser = DetailPageBrowser(
                 driver_factory=lambda: create_chrome(ChromeConfig(headless=False))
             )
@@ -1165,6 +1163,7 @@ def create_app(
     app.extensions["qingpu_conversation_service"] = conv_service
     app.extensions["qingpu_conversation_repository"] = conv_repo
     app.extensions["qingpu_conversation_job_service"] = conversation_job_service
+    app.extensions["qingpu_conversation_executor"] = conversation_executor
     from qingpu_insight.conversation_models import public_model_catalog
 
     app.register_blueprint(

@@ -31,12 +31,16 @@ class FakeJobRepository:
         return self._runs.get(run_id)
 
     def find_active_by_key(self, idempotency_key: str) -> JobRun | None:
-        return next((run for run in self._runs.values() if run.idempotency_key == idempotency_key
-                     and run.status in ACTIVE_STATUSES), None)
+        return next(
+            (
+                run
+                for run in self._runs.values()
+                if run.idempotency_key == idempotency_key and run.status in ACTIVE_STATUSES
+            ),
+            None,
+        )
 
-    def list_recent(
-        self, limit: int = 20, job_type: str | None = None
-    ) -> list[JobRun]:
+    def list_recent(self, limit: int = 20, job_type: str | None = None) -> list[JobRun]:
         runs = list(self._runs.values())
         if job_type is not None:
             runs = [run for run in runs if run.job_type == job_type]
@@ -62,21 +66,26 @@ class FakeJobRepository:
         return True
 
     def transition(
-        self, run_id: str, current_status: JobStatus, target_status: JobStatus,
-        *, output_version: str | None = None, summary: dict[str, object] | None = None,
-        error_code: str | None = None, error_message: str | None = None,
+        self,
+        run_id: str,
+        current_status: JobStatus,
+        target_status: JobStatus,
+        *,
+        output_version: str | None = None,
+        summary: dict[str, object] | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
     ) -> bool:
         run = self._runs.get(run_id)
         if run is None or run.status != current_status:
             return False
         now = datetime.now(UTC)
         self._runs[run_id] = replace(
-            run, status=target_status,
+            run,
+            status=target_status,
             started_at=run.started_at or now if target_status == "running" else run.started_at,
             finished_at=(
-                now
-                if target_status in ("succeeded", "failed", "skipped")
-                else run.finished_at
+                now if target_status in ("succeeded", "failed", "skipped") else run.finished_at
             ),
             attempt=run.attempt + (run.status == "retry_wait" and target_status == "running"),
             output_version=output_version if output_version is not None else run.output_version,
@@ -100,18 +109,51 @@ def test_executor_starts_once_and_invokes_callable() -> None:
     executor.shutdown()
 
 
+def test_independent_executors_run_jobs_concurrently() -> None:
+    repo = FakeJobRepository()
+    service = JobService(repo)
+    admin_executor = LocalJobExecutor(service)
+    conversation_executor = LocalJobExecutor(service)
+    admin_run = service.create("model_training", "training", "manual").run
+    conversation_run = service.create(
+        "conversation_import",
+        "conversation",
+        "manual",
+    ).run
+    admin_started = Event()
+    release_admin = Event()
+    conversation_started = Event()
+
+    def blocked_training() -> None:
+        admin_started.set()
+        release_admin.wait(timeout=2)
+
+    admin_future = admin_executor.submit(admin_run.run_id, blocked_training)
+    assert admin_started.wait(timeout=1)
+
+    conversation_future = conversation_executor.submit(
+        conversation_run.run_id,
+        conversation_started.set,
+    )
+    assert conversation_started.wait(timeout=1)
+    assert service.get(admin_run.run_id).status == "running"  # type: ignore[union-attr]
+    assert service.get(conversation_run.run_id).status == "running"  # type: ignore[union-attr]
+
+    release_admin.set()
+    admin_future.result(timeout=1)
+    conversation_future.result(timeout=1)
+    admin_executor.shutdown()
+    conversation_executor.shutdown()
+
+
 def test_conversation_commands_use_executor_owned_start_transition() -> None:
     repo = FakeJobRepository()
     job_service = JobService(repo)
     executor = LocalJobExecutor(job_service)
     conversation_repository = MagicMock()
     import_service = MagicMock()
-    import_service.import_initial_listing.return_value = SimpleNamespace(
-        outcome="needs_attention"
-    )
-    import_service.refresh_listing.return_value = SimpleNamespace(
-        outcome="needs_attention"
-    )
+    import_service.import_initial_listing.return_value = SimpleNamespace(outcome="needs_attention")
+    import_service.refresh_listing.return_value = SimpleNamespace(outcome="needs_attention")
     conversation_repository.get_conversation.return_value = SimpleNamespace(
         active_evidence_revision=1,
         rolling_summary=None,
