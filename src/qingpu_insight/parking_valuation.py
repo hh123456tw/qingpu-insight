@@ -44,16 +44,14 @@ def build_parking_price_policy(
     by_type = {}
     for parking_type in valid_types.unique():
         mask = valid_types == parking_type
-        sample_size = mask.sum()
+        sample_size = int(mask.sum())
         if sample_size >= minimum_type_samples:
             median = int(round(valid_prices[mask].median()))
             by_type[parking_type] = ParkingPriceStat(median, sample_size)
 
     market_fallback = None
     if len(valid_prices) > 0:
-        market_fallback = ParkingPriceStat(
-            int(round(valid_prices.median())), len(valid_prices)
-        )
+        market_fallback = ParkingPriceStat(int(round(valid_prices.median())), len(valid_prices))
 
     return ParkingPricePolicy(
         version=1,
@@ -93,6 +91,4 @@ def estimate_parking_price(
             parking_type=norm_type,
         )
 
-    return ParkingPriceEstimate(
-        price_twd=0, sample_size=0, source="none", parking_type=norm_type
-    )
+    return ParkingPriceEstimate(price_twd=0, sample_size=0, source="none", parking_type=norm_type)

@@ -1,3 +1,4 @@
+import json
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -486,6 +487,7 @@ def test_legacy_parking_feature_contract_remains_servable(bundle, market, valid_
     )
     assert with_parking["estimated_total_price_twd"] > (no_parking["estimated_total_price_twd"])
     assert with_parking["degraded_reason"] == "legacy_parking_contract"
+    json.dumps(with_parking, ensure_ascii=False)
 
 
 # --- Task 3: Parking policy ---
