@@ -371,6 +371,33 @@ Web 操作頁支援三組固定調參設定（快速／平衡／精細）及選�
 訓練結果以摘要卡片（MAE、MAPE、覆蓋率、baseline delta）優先呈現，
 完整指標與模型比較收合在可展開的進階區塊。
 
+#### AutoML 自動探索
+
+當引導調參的固定 profile 無法產出通過 A18 發布閘門的候選時，Web 操作頁可選擇 AutoML 模式進行廣域參數探索。
+
+**三種預算：**
+
+| 預算 | 時間 | 最多試驗組數 |
+|------|------|-------------|
+| 快速探索 | 5 分鐘 | 12 組 |
+| 標準探索 | 15 分鐘 | 35 組 |
+| 深度探索 | 30 分鐘 | 70 組 |
+
+AutoML 使用 Optuna TPE 取樣器，在 Random Forest 與 HistGradientBoosting 的參數空間中搜尋，每個試驗經過完整的校準集評估與發布閘門檢查。
+
+**排行榜排序規則：** 以校準閘門通過（`calibration_passed`）為第一排序鍵，通過者優先；同通過狀態下以整體 MAE 由低至高排列；MAE 相同時以 MAPE 為第三鍵。
+
+**排名第 1 不一定可發布：** 排行榜僅反映校準集表現。候選仍需通過完整發布閘門（年度回測 ≥ 2/3 通過、各站 MAPE 不倒退、資料新鮮度等），且必須由管理者在管理端手動決定發布。
+
+**合作停止（Cooperative Stop）：** AutoML 搜尋在 Web 背景執行。管理者可發出停止請求，搜尋在當前試驗完成後優雅終止，已完成的排行榜保留在 `outputs/automl/<run_id>/`。
+
+**輸出位置：**
+- 執行中的部分結果：`outputs/automl/<run_id>/<market>-trials.json`
+- 正式驗證後的候選副本：`<candidate-stage>/automl/<market>-trials.json`
+- 完整候選 artifact（含模型參數與 AutoML 證據）存放於 `candidates/`
+
+AutoML 模式與引導調參為互斥選擇。AutoML 不自動發布任何模型，也不保證排行榜第 1 名可通過完整發布閘門。
+
 ### 啟用估價產品
 
 ```powershell

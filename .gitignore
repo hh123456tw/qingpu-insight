@@ -22,3 +22,4 @@ outputs/valuations/
 /instance/secrets.env
 /instance/*.log
 /outputs/m45-admin-acceptance/
+/outputs/automl/
