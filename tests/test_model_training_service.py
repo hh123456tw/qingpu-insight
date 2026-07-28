@@ -741,11 +741,7 @@ class TestAutoMLOrchestration:
             import json
 
             print(f"\nJob status: {status.status if status else 'N/A'}")
-            summary_text = (
-                json.dumps(status.summary, indent=2, default=str)
-                if status
-                else "N/A"
-            )
+            summary_text = json.dumps(status.summary, indent=2, default=str) if status else "N/A"
             print(f"Job summary: {summary_text}")
 
         assert manifest is not None
@@ -824,6 +820,10 @@ class TestAutoMLOrchestration:
         assert status is not None
         assert status.status == "succeeded"
         assert not status.summary.get("candidate_available", True)
+        raw_output = output_store.get(run.run_id, "resale")
+        assert raw_output is not None
+        assert raw_output["candidate_available"] is False
+        assert raw_output["release_blockers"]
 
     def test_automl_mixed_market_partial_pass(
         self,

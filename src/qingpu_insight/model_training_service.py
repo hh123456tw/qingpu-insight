@@ -801,6 +801,17 @@ class ModelTrainingService:
             trial_file=trial_file_rel,
             trial_sha256=trial_file_sha,
         )
+        if self._automl_output_store is not None:
+            final_snapshot = self._automl_output_store.get(run_id, market) or {}
+            final_snapshot.update(
+                {
+                    "release_blockers": market_snapshot.release_blockers,
+                    "shortlisted_trial_numbers": (market_snapshot.shortlisted_trial_numbers),
+                    "selected_trial_number": None,
+                    "candidate_available": False,
+                }
+            )
+            self._automl_output_store.write(run_id, market, final_snapshot)
         return (None, market_snapshot)
 
     def _build_market_snapshot(

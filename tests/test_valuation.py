@@ -458,6 +458,26 @@ def test_legacy_bundle_no_parking_policy(bundle, market, valid_resale_input):
     assert result["estimated_building_price_twd"] == result["estimated_total_price_twd"]
 
 
+def test_legacy_parking_feature_contract_remains_servable(bundle, market, valid_resale_input):
+    class LegacyParkingPipeline:
+        def predict(self, frame):
+            assert "parking_type" in frame
+            assert "parking_area_ping" in frame
+            return np.full(len(frame), 500_000)
+
+    bundle.pipeline = LegacyParkingPipeline()
+    bundle.feature_columns = FEATURE_COLUMNS + (
+        "parking_type",
+        "parking_area_ping",
+    )
+    bundle.parking_price_policy = None
+
+    result = valuate(valid_resale_input, FakeRegistry(bundle), market)
+
+    assert result["estimated_total_price_twd"] == 15_000_000
+    assert "legacy_parking" in result["confidence_reasons"]
+
+
 # --- Task 3: Parking policy ---
 
 

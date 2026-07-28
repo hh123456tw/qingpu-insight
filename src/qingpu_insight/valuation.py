@@ -531,6 +531,10 @@ def valuate(
 
     data_date = pd.Timestamp(bundle.data_max_date)
     row = input_frame(input_, data_date)
+    if "parking_type" in bundle.feature_columns:
+        row["parking_type"] = input_.parking_type
+    if "parking_area_ping" in bundle.feature_columns:
+        row["parking_area_ping"] = input_.parking_area_ping
 
     unit_price = float(bundle.pipeline.predict(row)[0])
     parking_estimate = estimate_parking_price(bundle.parking_price_policy, input_.parking_type)

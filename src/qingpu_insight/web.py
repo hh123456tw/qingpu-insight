@@ -1199,7 +1199,7 @@ def create_app(
     def handle_unhandled(error: Exception):
         if isinstance(error, HTTPException):
             return error
-        app.logger.error("unhandled error serving request")
+        app.logger.exception("unhandled error serving request")
         return jsonify(
             {
                 "error": {

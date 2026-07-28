@@ -800,7 +800,21 @@
         var results = (detail.manifest && detail.manifest.results) || [];
         if (results.length === 0) {
           var noResult = document.createElement("p");
-          noResult.textContent = "此工作尚無模型結果。";
+          var automlMarkets = (detail.automl && detail.automl.markets) || {};
+          var blockers = [];
+          Object.keys(automlMarkets).forEach(function (market) {
+            (automlMarkets[market].release_blockers || []).forEach(function (code) {
+              if (blockers.indexOf(code) === -1) blockers.push(code);
+            });
+          });
+          if (detail.status === "succeeded" && Object.keys(automlMarkets).length > 0) {
+            noResult.textContent = blockers.length > 0
+              ? "AutoML 搜尋完成，但正式回測未通過：" +
+                blockers.map(ma.reasonLabel).join("、")
+              : "AutoML 搜尋完成，但沒有候選模型通過正式發布門檻。";
+          } else {
+            noResult.textContent = "此工作尚無模型結果。";
+          }
           container.appendChild(noResult);
           return;
         }
