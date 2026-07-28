@@ -333,9 +333,7 @@ def test_profile_failure_discards_candidate_and_fails_job(
     monkeypatch.setattr(
         mts,
         "run_tuned_model_experiment",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            ProfileEvaluationError("thorough")
-        ),
+        lambda *args, **kwargs: (_ for _ in ()).throw(ProfileEvaluationError("thorough")),
     )
     with pytest.raises(ModelTrainingError) as caught:
         service.execute(run.run_id, request)
@@ -348,15 +346,25 @@ def test_execute_runs_tuned_model_experiment_with_profiles_and_recency_weighting
     tmp_path, market_parquet, monkeypatch
 ):
     import qingpu_insight.model_training_service as mts
+
     captured = []
 
-    def spy(split, *, profiles, feature_columns,
-            use_recency_weights, baseline_months, on_profile_start=None):
-        captured.append({
-            "profile_count": len(profiles),
-            "use_recency_weights": use_recency_weights,
-            "profile_names": [p.name for p in profiles],
-        })
+    def spy(
+        split,
+        *,
+        profiles,
+        feature_columns,
+        use_recency_weights,
+        baseline_months,
+        on_profile_start=None,
+    ):
+        captured.append(
+            {
+                "profile_count": len(profiles),
+                "use_recency_weights": use_recency_weights,
+                "profile_names": [p.name for p in profiles],
+            }
+        )
         from qingpu_insight.model_training import (
             ProfileEvaluation,
             TunedModelExperiment,
@@ -366,6 +374,7 @@ def test_execute_runs_tuned_model_experiment_with_profiles_and_recency_weighting
         from qingpu_insight.model_training import (
             run_model_experiment as orig,
         )
+
         result = orig(
             split,
             feature_columns=feature_columns,
@@ -375,13 +384,15 @@ def test_execute_runs_tuned_model_experiment_with_profiles_and_recency_weighting
         if "ridge" not in result.final_test_results:
             ridge_est = candidate_estimators(feature_columns=feature_columns)["ridge"]
             ridge_eval = evaluate_candidate(
-                "ridge", ridge_est, split.train, split.test,
+                "ridge",
+                ridge_est,
+                split.train,
+                split.test,
                 feature_columns=feature_columns,
             )
             result.final_test_results["ridge"] = ridge_eval
         profiles_tuple = tuple(
-            ProfileEvaluation(profile=p, candidates=(), candidate_errors={})
-            for p in profiles
+            ProfileEvaluation(profile=p, candidates=(), candidate_errors={}) for p in profiles
         )
         return TunedModelExperiment(
             profile_results=profiles_tuple,
@@ -465,7 +476,8 @@ def automl_plan() -> AutoMLTuningPlan:
 
 @pytest.fixture
 def automl_service_fixture(
-    tmp_path: Path, market_parquet: Path,
+    tmp_path: Path,
+    market_parquet: Path,
 ) -> tuple[ModelTrainingService, JobService, AutoMLControlRegistry, AutoMLRunOutputStore]:
     repo = FakeJobRepository()
     jobs = JobService(repo)
@@ -489,13 +501,14 @@ DUMMY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 class _FakeEstimator(_SkBaseEst):
     def predict(self, X):
         import numpy as np
+
         return np.full(len(X), 500000.0)
+
     def fit(self, X, y, sample_weight=None):
         return self
 
 
 class TestAutoMLOrchestration:
-
     def _make_trial(
         self,
         trial_number: int,
@@ -505,6 +518,7 @@ class TestAutoMLOrchestration:
         station_mape: dict,
     ) -> Any:
         from qingpu_insight.automl_search import AutoMLTrialResult
+
         return AutoMLTrialResult(
             trial_number=trial_number,
             state="completed",
@@ -526,6 +540,7 @@ class TestAutoMLOrchestration:
         stopped: bool = False,
     ) -> Any:
         from qingpu_insight.automl_search import AutoMLSearchResult, rank_trials, shortlist_trials
+
         all_trials = tuple(trials)
         ranked = rank_trials(all_trials)
         shortlisted = shortlist_trials(ranked)
@@ -578,15 +593,40 @@ class TestAutoMLOrchestration:
 
         monkeypatch.setattr(mts, "run_automl_search", lambda *a, **kw: search_result)
         monkeypatch.setattr(
-            mts, "run_feature_experiments",
+            mts,
+            "run_feature_experiments",
             lambda split: (
-                type("FE", (), {"name": "base", "feature_columns": list(BASE_FEATURE_COLUMNS), "selected_model": "ridge", "metrics": {}, "candidate_errors": {}})(),
-                type("FE", (), {"name": "enhanced", "feature_columns": list(BASE_FEATURE_COLUMNS), "selected_model": "ridge", "metrics": {}, "candidate_errors": {}})(),
+                type(
+                    "FE",
+                    (),
+                    {
+                        "name": "base",
+                        "feature_columns": list(BASE_FEATURE_COLUMNS),
+                        "selected_model": "ridge",
+                        "metrics": {},
+                        "candidate_errors": {},
+                    },
+                )(),
+                type(
+                    "FE",
+                    (),
+                    {
+                        "name": "enhanced",
+                        "feature_columns": list(BASE_FEATURE_COLUMNS),
+                        "selected_model": "ridge",
+                        "metrics": {},
+                        "candidate_errors": {},
+                    },
+                )(),
             ),
         )
 
         import joblib as _jl
 
+        from qingpu_insight.parking_valuation import (
+            ParkingPricePolicy,
+            ParkingPriceStat,
+        )
         from qingpu_insight.valuation import ValuationBundle
 
         def _fake_train_artifact(transaction_type, selected, split, bundle, artifact_dir, **kw):
@@ -605,6 +645,12 @@ class TestAutoMLOrchestration:
                 data_max_date=str(split.calibration["transaction_date"].max().date()),
                 metrics={"overall": {"mae": 45000, "count": 100}},
                 feature_columns=tuple(bundle.feature_columns),
+                parking_price_policy=ParkingPricePolicy(
+                    version=1,
+                    minimum_type_samples=20,
+                    by_type={},
+                    market_fallback=ParkingPriceStat(2_000_000, 50),
+                ),
             )
             artifact_dir.mkdir(parents=True, exist_ok=True)
             p = artifact_dir / f"{transaction_type}.joblib"
@@ -632,10 +678,14 @@ class TestAutoMLOrchestration:
         class MockExp:
             def __init__(self):
                 self.selected_name = "hist_gradient_boosting"
-                self.selection_results = [self._make_candidate_eval("hist_gradient_boosting", _FakeEstimator())]
+                self.selection_results = [
+                    self._make_candidate_eval("hist_gradient_boosting", _FakeEstimator())
+                ]
                 self.selected_estimator = _FakeEstimator()
                 self.final_test_results = {
-                    "hist_gradient_boosting": self._make_candidate_eval("hist_gradient_boosting", _FakeEstimator()),
+                    "hist_gradient_boosting": self._make_candidate_eval(
+                        "hist_gradient_boosting", _FakeEstimator()
+                    ),
                     "baseline": self._make_candidate_eval("baseline", _FakeEstimator()),
                 }
                 self.recommended = passing
@@ -646,6 +696,7 @@ class TestAutoMLOrchestration:
                 import pandas as pd
 
                 from qingpu_insight.model_training import CandidateEvaluation
+
                 return CandidateEvaluation(
                     name=name,
                     estimator=estimator,
@@ -666,9 +717,7 @@ class TestAutoMLOrchestration:
                 "candidate_fresh": passing,
                 "recommended": passing,
             }
-            monkeypatch.setattr(
-                mts, "evaluate_release_checks", lambda *a, **kw: fake_checks
-            )
+            monkeypatch.setattr(mts, "evaluate_release_checks", lambda *a, **kw: fake_checks)
 
     def test_automl_executes_search_and_returns_candidate(
         self,
@@ -690,8 +739,14 @@ class TestAutoMLOrchestration:
         status = jobs.get(run.run_id)
         if manifest is None:
             import json
+
             print(f"\nJob status: {status.status if status else 'N/A'}")
-            print(f"Job summary: {json.dumps(status.summary, indent=2, default=str) if status else 'N/A'}")
+            summary_text = (
+                json.dumps(status.summary, indent=2, default=str)
+                if status
+                else "N/A"
+            )
+            print(f"Job summary: {summary_text}")
 
         assert manifest is not None
         assert manifest.automl is not None
@@ -723,7 +778,12 @@ class TestAutoMLOrchestration:
         # Build a raw search result with stopped=True
         fit_spec = ModelFitSpec(
             model_name="hist_gradient_boosting",
-            parameters={"learning_rate": 0.1, "max_iter": 200, "max_leaf_nodes": 31, "l2_regularization": 1.0},
+            parameters={
+                "learning_rate": 0.1,
+                "max_iter": 200,
+                "max_leaf_nodes": 31,
+                "l2_regularization": 1.0,
+            },
             recency_half_life_months=48,
         )
         trial = self._make_trial(0, fit_spec, {}, 45000, {})
@@ -776,13 +836,22 @@ class TestAutoMLOrchestration:
         import joblib as _jl
 
         import qingpu_insight.model_training_service as mts
+        from qingpu_insight.parking_valuation import (
+            ParkingPricePolicy,
+            ParkingPriceStat,
+        )
         from qingpu_insight.valuation import ValuationBundle
 
         service, jobs, registry, output_store = automl_service_fixture
 
         fit_spec = ModelFitSpec(
             model_name="hist_gradient_boosting",
-            parameters={"learning_rate": 0.1, "max_iter": 200, "max_leaf_nodes": 31, "l2_regularization": 1.0},
+            parameters={
+                "learning_rate": 0.1,
+                "max_iter": 200,
+                "max_leaf_nodes": 31,
+                "l2_regularization": 1.0,
+            },
             recency_half_life_months=48,
         )
         dummy_metrics = {
@@ -798,17 +867,46 @@ class TestAutoMLOrchestration:
 
         call_count = [0]
 
-        def side_effect_search(split, plan, feature_columns, use_recency_weights,
-                                baseline_months, should_stop, on_progress, **kw):
+        def side_effect_search(
+            split,
+            plan,
+            feature_columns,
+            use_recency_weights,
+            baseline_months,
+            should_stop,
+            on_progress,
+            **kw,
+        ):
             call_count[0] += 1
             return passing_result if call_count[0] == 1 else failing_result
 
         monkeypatch.setattr(mts, "run_automl_search", side_effect_search)
         monkeypatch.setattr(
-            mts, "run_feature_experiments",
+            mts,
+            "run_feature_experiments",
             lambda split: (
-                type("FE", (), {"name": "base", "feature_columns": list(BASE_FEATURE_COLUMNS), "selected_model": "ridge", "metrics": {}, "candidate_errors": {}})(),
-                type("FE", (), {"name": "enhanced", "feature_columns": list(BASE_FEATURE_COLUMNS), "selected_model": "ridge", "metrics": {}, "candidate_errors": {}})(),
+                type(
+                    "FE",
+                    (),
+                    {
+                        "name": "base",
+                        "feature_columns": list(BASE_FEATURE_COLUMNS),
+                        "selected_model": "ridge",
+                        "metrics": {},
+                        "candidate_errors": {},
+                    },
+                )(),
+                type(
+                    "FE",
+                    (),
+                    {
+                        "name": "enhanced",
+                        "feature_columns": list(BASE_FEATURE_COLUMNS),
+                        "selected_model": "ridge",
+                        "metrics": {},
+                        "candidate_errors": {},
+                    },
+                )(),
             ),
         )
 
@@ -828,6 +926,12 @@ class TestAutoMLOrchestration:
                 data_max_date=str(split.calibration["transaction_date"].max().date()),
                 metrics={"overall": {"mae": 45000, "count": 100}},
                 feature_columns=tuple(bundle.feature_columns),
+                parking_price_policy=ParkingPricePolicy(
+                    version=1,
+                    minimum_type_samples=20,
+                    by_type={},
+                    market_fallback=ParkingPriceStat(2_000_000, 50),
+                ),
             )
             artifact_dir.mkdir(parents=True, exist_ok=True)
             p = artifact_dir / f"{transaction_type}.joblib"
@@ -862,18 +966,22 @@ class TestAutoMLOrchestration:
                 station_mape=station_mape,
                 metrics=metrics_df,
             )
-            exp = type("MockExp", (), {
-                "selected_name": "hist_gradient_boosting",
-                "selection_results": [ce],
-                "selected_estimator": est,
-                "final_test_results": {
-                    "hist_gradient_boosting": ce,
-                    "baseline": ce,
+            exp = type(
+                "MockExp",
+                (),
+                {
+                    "selected_name": "hist_gradient_boosting",
+                    "selection_results": [ce],
+                    "selected_estimator": est,
+                    "final_test_results": {
+                        "hist_gradient_boosting": ce,
+                        "baseline": ce,
+                    },
+                    "recommended": recommended,
+                    "reason_codes": (),
+                    "candidate_errors": {},
                 },
-                "recommended": recommended,
-                "reason_codes": (),
-                "candidate_errors": {},
-            })()
+            )()
             return exp
 
         exp_call_count = [0]
@@ -894,9 +1002,7 @@ class TestAutoMLOrchestration:
         assert len(manifest.results) == 1
         assert manifest.results[0].market == "resale"
 
-    def test_guided_path_unchanged(
-        self, tmp_path: Path, market_parquet: Path
-    ) -> None:
+    def test_guided_path_unchanged(self, tmp_path: Path, market_parquet: Path) -> None:
         service, jobs = service_fixture(tmp_path, input_path=market_parquet)
         run = service.submit(ModelTrainingRequest(("resale",))).run
         jobs.start(run.run_id)

@@ -65,12 +65,8 @@ class ConversationEvidenceBuilder:
                     raw = self._valuation_service(payload)
                     valuation = {
                         **raw,
-                        "model_version": raw.get(
-                            "model_version", self._model_version
-                        ),
-                        "dataset_version": raw.get(
-                            "dataset_version", self._dataset_version
-                        ),
+                        "model_version": raw.get("model_version", self._model_version),
+                        "dataset_version": raw.get("dataset_version", self._dataset_version),
                     }
                     limitations.extend(raw.get("limitations", ()))
                 except Exception:
@@ -93,9 +89,7 @@ class ConversationEvidenceBuilder:
             facts.extend(self._build_valuation_facts(valuation))
             asking_price = payload.get("total_price_twd")
             if asking_price is not None:
-                facts.extend(
-                    self._build_asking_gap_facts(valuation, asking_price)
-                )
+                facts.extend(self._build_asking_gap_facts(valuation, asking_price))
         if len(comparables) > 10:
             comparables = comparables[:10]
 
@@ -143,9 +137,7 @@ class ConversationEvidenceBuilder:
                 )
             )
         dates = sorted(
-            str(comp["transaction_date"])
-            for comp in comparables
-            if comp.get("transaction_date")
+            str(comp["transaction_date"]) for comp in comparables if comp.get("transaction_date")
         )
         if dates:
             facts.append(
@@ -288,13 +280,34 @@ class ConversationEvidenceBuilder:
                 )
         building = valuation.get("estimated_building_price_twd")
         if building is not None:
-            facts.append(EvidenceFact(id="valuation.building", label="房屋本體估值", value=format_total_price_wan(building), source="估值模型"))
+            facts.append(
+                EvidenceFact(
+                    id="valuation.building",
+                    label="房屋本體估值",
+                    value=format_total_price_wan(building),
+                    source="估值模型",
+                )
+            )
         parking = valuation.get("estimated_parking_price_twd")
         if parking is not None:
-            facts.append(EvidenceFact(id="valuation.parking", label="車位估值", value=format_total_price_wan(parking), source="估值模型"))
+            facts.append(
+                EvidenceFact(
+                    id="valuation.parking",
+                    label="車位估值",
+                    value=format_total_price_wan(parking),
+                    source="估值模型",
+                )
+            )
         total = valuation.get("estimated_total_price_twd")
         if total is not None:
-            facts.append(EvidenceFact(id="valuation.total", label="總估值", value=format_total_price_wan(total), source="估值模型"))
+            facts.append(
+                EvidenceFact(
+                    id="valuation.total",
+                    label="總估值",
+                    value=format_total_price_wan(total),
+                    source="估值模型",
+                )
+            )
 
         low = valuation.get("low_estimate_twd")
         high = valuation.get("high_estimate_twd")
@@ -303,19 +316,14 @@ class ConversationEvidenceBuilder:
                 EvidenceFact(
                     id="valuation.interval",
                     label="合理區間",
-                    value=(
-                        f"{format_total_price_wan(low)} 至 "
-                        f"{format_total_price_wan(high)}"
-                    ),
+                    value=(f"{format_total_price_wan(low)} 至 {format_total_price_wan(high)}"),
                     source="估值模型",
                 )
             )
         return facts
 
     @staticmethod
-    def _build_asking_gap_facts(
-        valuation: dict, asking_price_twd: int
-    ) -> list[EvidenceFact]:
+    def _build_asking_gap_facts(valuation: dict, asking_price_twd: int) -> list[EvidenceFact]:
         facts: list[EvidenceFact] = []
         point = valuation.get("point_estimate_twd")
         low = valuation.get("low_estimate_twd")
@@ -325,15 +333,11 @@ class ConversationEvidenceBuilder:
             gap = asking_price_twd - point
 
             if gap > 0:
-                amount_text = (
-                    f"高於估值中心 {format_total_price_wan(gap)}"
-                )
+                amount_text = f"高於估值中心 {format_total_price_wan(gap)}"
                 pct = (gap / point) * 100
                 pct_text = f"高於估值中心 {pct:.1f}%"
             elif gap < 0:
-                amount_text = (
-                    f"低於估值中心 {format_total_price_wan(abs(gap))}"
-                )
+                amount_text = f"低於估值中心 {format_total_price_wan(abs(gap))}"
                 pct = (abs(gap) / point) * 100
                 pct_text = f"低於估值中心 {pct:.1f}%"
             else:

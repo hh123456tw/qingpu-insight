@@ -115,12 +115,7 @@ class ModelRegistry:
 
     def get(self, transaction_type: str) -> ValuationBundle:
         if transaction_type not in self._bundles:
-            current_json = (
-                self._artifact_dir
-                / "official"
-                / transaction_type
-                / "current.json"
-            )
+            current_json = self._artifact_dir / "official" / transaction_type / "current.json"
             if current_json.exists():
                 return self.load(transaction_type)
             path = self._artifact_dir / f"{transaction_type}.joblib"
@@ -187,9 +182,7 @@ def _component_similarity(left: object, right: object, tolerance: float) -> floa
     return min(1.0, max(0.0, 1.0 - abs(l_val - r_val) / tolerance))
 
 
-def _layout_similarity(
-    input_row: pd.Series, candidate: pd.Series
-) -> float | None:
+def _layout_similarity(input_row: pd.Series, candidate: pd.Series) -> float | None:
     scores = [
         _component_similarity(input_row.get(field), candidate.get(field), 2)
         for field in ("bedrooms", "living_rooms", "bathrooms")
@@ -380,14 +373,24 @@ def valuate(
         median_price = float(cohort["unit_price_per_ping_twd"].median())
         deviations = (cohort["unit_price_per_ping_twd"] - median_price).abs()
         interval_radius = float(deviations.quantile(0.90))
-        market_policy = build_parking_price_policy(recent) if "parking_type" in recent.columns and "parking_price_twd" in recent.columns else None
+        market_policy = (
+            build_parking_price_policy(recent)
+            if "parking_type" in recent.columns and "parking_price_twd" in recent.columns
+            else None
+        )
         parking_estimate = estimate_parking_price(market_policy, input_.parking_type)
-        building_price, parking_price, total_price = compose_total_price(median_price, input_.building_area_ping, parking_estimate)
+        building_price, parking_price, total_price = compose_total_price(
+            median_price, input_.building_area_ping, parking_estimate
+        )
         low_unit = max(0, median_price - interval_radius)
         high_unit = median_price + interval_radius
         building_low = round(low_unit * input_.building_area_ping)
         building_high = round(high_unit * input_.building_area_ping)
-        interval_total = (building_low + parking_price, building_high + parking_price) if parking_price is not None else (building_low, building_high)
+        interval_total = (
+            (building_low + parking_price, building_high + parking_price)
+            if parking_price is not None
+            else (building_low, building_high)
+        )
         return {
             "transaction_type": input_.transaction_type,
             "estimated_unit_price_per_ping_twd": round(median_price),
@@ -395,7 +398,11 @@ def valuate(
             "estimated_building_price_twd": building_price,
             "estimated_parking_price_twd": parking_price,
             "parking_price_policy": (
-                {"parking_type": parking_estimate.parking_type, "sample_size": parking_estimate.sample_size, "source": parking_estimate.source}
+                {
+                    "parking_type": parking_estimate.parking_type,
+                    "sample_size": parking_estimate.sample_size,
+                    "source": parking_estimate.source,
+                }
                 if parking_estimate and parking_estimate.source != "none"
                 else None
             ),
@@ -448,7 +455,9 @@ def valuate(
         row = input_frame(input_, latest_data_date)
         unit_price = float(baseline.predict(row)[0])
         parking_estimate = estimate_parking_price(bundle.parking_price_policy, input_.parking_type)
-        building_price, parking_price, total_price = compose_total_price(unit_price, input_.building_area_ping, parking_estimate)
+        building_price, parking_price, total_price = compose_total_price(
+            unit_price, input_.building_area_ping, parking_estimate
+        )
         fallback_predictions = baseline.predict(recent)
         interval_radius = float(
             np.quantile(
@@ -472,7 +481,11 @@ def valuate(
         low, high = interval
         building_low = round(low * input_.building_area_ping)
         building_high = round(high * input_.building_area_ping)
-        interval_total = (building_low + parking_price, building_high + parking_price) if parking_price is not None else (building_low, building_high)
+        interval_total = (
+            (building_low + parking_price, building_high + parking_price)
+            if parking_price is not None
+            else (building_low, building_high)
+        )
         result: dict[str, Any] = {
             "transaction_type": input_.transaction_type,
             "estimated_unit_price_per_ping_twd": round(unit_price),
@@ -480,7 +493,11 @@ def valuate(
             "estimated_building_price_twd": building_price,
             "estimated_parking_price_twd": parking_price,
             "parking_price_policy": (
-                {"parking_type": parking_estimate.parking_type, "sample_size": parking_estimate.sample_size, "source": parking_estimate.source}
+                {
+                    "parking_type": parking_estimate.parking_type,
+                    "sample_size": parking_estimate.sample_size,
+                    "source": parking_estimate.source,
+                }
                 if parking_estimate and parking_estimate.source != "none"
                 else None
             ),
@@ -517,7 +534,9 @@ def valuate(
 
     unit_price = float(bundle.pipeline.predict(row)[0])
     parking_estimate = estimate_parking_price(bundle.parking_price_policy, input_.parking_type)
-    building_price, parking_price, total_price = compose_total_price(unit_price, input_.building_area_ping, parking_estimate)
+    building_price, parking_price, total_price = compose_total_price(
+        unit_price, input_.building_area_ping, parking_estimate
+    )
     interval = prediction_interval(bundle, unit_price)
 
     factors = local_factors(bundle, row)
@@ -532,7 +551,11 @@ def valuate(
     low, high = interval
     building_low = round(low * input_.building_area_ping)
     building_high = round(high * input_.building_area_ping)
-    interval_total = (building_low + parking_price, building_high + parking_price) if parking_price is not None else (building_low, building_high)
+    interval_total = (
+        (building_low + parking_price, building_high + parking_price)
+        if parking_price is not None
+        else (building_low, building_high)
+    )
 
     result: dict[str, Any] = {
         "transaction_type": input_.transaction_type,
@@ -541,7 +564,11 @@ def valuate(
         "estimated_building_price_twd": building_price,
         "estimated_parking_price_twd": parking_price,
         "parking_price_policy": (
-            {"parking_type": parking_estimate.parking_type, "sample_size": parking_estimate.sample_size, "source": parking_estimate.source}
+            {
+                "parking_type": parking_estimate.parking_type,
+                "sample_size": parking_estimate.sample_size,
+                "source": parking_estimate.source,
+            }
             if parking_estimate and parking_estimate.source != "none"
             else None
         ),
@@ -650,9 +677,7 @@ def train_artifact(
                 sample_weight=weights,
             )
     parking_policy = (
-        build_parking_price_policy(train_frame)
-        if "parking_type" in train_frame.columns
-        else None
+        build_parking_price_policy(train_frame) if "parking_type" in train_frame.columns else None
     )
 
     feature_ranges: dict[str, tuple[float, float]] = {}

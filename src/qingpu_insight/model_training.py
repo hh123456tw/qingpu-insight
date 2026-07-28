@@ -229,48 +229,55 @@ def build_estimator(
     feature_columns=FEATURE_COLUMNS,
     seed: int = 42,
 ) -> Pipeline:
-    valid = frozenset({"ridge", "random_forest", "hist_gradient_boosting"})
+    valid = frozenset({"random_forest", "hist_gradient_boosting"})
     if spec.model_name not in valid:
         raise ValueError(f"unknown model: {spec.model_name}")
-
-    if spec.model_name in ("random_forest", "hist_gradient_boosting") and not spec.parameters:
-        raise ValueError(f"{spec.model_name} requires non-empty parameters")
+    if not spec.parameters:
+        raise ValueError("empty parameters are not allowed")
 
     preprocessor = make_preprocessor(feature_columns)
 
-    if spec.model_name == "ridge":
-        return Pipeline([("features", preprocessor), ("model", Ridge(alpha=10.0))])
-
     if spec.model_name == "random_forest":
+        required = {"n_estimators", "min_samples_leaf", "max_features"}
+        if set(spec.parameters) != required:
+            raise ValueError("random_forest parameters must match the AutoML contract")
         rf_params = {
-            "n_estimators": spec.parameters.get("n_estimators", 100),
-            "min_samples_leaf": spec.parameters.get("min_samples_leaf", 5),
-            "max_features": spec.parameters.get("max_features", 0.8),
+            "n_estimators": spec.parameters["n_estimators"],
+            "min_samples_leaf": spec.parameters["min_samples_leaf"],
+            "max_features": spec.parameters["max_features"],
             "random_state": seed,
-            "n_jobs": -1,
+            "n_jobs": 1,
         }
-        return Pipeline([
-            ("features", preprocessor),
-            ("model", RandomForestRegressor(**rf_params)),
-        ])
+        return Pipeline(
+            [
+                ("features", preprocessor),
+                ("model", RandomForestRegressor(**rf_params)),
+            ]
+        )
 
+    required = {"learning_rate", "max_iter", "max_leaf_nodes", "l2_regularization"}
+    if set(spec.parameters) != required:
+        raise ValueError("hist_gradient_boosting parameters must match the AutoML contract")
     hgb_params = {
-        "learning_rate": spec.parameters.get("learning_rate", 0.1),
-        "max_iter": spec.parameters.get("max_iter", 100),
-        "max_leaf_nodes": spec.parameters.get("max_leaf_nodes", 31),
-        "l2_regularization": spec.parameters.get("l2_regularization", 1.0),
+        "learning_rate": spec.parameters["learning_rate"],
+        "max_iter": spec.parameters["max_iter"],
+        "max_leaf_nodes": spec.parameters["max_leaf_nodes"],
+        "l2_regularization": spec.parameters["l2_regularization"],
         "random_state": seed,
     }
-    return Pipeline([
-        ("features", preprocessor),
-        ("model", HistGradientBoostingRegressor(**hgb_params)),
-    ])
+    return Pipeline(
+        [
+            ("features", preprocessor),
+            ("model", HistGradientBoostingRegressor(**hgb_params)),
+        ]
+    )
 
 
 def evaluate_fit_spec(
     split: TimeSplit,
     spec: ModelFitSpec,
     feature_columns=FEATURE_COLUMNS,
+    baseline_months: int = 12,
 ) -> ModelExperiment:
     est = build_estimator(spec, feature_columns)
 
@@ -301,15 +308,25 @@ def evaluate_fit_spec(
         split.test,
         feature_columns=feature_columns,
     )
+    baseline = RecentMedianBaseline(months=baseline_months)
+    baseline.fit(split.train)
+    baseline_features = ("station_code", "building_type")
+    baseline_calibration = evaluate_fitted_candidate(
+        "baseline", baseline, split.calibration, feature_columns=baseline_features
+    )
+    baseline_final = evaluate_fitted_candidate(
+        "baseline", baseline, split.test, feature_columns=baseline_features
+    )
+    recommended = passes_release_gate(final_eval, baseline_final)
 
     return ModelExperiment(
-        selection_results=(calibration_eval,),
+        selection_results=(calibration_eval, baseline_calibration),
         selected_name=spec.model_name,
         selected_estimator=est,
-        final_test_results={spec.model_name: final_eval},
+        final_test_results={spec.model_name: final_eval, "baseline": baseline_final},
         candidate_errors={},
-        recommended=False,
-        reason_codes=(),
+        recommended=recommended,
+        reason_codes=() if recommended else ("final_gate_failed",),
     )
 
 
@@ -338,7 +355,8 @@ def evaluate_candidate(
             train_frame,
             half_life_months=recency_half_life_months,
         )
-        if use_recency_weights else None
+        if use_recency_weights
+        else None
     )
     fit_candidate(
         estimator,
@@ -670,11 +688,13 @@ def run_tuned_model_experiment(
                     },
                     metrics=metrics,
                 )
-                candidates.append(ProfileCandidateEvaluation(
-                    profile_name=profile.name,
-                    model_name=model_name,
-                    evaluation=evaluation,
-                ))
+                candidates.append(
+                    ProfileCandidateEvaluation(
+                        profile_name=profile.name,
+                        model_name=model_name,
+                        evaluation=evaluation,
+                    )
+                )
             except Exception:
                 candidate_errors[model_name] = "candidate_failed"
 
@@ -682,11 +702,13 @@ def run_tuned_model_experiment(
             raise ProfileEvaluationError(profile.name)
 
         all_candidates.extend(candidates)
-        profile_results.append(ProfileEvaluation(
-            profile=profile,
-            candidates=tuple(candidates),
-            candidate_errors=candidate_errors,
-        ))
+        profile_results.append(
+            ProfileEvaluation(
+                profile=profile,
+                candidates=tuple(candidates),
+                candidate_errors=candidate_errors,
+            )
+        )
 
     def tuned_candidate_sort_key(item: ProfileCandidateEvaluation) -> tuple:
         overall = item.evaluation.metrics.loc["overall"]

@@ -1111,7 +1111,7 @@
         if (!statusEl || !job.summary) return;
         statusEl.style.display = "block";
         var summary = job.summary;
-        if (summary.stage === "validating_shortlist") {
+        if ((summary.stage || "").indexOf("validating_shortlist_") === 0) {
           statusEl.textContent = "搜尋完成，正在驗證前三名";
           return;
         }

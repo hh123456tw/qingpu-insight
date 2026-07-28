@@ -44,21 +44,14 @@ class TestAutoMLControlRegistry:
 
 
 class TestAutoMLRunOutputStore:
-    def test_partial_output_write_is_atomic_and_json_safe(
-        self, tmp_path
-    ) -> None:
+    def test_partial_output_write_is_atomic_and_json_safe(self, tmp_path) -> None:
         store = AutoMLRunOutputStore(tmp_path)
         store.write(
             "00000000-0000-0000-0000-000000000001",
             "resale",
             {"completed_trials": np.int64(2), "trials": [{"mae": np.float64(123.5)}]},
         )
-        assert (
-            store.get("00000000-0000-0000-0000-000000000001", "resale")[
-                "completed_trials"
-            ]
-            == 2
-        )
+        assert store.get("00000000-0000-0000-0000-000000000001", "resale")["completed_trials"] == 2
         assert not list(tmp_path.rglob("*.tmp"))
 
     def test_write_rejects_invalid_uuid(self, tmp_path) -> None:
@@ -68,13 +61,9 @@ class TestAutoMLRunOutputStore:
 
     def test_get_missing_run_returns_none(self, tmp_path) -> None:
         store = AutoMLRunOutputStore(tmp_path)
-        assert (
-            store.get("00000000-0000-0000-0000-000000000001", "resale") is None
-        )
+        assert store.get("00000000-0000-0000-0000-000000000001", "resale") is None
 
-    def test_copy_trials_to_returns_path_and_checksum(
-        self, tmp_path
-    ) -> None:
+    def test_copy_trials_to_returns_path_and_checksum(self, tmp_path) -> None:
         store = AutoMLRunOutputStore(tmp_path)
         run_id = "00000000-0000-0000-0000-000000000001"
         data = {"completed_trials": 2, "trials": []}
@@ -84,7 +73,7 @@ class TestAutoMLRunOutputStore:
 
         dest = tmp_path / "candidate-stage" / "automl" / "resale-trials.json"
         assert dest.exists()
-        assert rel_path == "candidate-stage/automl/resale-trials.json"
+        assert rel_path == "automl/resale-trials.json"
         assert isinstance(sha256, str) and len(sha256) == 64
 
     def test_copy_trials_to_missing_run_raises(self, tmp_path) -> None:

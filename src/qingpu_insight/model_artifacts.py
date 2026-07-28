@@ -141,9 +141,7 @@ class TrainingManifest(BaseModel):
                 raise ValueError("schema v4 requires automl snapshot")
             return self
         if self.automl is not None:
-            raise ValueError(
-                f"schema_version {self.schema_version} does not support automl"
-            )
+            raise ValueError(f"schema_version {self.schema_version} does not support automl")
         if self.schema_version != 3:
             return self
         if self.tuning_plan_version is None or not self.profiles:
@@ -161,31 +159,22 @@ class TrainingManifest(BaseModel):
             ):
                 raise ValueError("schema v3 requires complete market tuning evidence")
             result_profile_names = [
-                profile_result.profile_name
-                for profile_result in result.profile_results
+                profile_result.profile_name for profile_result in result.profile_results
             ]
             if result_profile_names != profile_names:
-                raise ValueError(
-                    "schema v3 market profile evidence must match requested profiles"
-                )
+                raise ValueError("schema v3 market profile evidence must match requested profiles")
             if result.selected_profile not in profile_snapshots:
-                raise ValueError(
-                    "schema v3 selected profile must exist in requested profiles"
-                )
+                raise ValueError("schema v3 selected profile must exist in requested profiles")
             for profile_result in result.profile_results:
                 snapshot = profile_snapshots[profile_result.profile_name]
                 expected_parameters = {
                     "hgb_learning_rate": snapshot.hgb_learning_rate,
                     "hgb_max_iter": snapshot.hgb_max_iter,
                     "rf_n_estimators": snapshot.rf_n_estimators,
-                    "recency_half_life_months": (
-                        snapshot.recency_half_life_months
-                    ),
+                    "recency_half_life_months": (snapshot.recency_half_life_months),
                 }
                 if profile_result.parameters != expected_parameters:
-                    raise ValueError(
-                        "schema v3 profile result parameters must match snapshot"
-                    )
+                    raise ValueError("schema v3 profile result parameters must match snapshot")
         return self
 
 
@@ -261,20 +250,16 @@ class CandidateArtifactStore:
         if manifest.schema_version == 4 and manifest.automl is not None:
             stage_resolved = stage.resolve()
             for _, m_snapshot in manifest.automl.markets.items():
+                if not m_snapshot.trial_file:
+                    raise ValueError("AutoML trial file is required")
                 trial_path = (stage / m_snapshot.trial_file).resolve()
-                if not str(trial_path).startswith(str(stage_resolved)):
-                    raise ValueError(
-                        f"Trial file {m_snapshot.trial_file} escapes stage directory"
-                    )
+                if not trial_path.is_relative_to(stage_resolved):
+                    raise ValueError(f"Trial file {m_snapshot.trial_file} escapes stage directory")
                 if not trial_path.exists():
-                    raise FileNotFoundError(
-                        f"Trial file {m_snapshot.trial_file} not found"
-                    )
+                    raise FileNotFoundError(f"Trial file {m_snapshot.trial_file} not found")
                 actual_hash = sha256_file(trial_path)
                 if actual_hash != m_snapshot.trial_sha256:
-                    raise ValueError(
-                        f"Hash mismatch for trial file {m_snapshot.trial_file}"
-                    )
+                    raise ValueError(f"Hash mismatch for trial file {m_snapshot.trial_file}")
 
         os.replace(str(stage), str(final))
         return final

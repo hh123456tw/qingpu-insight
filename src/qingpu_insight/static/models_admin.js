@@ -159,6 +159,8 @@
       running: "執行中",
       succeeded: "成功",
       failed: "失敗",
+      skipped: "已停止",
+      needs_attention: "需要處理",
       interrupted: "已中斷",
       retry_wait: "等待重試",
     };
@@ -527,19 +529,29 @@
 
   function automlLeaderboardRows(detail) {
     var manifest = (detail && detail.manifest) || {};
-    var automl = manifest.automl || {};
-    var trials = (automl.top_trials || []).slice(0, 10);
-    return trials.map(function (t) {
-      return {
-        trialNumber: t.trial_number,
-        state: t.state,
-        modelName: t.model_name,
-        mae: t.mae,
-        mape: t.mape,
-        calibrationPassed: t.calibration_passed === true,
-        durationSeconds: t.duration_seconds,
-      };
+    var automl = manifest.automl || (detail && detail.automl) || {};
+    var markets = automl.markets || {};
+    if (automl.top_trials) {
+      markets = { unknown: { top_trials: automl.top_trials } };
+    }
+    var rows = [];
+    Object.keys(markets).forEach(function (market) {
+      var marketResult = markets[market] || {};
+      var trials = marketResult.top_trials || marketResult.ranked_trials || [];
+      trials.slice(0, 10).forEach(function (t) {
+        rows.push({
+          market: market,
+          trialNumber: t.trial_number,
+          state: t.state,
+          modelName: (t.fit_spec && t.fit_spec.model_name) || t.model_name,
+          mae: t.overall_mae != null ? t.overall_mae : t.mae,
+          mape: t.overall_mape != null ? t.overall_mape : t.mape,
+          calibrationPassed: t.calibration_passed === true,
+          durationSeconds: t.duration_seconds,
+        });
+      });
     });
+    return rows;
   }
 
   function parkingPolicySummary(policy) {

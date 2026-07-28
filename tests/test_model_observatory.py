@@ -293,7 +293,9 @@ class TestModelObservatoryStatus:
             ],
             "parking_policy": {
                 "version": 1,
-                "by_type": {"\u5761\u9053\u5e73\u9762": {"price_twd": 1_500_000, "sample_size": 50}},
+                "by_type": {
+                    "\u5761\u9053\u5e73\u9762": {"price_twd": 1_500_000, "sample_size": 50}
+                },
                 "market_fallback": {"price_twd": 1_200_000, "sample_size": 100},
             },
         }
@@ -440,9 +442,7 @@ class TestModelObservatoryStatus:
     ) -> None:
         manifest = manifest_fixture(markets=["resale"])
         observatory = observatory_fixture(tmp_path, candidate_runs=[manifest])
-        current_path = (
-            tmp_path / "artifacts" / "official" / "resale" / "current.json"
-        )
+        current_path = tmp_path / "artifacts" / "official" / "resale" / "current.json"
         current_path.parent.mkdir(parents=True, exist_ok=True)
         current_path.write_text(
             json.dumps(
@@ -451,9 +451,7 @@ class TestModelObservatoryStatus:
                     "market": "resale",
                     "version_id": "current1",
                     "source_run_id": str(manifest.run_id),
-                    "artifact_file": (
-                        "official/resale/versions/current1/model.joblib"
-                    ),
+                    "artifact_file": ("official/resale/versions/current1/model.joblib"),
                     "artifact_sha256": "b" * 64,
                     "activated_at": datetime.now(UTC).isoformat(),
                 }
@@ -493,33 +491,35 @@ class TestModelObservatoryStatus:
             recency_half_life_months=48,
         )
         manifest = manifest_fixture()
-        result_entry = manifest.results[0].model_copy(update={
-            "selected_profile": "quick",
-            "profile_results": [
-                ProfileTrainingResult(
-                    profile_name="quick",
-                    parameters={
-                        "hgb_learning_rate": 0.08,
-                        "hgb_max_iter": 180,
-                        "rf_n_estimators": 160,
-                        "recency_half_life_months": 48,
-                    },
-                    selection_metrics={"ridge": {"overall": {"mae": 50_000}}},
-                    candidate_errors={},
-                )
-            ],
-            "test_coverage": 0.9,
-            "average_interval_width_twd_per_ping": 120_000,
-        })
-        v3_manifest = manifest.model_copy(update={
-            "schema_version": 3,
-            "tuning_plan_version": 1,
-            "profiles": [profile],
-            "results": [result_entry],
-        })
-        observatory = observatory_fixture(
-            tmp_path, candidate_runs=[v3_manifest]
+        result_entry = manifest.results[0].model_copy(
+            update={
+                "selected_profile": "quick",
+                "profile_results": [
+                    ProfileTrainingResult(
+                        profile_name="quick",
+                        parameters={
+                            "hgb_learning_rate": 0.08,
+                            "hgb_max_iter": 180,
+                            "rf_n_estimators": 160,
+                            "recency_half_life_months": 48,
+                        },
+                        selection_metrics={"ridge": {"overall": {"mae": 50_000}}},
+                        candidate_errors={},
+                    )
+                ],
+                "test_coverage": 0.9,
+                "average_interval_width_twd_per_ping": 120_000,
+            }
         )
+        v3_manifest = manifest.model_copy(
+            update={
+                "schema_version": 3,
+                "tuning_plan_version": 1,
+                "profiles": [profile],
+                "results": [result_entry],
+            }
+        )
+        observatory = observatory_fixture(tmp_path, candidate_runs=[v3_manifest])
         result = observatory.get_run(str(v3_manifest.run_id))
         assert result is not None
         m = result["manifest"]
@@ -530,15 +530,14 @@ class TestModelObservatoryStatus:
 
     def test_get_run_marks_v1_as_legacy_tuning_record(self, tmp_path: Path) -> None:
         manifest = manifest_fixture()
-        observatory = observatory_fixture(
-            tmp_path, candidate_runs=[manifest]
-        )
+        observatory = observatory_fixture(tmp_path, candidate_runs=[manifest])
         result = observatory.get_run(str(manifest.run_id))
         assert result is not None
         m = result["manifest"]
         assert m["legacy_tuning_record"] is True
         assert m["tuning_plan_version"] is None
         assert m["profiles"] == []
+
 
 def test_official_model_status_marks_2024_model_stale(tmp_path: Path) -> None:
     observatory = observatory_fixture(
@@ -555,35 +554,38 @@ def test_official_model_status_marks_2024_model_stale(tmp_path: Path) -> None:
 
 def test_get_run_includes_automl_for_v4_manifest(tmp_path: Path) -> None:
     manifest = manifest_fixture(markets=["resale"])
-    v4_manifest = manifest.model_copy(update={
-        "schema_version": 4,
-        "tuning_plan_version": 2,
-        "profiles": [],
-        "automl": AutoMLRunSnapshot(
-            mode="automl",
-            markets={
-                "resale": AutoMLMarketSearchSnapshot(
-                    budget_name="quick",
-                    budget_seconds=300,
-                    max_trials=12,
-                    completed_trials=0,
-                    failed_trials=0,
-                    seed=42,
-                    stopped=False,
-                    top_trials=[],
-                    trial_file="automl/resale-trials.json",
-                    trial_sha256="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-                    shortlisted_trial_numbers=[],
-                )
-            },
-        ),
-    })
+    v4_manifest = manifest.model_copy(
+        update={
+            "schema_version": 4,
+            "tuning_plan_version": 2,
+            "profiles": [],
+            "automl": AutoMLRunSnapshot(
+                mode="automl",
+                markets={
+                    "resale": AutoMLMarketSearchSnapshot(
+                        budget_name="quick",
+                        budget_seconds=300,
+                        max_trials=12,
+                        completed_trials=0,
+                        failed_trials=0,
+                        seed=42,
+                        stopped=False,
+                        top_trials=[],
+                        trial_file="automl/resale-trials.json",
+                        trial_sha256="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                        shortlisted_trial_numbers=[],
+                    )
+                },
+            ),
+        }
+    )
     observatory = observatory_fixture(tmp_path, candidate_runs=[v4_manifest])
     result = observatory.get_run(str(v4_manifest.run_id))
     assert result is not None
     m = result["manifest"]
     assert "automl" in m
     assert m["automl"]["mode"] == "automl"
+
 
 def test_get_run_fallback_automl_when_no_manifest(tmp_path: Path) -> None:
     run_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
@@ -599,6 +601,7 @@ def test_get_run_fallback_automl_when_no_manifest(tmp_path: Path) -> None:
     candidate_store = CandidateArtifactStore(candidate_store_dir)
 
     from datetime import UTC
+
     now = datetime.now(UTC)
     job_runs: dict[str, JobRun] = {
         run_id: JobRun(
@@ -621,8 +624,10 @@ def test_get_run_fallback_automl_when_no_manifest(tmp_path: Path) -> None:
     class FakeJob(JobService):
         def __init__(self):
             self._runs = job_runs
+
         def list_recent(self, limit=20, job_type=None):
             return list(self._runs.values())[:limit]
+
         def get(self, run_id):
             return self._runs.get(run_id)
 
@@ -638,7 +643,7 @@ def test_get_run_fallback_automl_when_no_manifest(tmp_path: Path) -> None:
     assert result is not None
     assert "automl" in result
     assert result["automl"]["candidate_available"] is False
-    assert result["automl"]["markets"] == {}
+    assert result["automl"]["markets"]["resale"]["trials"] == []
     assert result["automl"]["stopped"] is True
 
 

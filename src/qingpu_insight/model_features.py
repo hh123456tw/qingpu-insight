@@ -188,7 +188,9 @@ class ValuationInput:
         if not self.parking_type:
             object.__setattr__(self, "parking_area_ping", 0)
         elif self.parking_area_ping <= 0:
-            raise ValueError("parking_area_ping must be greater than 0 when parking_type is selected")
+            raise ValueError(
+                "parking_area_ping must be greater than 0 when parking_type is selected"
+            )
         if self.transaction_type not in {"resale", "presale"}:
             raise ValueError("transaction_type must be resale or presale")
         if self.station_code not in {"A17", "A18", "A19"}:

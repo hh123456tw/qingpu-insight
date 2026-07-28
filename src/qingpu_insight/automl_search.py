@@ -162,6 +162,7 @@ def run_automl_search(
         nonlocal best_mae
 
         if should_stop():
+            study.stop()
             raise optuna.TrialPruned()
 
         params: dict[str, Any] = {}
@@ -174,41 +175,24 @@ def run_automl_search(
                 "model_name", ["random_forest", "hist_gradient_boosting"]
             )
             half_life = (
-                trial.suggest_categorical(
-                    "recency_half_life_months", [24, 36, 48, 60, 72]
-                )
+                trial.suggest_categorical("recency_half_life_months", [24, 36, 48, 60, 72])
                 if use_recency_weights
                 else None
             )
 
             if model_name == "random_forest":
                 params = {
-                    "n_estimators": trial.suggest_int(
-                        "rf_n_estimators", 100, 1000, step=50
-                    ),
-                    "min_samples_leaf": trial.suggest_int(
-                        "rf_min_samples_leaf", 1, 20
-                    ),
-                    "max_features": trial.suggest_float(
-                        "rf_max_features", 0.3, 1.0
-                    ),
-                    "criterion": trial.suggest_categorical(
-                        "rf_criterion", ["squared_error", "absolute_error"]
-                    ),
+                    "n_estimators": trial.suggest_int("rf_n_estimators", 150, 800, step=50),
+                    "min_samples_leaf": trial.suggest_int("rf_min_samples_leaf", 2, 12),
+                    "max_features": trial.suggest_float("rf_max_features", 0.5, 1.0),
                 }
             else:
                 params = {
-                    "learning_rate": trial.suggest_float(
-                        "hgb_learning_rate", 0.01, 0.2, log=True
-                    ),
-                    "max_iter": trial.suggest_int(
-                        "hgb_max_iter", 100, 1000, step=50
-                    ),
-                    "max_leaf_nodes": trial.suggest_int(
-                        "hgb_max_leaf_nodes", 10, 255
-                    ),
+                    "learning_rate": trial.suggest_float("hgb_learning_rate", 0.02, 0.12, log=True),
+                    "max_iter": trial.suggest_int("hgb_max_iter", 150, 800, step=50),
+                    "max_leaf_nodes": trial.suggest_int("hgb_max_leaf_nodes", 15, 63),
                     "l2_regularization": trial.suggest_float(
-                        "hgb_l2_regularization", 1e-10, 10.0, log=True
+                        "hgb_l2_regularization", 0.1, 10.0, log=True
                     ),
                 }
 
@@ -221,22 +205,22 @@ def run_automl_search(
             if trial_evaluator is not None:
                 experiment = trial_evaluator(spec)
             else:
-                experiment = evaluate_fit_spec(split, spec, feature_columns)
+                experiment = evaluate_fit_spec(
+                    split,
+                    spec,
+                    feature_columns,
+                    baseline_months=baseline_months,
+                )
 
             duration = time.monotonic() - trial_start
 
             cal_eval = experiment.selection_results[0]
             overall_mae = cal_eval.overall_mae
             overall_mape = float(cal_eval.metrics.loc["overall", "mape"])
-            metrics = {
-                str(idx): row.to_dict()
-                for idx, row in cal_eval.metrics.iterrows()
-            }
+            metrics = {str(idx): row.to_dict() for idx, row in cal_eval.metrics.iterrows()}
 
             if baseline_cal_eval is not None:
-                calibration_passed = passes_release_gate(
-                    cal_eval, baseline_cal_eval
-                )
+                calibration_passed = passes_release_gate(cal_eval, baseline_cal_eval)
             else:
                 calibration_passed = experiment.recommended
 
@@ -244,7 +228,7 @@ def run_automl_search(
                 trial_number=trial.number,
                 state="completed",
                 fit_spec=spec,
-                estimator=experiment.selected_estimator,
+                estimator=None,
                 metrics=metrics,
                 overall_mae=overall_mae,
                 overall_mape=overall_mape,
@@ -255,22 +239,22 @@ def run_automl_search(
             )
             results.append(tr)
 
-            if best_mae is None or (
-                overall_mae is not None and overall_mae < best_mae
-            ):
+            if best_mae is None or (overall_mae is not None and overall_mae < best_mae):
                 best_mae = overall_mae
 
             completed = sum(1 for r in results if r.state == "completed")
             failed = sum(1 for r in results if r.state == "failed")
-            on_progress({
-                "stage": "trial",
-                "model_name": model_name,
-                "completed_trials": completed,
-                "failed_trials": failed,
-                "elapsed_seconds": time.monotonic() - start_time,
-                "best_mae": best_mae,
-                "last_parameters": dict(params),
-            })
+            on_progress(
+                {
+                    "stage": "trial",
+                    "model_name": model_name,
+                    "completed_trials": completed,
+                    "failed_trials": failed,
+                    "elapsed_seconds": time.monotonic() - start_time,
+                    "best_mae": best_mae,
+                    "last_parameters": dict(params),
+                }
+            )
 
             return overall_mae or 0.0
 
@@ -295,15 +279,17 @@ def run_automl_search(
 
             completed = sum(1 for r in results if r.state == "completed")
             failed = sum(1 for r in results if r.state == "failed")
-            on_progress({
-                "stage": "trial",
-                "model_name": model_name,
-                "completed_trials": completed,
-                "failed_trials": failed,
-                "elapsed_seconds": time.monotonic() - start_time,
-                "best_mae": best_mae,
-                "last_parameters": dict(params) if params else {},
-            })
+            on_progress(
+                {
+                    "stage": "trial",
+                    "model_name": model_name,
+                    "completed_trials": completed,
+                    "failed_trials": failed,
+                    "elapsed_seconds": time.monotonic() - start_time,
+                    "best_mae": best_mae,
+                    "last_parameters": dict(params) if params else {},
+                }
+            )
 
             raise
 

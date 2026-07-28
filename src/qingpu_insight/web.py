@@ -204,7 +204,7 @@ def _create_production_admin_services(
     input_path = settings.processed_dir / "market_transactions.parquet"
     candidate_store = CandidateArtifactStore(root / "candidates")
     automl_registry = AutoMLControlRegistry()
-    automl_output_store = AutoMLRunOutputStore(root / "outputs")
+    automl_output_store = AutoMLRunOutputStore(root)
     mts = ModelTrainingService(
         service.job_service,
         candidate_store,
@@ -433,13 +433,9 @@ def _parse_map_view(args: MultiDict[str, str]) -> tuple[int, MapBounds | None]:
     try:
         zoom = int(raw_zoom)
     except (TypeError, ValueError):
-        raise ApiInputError(
-            "地圖縮放層級格式不正確。", {"zoom": "integer_10_to_19"}
-        ) from None
+        raise ApiInputError("地圖縮放層級格式不正確。", {"zoom": "integer_10_to_19"}) from None
     if str(zoom) != raw_zoom or not 10 <= zoom <= 19:
-        raise ApiInputError(
-            "地圖縮放層級無效。", {"zoom": "integer_10_to_19"}
-        )
+        raise ApiInputError("地圖縮放層級無效。", {"zoom": "integer_10_to_19"})
 
     names = ("south", "west", "north", "east")
     values = [args.get(name) for name in names]
@@ -450,9 +446,7 @@ def _parse_map_view(args: MultiDict[str, str]) -> tuple[int, MapBounds | None]:
     try:
         bounds = MapBounds(*(float(value) for value in values if value is not None))
     except (TypeError, ValueError):
-        raise ApiInputError(
-            "地圖邊界無效。", {"bounds": "ordered_finite_numbers"}
-        ) from None
+        raise ApiInputError("地圖邊界無效。", {"bounds": "ordered_finite_numbers"}) from None
     return zoom, bounds
 
 
@@ -614,10 +608,7 @@ def _parse_model_training_request() -> object:
         fields["markets"] = "supported_values"
 
     market_order = ("resale", "presale")
-    ordered = (
-        [m for m in market_order if m in raw_markets]
-        if isinstance(raw_markets, list) else []
-    )
+    ordered = [m for m in market_order if m in raw_markets] if isinstance(raw_markets, list) else []
 
     try:
         tuning_plan = parse_tuning_plan(
@@ -706,11 +697,7 @@ def _conversation_market_comparables(
     data_source: MarketDataSource,
     payload: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    transaction_type = (
-        "presale"
-        if payload.get("listing_type") == "newhouse"
-        else "resale"
-    )
+    transaction_type = "presale" if payload.get("listing_type") == "newhouse" else "resale"
     area = pd.to_numeric(payload.get("area_ping"), errors="coerce")
     filters = MarketFilters(
         transaction_type=transaction_type,
@@ -727,19 +714,13 @@ def _conversation_market_comparables(
     if pd.notna(latitude) and pd.notna(longitude):
         target_lat = np.radians(float(latitude))
         target_lon = np.radians(float(longitude))
-        row_lat = np.radians(
-            pd.to_numeric(frame["latitude"], errors="coerce")
-        )
-        row_lon = np.radians(
-            pd.to_numeric(frame["longitude"], errors="coerce")
-        )
+        row_lat = np.radians(pd.to_numeric(frame["latitude"], errors="coerce"))
+        row_lon = np.radians(pd.to_numeric(frame["longitude"], errors="coerce"))
         delta_lat = row_lat - target_lat
         delta_lon = row_lon - target_lon
         haversine = (
             np.sin(delta_lat / 2) ** 2
-            + np.cos(target_lat)
-            * np.cos(row_lat)
-            * np.sin(delta_lon / 2) ** 2
+            + np.cos(target_lat) * np.cos(row_lat) * np.sin(delta_lon / 2) ** 2
         )
         frame["_distance_m"] = (
             6_371_000
@@ -764,36 +745,28 @@ def _conversation_market_comparables(
     for rank, (_, row) in enumerate(frame.iterrows(), start=1):
         date = row.get("_transaction_date")
         distance = row.get("_distance_m")
-        comparables.append({
-            "rank": rank,
-            "price_twd": (
-                int(row["total_price_twd"])
-                if pd.notna(row.get("total_price_twd"))
-                else None
-            ),
-            "unit_price_per_ping_twd": (
-                int(row["unit_price_per_ping_twd"])
-                if pd.notna(row.get("unit_price_per_ping_twd"))
-                else None
-            ),
-            "distance_m": (
-                int(round(float(distance)))
-                if pd.notna(distance)
-                else None
-            ),
-            "transaction_date": (
-                date.date().isoformat()
-                if pd.notna(date)
-                else None
-            ),
-            "station_code": row.get("station_code"),
-            "station_distance_m": (
-                float(row["station_distance_m"])
-                if pd.notna(row.get("station_distance_m"))
-                else None
-            ),
-            "selection_reason": "面積相近，依距離與日期排序",
-        })
+        comparables.append(
+            {
+                "rank": rank,
+                "price_twd": (
+                    int(row["total_price_twd"]) if pd.notna(row.get("total_price_twd")) else None
+                ),
+                "unit_price_per_ping_twd": (
+                    int(row["unit_price_per_ping_twd"])
+                    if pd.notna(row.get("unit_price_per_ping_twd"))
+                    else None
+                ),
+                "distance_m": (int(round(float(distance))) if pd.notna(distance) else None),
+                "transaction_date": (date.date().isoformat() if pd.notna(date) else None),
+                "station_code": row.get("station_code"),
+                "station_distance_m": (
+                    float(row["station_distance_m"])
+                    if pd.notna(row.get("station_distance_m"))
+                    else None
+                ),
+                "selection_reason": "面積相近，依距離與日期排序",
+            }
+        )
     return comparables
 
 
@@ -830,15 +803,9 @@ def _conversation_valuation(
     registry: ModelRegistry,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    transaction_type = (
-        "presale"
-        if payload.get("listing_type") == "newhouse"
-        else "resale"
-    )
+    transaction_type = "presale" if payload.get("listing_type") == "newhouse" else "resale"
     layout = _CONVERSATION_LAYOUT_RE.search(str(payload.get("layout") or ""))
-    floor_match = _CONVERSATION_FLOOR_RE.search(
-        str(payload.get("floor") or "")
-    )
+    floor_match = _CONVERSATION_FLOOR_RE.search(str(payload.get("floor") or ""))
     comparables = _conversation_market_comparables(data_source, payload)
     nearest = next(
         (
@@ -862,11 +829,7 @@ def _conversation_valuation(
         payload.get("building_type"),
         total_floors,
     )
-    age = (
-        None
-        if transaction_type == "presale"
-        else float(payload["age_years"])
-    )
+    age = None if transaction_type == "presale" else float(payload["age_years"])
     valuation_input = ValuationInput(
         transaction_type=transaction_type,
         station_code=str(nearest["station_code"]),
@@ -879,17 +842,15 @@ def _conversation_valuation(
         building_age_years=age,
         floor=floor,
         total_floors=total_floors,
-        parking_type="" if str(payload.get("parking_type") or "") == "無車位" else str(payload.get("parking_type") or ""),
+        parking_type=""
+        if str(payload.get("parking_type") or "") == "無車位"
+        else str(payload.get("parking_type") or ""),
         parking_area_ping=0,
         asking_total_price_twd=(
-            int(payload["total_price_twd"])
-            if payload.get("total_price_twd") is not None
-            else None
+            int(payload["total_price_twd"]) if payload.get("total_price_twd") is not None else None
         ),
     )
-    market = data_source.load(
-        MarketFilters(transaction_type=transaction_type)
-    )
+    market = data_source.load(MarketFilters(transaction_type=transaction_type))
     if market.empty:
         raise ValueError("market data unavailable")
     latest_data_date = pd.Timestamp(market["transaction_date"].max())
@@ -903,8 +864,7 @@ def _conversation_valuation(
     low, high = result["interval_total_price_twd"]
     model = result.get("model") or {}
     limitations = [
-        "捷運生活圈與距離由最近一筆實價登錄推定"
-        f"（該成交距物件約 {nearest['distance_m']} 公尺）"
+        f"捷運生活圈與距離由最近一筆實價登錄推定（該成交距物件約 {nearest['distance_m']} 公尺）"
     ]
     if payload.get("parking_type"):
         limitations.append("591 未提供可驗證車位坪數，正式估值以 0 坪計入")
@@ -935,9 +895,7 @@ def _ensure_conversation_schema(
             for migration_path in migration_paths:
                 sql = migration_path.read_text(encoding="utf-8")
                 statements = [
-                    statement.strip()
-                    for statement in sql.split(";")
-                    if statement.strip()
+                    statement.strip() for statement in sql.split(";") if statement.strip()
                 ]
                 for statement in statements:
                     cursor.execute(statement)
@@ -1040,9 +998,7 @@ def create_app(
 
     def get_runtime_env(name: str, default: str = "") -> str:
         current = (
-            secrets_store.merged_env(os.environ)
-            if secrets_store is not None
-            else dict(os.environ)
+            secrets_store.merged_env(os.environ) if secrets_store is not None else dict(os.environ)
         )
         return current.get(name, default)
 
@@ -1054,24 +1010,20 @@ def create_app(
 
     llm_model_catalog = LlmModelCatalog(
         ollama_base_url_getter=get_ollama_base_url,
-        gemini_configured_getter=lambda: bool(
-            get_runtime_env("QINGPU_GEMINI_API_KEY")
-        ),
+        gemini_configured_getter=lambda: bool(get_runtime_env("QINGPU_GEMINI_API_KEY")),
     )
     if provider_ops_service is not None:
-        provider_ops_service.set_benchmark_runner(ConfiguredWebBenchmarkRunner(
-            ollama_base_url_getter=get_ollama_base_url,
-            gemini_api_key_getter=lambda: get_runtime_env(
-                "QINGPU_GEMINI_API_KEY"
-            ),
-        ))
+        provider_ops_service.set_benchmark_runner(
+            ConfiguredWebBenchmarkRunner(
+                ollama_base_url_getter=get_ollama_base_url,
+                gemini_api_key_getter=lambda: get_runtime_env("QINGPU_GEMINI_API_KEY"),
+            )
+        )
 
     def get_gemini_api_key() -> str | None:
         if secrets_store is None:
             return os.environ.get("QINGPU_GEMINI_API_KEY")
-        return secrets_store.merged_env(os.environ).get(
-            "QINGPU_GEMINI_API_KEY"
-        )
+        return secrets_store.merged_env(os.environ).get("QINGPU_GEMINI_API_KEY")
 
     if admin_services is not None:
         admin_runtime = AdminRuntime(
@@ -1103,9 +1055,7 @@ def create_app(
 
     conv_repo = conversation_repository
     conv_service = conversation_service
-    conversation_job_service = (
-        admin_services.job_service if admin_services is not None else None
-    )
+    conversation_job_service = admin_services.job_service if admin_services is not None else None
     if (
         root is not None
         and os.environ.get("QINGPU_DATABASE_URL")
@@ -1144,9 +1094,7 @@ def create_app(
 
             connection_factory = create_mysql_connection_factory()
             _ensure_conversation_schema(root, connection_factory)
-            conv_repo = conv_repo or MySQLConversationRepository(
-                connection_factory
-            )
+            conv_repo = conv_repo or MySQLConversationRepository(connection_factory)
             conversation_jobs = (
                 admin_services.job_service
                 if admin_services is not None
@@ -1156,21 +1104,13 @@ def create_app(
             if admin_services is not None:
                 conversation_executor = admin_services.executor
             else:
-                conversation_owned_executor = LocalJobExecutor(
-                    conversation_jobs
-                )
+                conversation_owned_executor = LocalJobExecutor(conversation_jobs)
                 conversation_executor = conversation_owned_executor
             browser = DetailPageBrowser(
-                driver_factory=lambda: create_chrome(
-                    ChromeConfig(headless=False)
-                )
+                driver_factory=lambda: create_chrome(ChromeConfig(headless=False))
             )
             market_service = (
-                (
-                    lambda payload: _conversation_market_comparables(
-                        ds, payload
-                    )
-                )
+                (lambda payload: _conversation_market_comparables(ds, payload))
                 if ds is not None
                 else None
             )
@@ -1224,9 +1164,7 @@ def create_app(
 
     app.extensions["qingpu_conversation_service"] = conv_service
     app.extensions["qingpu_conversation_repository"] = conv_repo
-    app.extensions["qingpu_conversation_job_service"] = (
-        conversation_job_service
-    )
+    app.extensions["qingpu_conversation_job_service"] = conversation_job_service
     from qingpu_insight.conversation_models import public_model_catalog
 
     app.register_blueprint(
@@ -1456,9 +1394,7 @@ def create_app(
         effective_job_service = (
             admin_services.job_service
             if admin_services is not None
-            else app.extensions.get(
-                "qingpu_conversation_job_service"
-            )
+            else app.extensions.get("qingpu_conversation_job_service")
         )
         if effective_job_service is None:
             err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
@@ -1600,15 +1536,11 @@ def create_app(
         if run.job_type != "model_training":
             return jsonify({"error": {"code": "not_found", "message": "工作不存在。"}}), 404
         if run.status not in ACTIVE_STATUSES:
-            return jsonify(
-                {"error": {"code": "not_stoppable", "message": "此工作無法停止。"}}
-            ), 409
+            return jsonify({"error": {"code": "not_stoppable", "message": "此工作無法停止。"}}), 409
         accepted = admin_services.model_training_service.request_stop(run_id)
         if accepted:
             return jsonify({"run_id": run_id, "stop_requested": True}), 202
-        return jsonify(
-            {"error": {"code": "not_stoppable", "message": "此工作無法停止。"}}
-        ), 409
+        return jsonify({"error": {"code": "not_stoppable", "message": "此工作無法停止。"}}), 409
 
     @app.get("/api/admin/model-training-runs/<run_id>/reports/<report_type>")
     def admin_model_training_report(run_id: str, report_type: str):

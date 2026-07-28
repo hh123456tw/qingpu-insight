@@ -74,8 +74,12 @@ def bundle() -> ValuationBundle:
         data_max_date="2026-06-01",
         metrics={"overall": {"mae": 45000}},
         parking_price_policy=ParkingPricePolicy(
-            version=1, minimum_type_samples=20,
-            by_type={"坡道平面": ParkingPriceStat(1_700_000, 40), "坡道機械": ParkingPriceStat(800_000, 15)},
+            version=1,
+            minimum_type_samples=20,
+            by_type={
+                "坡道平面": ParkingPriceStat(1_700_000, 40),
+                "坡道機械": ParkingPriceStat(800_000, 15),
+            },
             market_fallback=ParkingPriceStat(1_200_000, 60),
         ),
     )
@@ -423,13 +427,27 @@ def test_degraded_valuation_refuses_to_invent_price_without_market_data(valid_re
         valuate(valid_resale_input, UnavailableRegistry(), empty)
 
 
-def test_parking_is_additive_and_does_not_change_building_estimate(bundle, market, valid_resale_input):
+def test_parking_is_additive_and_does_not_change_building_estimate(
+    bundle, market, valid_resale_input
+):
     from dataclasses import replace
-    no_parking = valuate(replace(valid_resale_input, parking_type="", parking_area_ping=0), FakeRegistry(bundle), market)
-    flat = valuate(replace(valid_resale_input, parking_type="坡道平面", parking_area_ping=8), FakeRegistry(bundle), market)
+
+    no_parking = valuate(
+        replace(valid_resale_input, parking_type="", parking_area_ping=0),
+        FakeRegistry(bundle),
+        market,
+    )
+    flat = valuate(
+        replace(valid_resale_input, parking_type="坡道平面", parking_area_ping=8),
+        FakeRegistry(bundle),
+        market,
+    )
 
     assert flat["estimated_building_price_twd"] == no_parking["estimated_building_price_twd"]
-    assert flat["estimated_total_price_twd"] == flat["estimated_building_price_twd"] + flat["estimated_parking_price_twd"]
+    assert (
+        flat["estimated_total_price_twd"]
+        == flat["estimated_building_price_twd"] + flat["estimated_parking_price_twd"]
+    )
     assert flat["estimated_total_price_twd"] > no_parking["estimated_total_price_twd"]
 
 
@@ -446,14 +464,16 @@ def test_legacy_bundle_no_parking_policy(bundle, market, valid_resale_input):
 def test_train_artifact_persists_parking_policy(tmp_path):
     np.random.seed(42)
     n = 200
-    train = pd.DataFrame({
-        "transaction_date": pd.date_range("2024-01-01", periods=n, freq="D"),
-        "target_unit_price_twd": np.random.uniform(200_000, 800_000, n),
-        "parking_type": np.random.choice(["坡道平面", "坡道機械", ""], n, p=[0.5, 0.3, 0.2]),
-        "parking_price_twd": np.where(
-            np.random.random(n) > 0.2, np.random.uniform(500_000, 2_000_000, n), 0
-        ),
-    })
+    train = pd.DataFrame(
+        {
+            "transaction_date": pd.date_range("2024-01-01", periods=n, freq="D"),
+            "target_unit_price_twd": np.random.uniform(200_000, 800_000, n),
+            "parking_type": np.random.choice(["坡道平面", "坡道機械", ""], n, p=[0.5, 0.3, 0.2]),
+            "parking_price_twd": np.where(
+                np.random.random(n) > 0.2, np.random.uniform(500_000, 2_000_000, n), 0
+            ),
+        }
+    )
     for col in FEATURE_COLUMNS:
         if col in ("station_code", "building_type", "parking_type"):
             train[col] = "A17"
@@ -475,6 +495,7 @@ def test_train_artifact_persists_parking_policy(tmp_path):
         train: pd.DataFrame
         calibration: pd.DataFrame
         test: pd.DataFrame
+
     split = FakeSplit(train=train, calibration=calibration, test=test)
 
     @dataclass
@@ -507,17 +528,23 @@ def test_train_artifact_persists_parking_policy(tmp_path):
     selected = FakeSelected(name="baseline", estimator=estimator, metrics=metrics)
 
     import sklearn.inspection
+
     original_pi = sklearn.inspection.permutation_importance
 
     def fake_pi(estimator, X, y, **kwargs):
         from types import SimpleNamespace
+
         return SimpleNamespace(importances_mean=np.zeros(len(FEATURE_COLUMNS)))
 
     sklearn.inspection.permutation_importance = fake_pi
 
     try:
         path = train_artifact(
-            "resale", selected, split, seed_bundle, tmp_path,
+            "resale",
+            selected,
+            split,
+            seed_bundle,
+            tmp_path,
             feature_columns=FEATURE_COLUMNS,
             training_frame=train,
         )
@@ -587,11 +614,10 @@ def test_comparable_similarity_is_absolute_not_batch_relative(bundle):
     far = _candidate(area=80, distance=1900, bedrooms=1, months_old=35)
     close_rows = [close] * 3
     base = similar_transactions(bundle, input_row, _market(close_rows))
-    with_outlier = similar_transactions(
-        bundle, input_row, _market(close_rows + [far])
-    )
-    assert base["comparables"][0]["similarity_score"] == (
-        with_outlier["comparables"][0]["similarity_score"]
+    with_outlier = similar_transactions(bundle, input_row, _market(close_rows + [far]))
+    assert (
+        base["comparables"][0]["similarity_score"]
+        == (with_outlier["comparables"][0]["similarity_score"])
     )
 
 
@@ -641,9 +667,7 @@ def test_future_candidate_similarity_stays_bounded():
     candidate = input_row.copy()
     candidate["transaction_date"] = pd.Timestamp("2026-07-01")
 
-    assert _comparable_similarity(
-        input_row, candidate, pd.Timestamp("2026-06-01")
-    ) <= 1
+    assert _comparable_similarity(input_row, candidate, pd.Timestamp("2026-06-01")) <= 1
 
 
 def test_typical_close_cases_clear_point_six(bundle):
@@ -663,8 +687,12 @@ def test_typical_close_cases_clear_point_six(bundle):
         _candidate(area=28, distance=480, bedrooms=3, months_old=4, record_id="C2"),
         _candidate(area=32, distance=510, bedrooms=2, months_old=8, record_id="C3"),
         _candidate(
-            area=55, distance=1200, bedrooms=4, months_old=15,
-            building_type="華廈", record_id="C4",
+            area=55,
+            distance=1200,
+            bedrooms=4,
+            months_old=15,
+            building_type="華廈",
+            record_id="C4",
         ),
         _candidate(area=70, distance=1800, bedrooms=1, months_old=30, record_id="C5"),
     ]
@@ -681,16 +709,12 @@ def test_confidence_not_low_solely_from_comparable_insufficiency_when_three_good
         assert not any("高相似度成交案例不足" in r for r in result["confidence_reasons"])
 
 
-def test_dissimilar_comparables_include_insufficient_evidence_reason(
-    bundle, valid_resale_input
-):
+def test_dissimilar_comparables_include_insufficient_evidence_reason(bundle, valid_resale_input):
     small_market = pd.DataFrame(
         {
             "record_id": ["D1", "D2", "D3"],
             "transaction_type": ["resale", "resale", "resale"],
-            "transaction_date": pd.to_datetime(
-                ["2026-01-01", "2026-02-01", "2026-03-01"]
-            ),
+            "transaction_date": pd.to_datetime(["2026-01-01", "2026-02-01", "2026-03-01"]),
             "station_code": ["A17", "A17", "A17"],
             "building_type": ["公寓", "公寓", "公寓"],
             "building_area_ping": [80, 90, 100],
@@ -704,9 +728,7 @@ def test_dissimilar_comparables_include_insufficient_evidence_reason(
             "building_age_years": [30.0, 35.0, 40.0],
         }
     )
-    result = valuate(
-        valid_resale_input, FakeRegistry(bundle), small_market
-    )
+    result = valuate(valid_resale_input, FakeRegistry(bundle), small_market)
     assert any("高相似度成交案例不足" in r for r in result["confidence_reasons"])
 
 
@@ -998,6 +1020,7 @@ def test_train_artifact_half_life(tmp_path, monkeypatch):
 
     def fake_pi(estimator, X, y, **kwargs):
         from types import SimpleNamespace
+
         return SimpleNamespace(importances_mean=np.zeros(len(FEATURE_COLUMNS)))
 
     sklearn.inspection.permutation_importance = fake_pi

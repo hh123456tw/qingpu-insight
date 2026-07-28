@@ -81,8 +81,16 @@ def _official_model_report(bundle: ValuationBundle) -> dict[str, Any]:
     if policy is not None:
         report["parking_policy"] = {
             "version": policy.version,
-            "by_type": {k: {"price_twd": v.price_twd, "sample_size": v.sample_size} for k, v in policy.by_type.items()},
-            "market_fallback": {"price_twd": policy.market_fallback.price_twd, "sample_size": policy.market_fallback.sample_size} if policy.market_fallback else None,
+            "by_type": {
+                k: {"price_twd": v.price_twd, "sample_size": v.sample_size}
+                for k, v in policy.by_type.items()
+            },
+            "market_fallback": {
+                "price_twd": policy.market_fallback.price_twd,
+                "sample_size": policy.market_fallback.sample_size,
+            }
+            if policy.market_fallback
+            else None,
         }
     return report
 
@@ -284,6 +292,7 @@ class ModelObservatory:
             "run_id": run.run_id,
             "status": run.status,
             "trigger": run.trigger,
+            "summary": dict(run.summary),
             "started_at": (run.started_at.isoformat() if run.started_at else None),
             "finished_at": (run.finished_at.isoformat() if run.finished_at else None),
         }
@@ -341,9 +350,7 @@ class ModelObservatory:
                     current = self._official_store.current(m)
                     if current is not None:
                         current_version_id = current.version_id
-                        is_current_official = (
-                            current.source_run_id == str(manifest.run_id)
-                        )
+                        is_current_official = current.source_run_id == str(manifest.run_id)
 
                 markets_info[m] = {
                     "publishable": publishable,
@@ -358,14 +365,18 @@ class ModelObservatory:
                 result["manifest"]["automl"] = manifest.automl.model_dump(mode="json")
 
         if manifest is None and self._automl_output_store is not None:
+            markets: dict[str, dict[str, Any]] = {}
+            stopped = run.status == "skipped"
             for market in ("resale", "presale"):
                 automl_data = self._automl_output_store.get(run_id, market)
                 if automl_data is not None:
-                    result["automl"] = {
-                        "candidate_available": False,
-                        "markets": {},
-                        "stopped": True,
-                    }
-                    break
+                    markets[market] = automl_data
+                    stopped = stopped or bool(automl_data.get("stopped"))
+            if markets:
+                result["automl"] = {
+                    "candidate_available": False,
+                    "markets": markets,
+                    "stopped": stopped,
+                }
 
         return result

@@ -67,9 +67,7 @@ class OfficialModelStore:
         context = manifest_path.read_text(encoding="utf-8")
         disk_manifest = TrainingManifest.model_validate_json(context)
         if disk_manifest != training:
-            raise ValueError(
-                "manifest on disk does not match supplied training manifest"
-            )
+            raise ValueError("manifest on disk does not match supplied training manifest")
 
         result = None
         for r in training.results:
@@ -79,9 +77,7 @@ class OfficialModelStore:
         if result is None:
             raise ValueError(f"no MarketTrainingResult for market {market!r}")
         if not result.recommended:
-            raise ValueError(
-                f"MarketTrainingResult for {market!r} is not recommended"
-            )
+            raise ValueError(f"MarketTrainingResult for {market!r} is not recommended")
 
         artifact_path = (candidate_root / result.artifact_file).resolve()
         if not artifact_path.exists():
@@ -97,9 +93,7 @@ class OfficialModelStore:
         if not isinstance(bundle, ValuationBundle):
             raise TypeError(f"{result.artifact_file} is not a ValuationBundle")
         if bundle.transaction_type != market:
-            raise ValueError(
-                f"market mismatch: expected {market}, got {bundle.transaction_type}"
-            )
+            raise ValueError(f"market mismatch: expected {market}, got {bundle.transaction_type}")
 
         version_id = uuid4().hex[:8]
         now = datetime.now(UTC)
@@ -205,9 +199,7 @@ class OfficialModelStore:
         if not isinstance(bundle, ValuationBundle):
             raise TypeError("artifact is not a ValuationBundle")
         if bundle.transaction_type != market:
-            raise ValueError(
-                f"market mismatch: expected {market}, got {bundle.transaction_type}"
-            )
+            raise ValueError(f"market mismatch: expected {market}, got {bundle.transaction_type}")
 
         current_json = self._current_json(market)
         tmp = current_json.with_suffix(".json.tmp")
@@ -247,17 +239,13 @@ class OfficialModelStore:
         if not str(artifact_path).startswith(str(self._root)):
             raise ValueError("artifact path is outside store root")
         if not artifact_path.exists():
-            raise FileNotFoundError(
-                f"model.joblib for {market}/{version_id} not found"
-            )
+            raise FileNotFoundError(f"model.joblib for {market}/{version_id} not found")
 
         bundle: Any = joblib.load(str(artifact_path))
         if not isinstance(bundle, ValuationBundle):
             raise TypeError("loaded object is not a ValuationBundle")
         if bundle.transaction_type != market:
-            raise ValueError(
-                f"market mismatch: expected {market}, got {bundle.transaction_type}"
-            )
+            raise ValueError(f"market mismatch: expected {market}, got {bundle.transaction_type}")
         return bundle
 
 
@@ -331,9 +319,7 @@ class ModelReleaseService:
             raise ValueError(f"no result for market {market!r} in run {run_id!r}")
 
         if not result.recommended:
-            raise ValueError(
-                f"market {market!r} result is not recommended"
-            )
+            raise ValueError(f"market {market!r} result is not recommended")
 
         candidate_dir = self._candidate_store._root / str(manifest.run_id)
         artifact_path = (candidate_dir / result.artifact_file).resolve()
@@ -350,9 +336,7 @@ class ModelReleaseService:
         if not isinstance(bundle, ValuationBundle):
             raise TypeError(f"{result.artifact_file} is not a ValuationBundle")
         if bundle.transaction_type != market:
-            raise ValueError(
-                f"market mismatch: expected {market}, got {bundle.transaction_type}"
-            )
+            raise ValueError(f"market mismatch: expected {market}, got {bundle.transaction_type}")
 
         return self._preview_service.create_for(
             operation="model_publish",
@@ -366,7 +350,9 @@ class ModelReleaseService:
         return self._preview_service.create_for(
             operation="model_rollback",
             payload={
-                "operation": "rollback", "market": market, "version_id": version_id,
+                "operation": "rollback",
+                "market": market,
+                "version_id": version_id,
             },
             confirmation_text=f"回滾 {market} {version_id}",
         )
@@ -383,9 +369,7 @@ class ModelReleaseService:
         )
         return submission
 
-    def execute(
-        self, run_id: str, preview: OperationPreview
-    ) -> ModelVersionRecord:
+    def execute(self, run_id: str, preview: OperationPreview) -> ModelVersionRecord:
         op = preview.payload.get("operation")
         if op == "publish":
             return self._execute_publish(run_id, preview)
@@ -405,9 +389,7 @@ class ModelReleaseService:
             run_id, {"stage": stage, "timestamp": datetime.now(UTC).isoformat()}
         )
 
-    def _execute_publish(
-        self, run_id: str, preview: OperationPreview
-    ) -> ModelVersionRecord:
+    def _execute_publish(self, run_id: str, preview: OperationPreview) -> ModelVersionRecord:
         market = str(preview.payload["market"])
         source_run_id = str(preview.payload["run_id"])
         self._progress(run_id, "validating_candidate")
@@ -420,9 +402,7 @@ class ModelReleaseService:
         self._progress(run_id, "backing_up_pointer")
 
         candidate_root = self._candidate_store._root / str(manifest.run_id)
-        version_record = self._official_store.import_candidate(
-            candidate_root, manifest, market
-        )
+        version_record = self._official_store.import_candidate(candidate_root, manifest, market)
         self._progress(run_id, "importing_version")
 
         bundle = self._official_store.load(market, version_record.version_id)
@@ -439,9 +419,7 @@ class ModelReleaseService:
                 raise ValueError("file pointer activation verification failed")
 
             self._release_repository.register_version(version_record)
-            self._release_repository.activate(
-                market, version_record.version_id, run_id, "publish"
-            )
+            self._release_repository.activate(market, version_record.version_id, run_id, "publish")
             self._progress(run_id, "recording_release")
         except Exception:
             self._restore_file_pointer(market, prev_file_version)
@@ -449,9 +427,7 @@ class ModelReleaseService:
 
         return version_record
 
-    def _execute_rollback(
-        self, run_id: str, preview: OperationPreview
-    ) -> ModelVersionRecord:
+    def _execute_rollback(self, run_id: str, preview: OperationPreview) -> ModelVersionRecord:
         market = str(preview.payload["market"])
         version_id = str(preview.payload["version_id"])
         self._progress(run_id, "validating_candidate")
@@ -471,9 +447,7 @@ class ModelReleaseService:
                 raise ValueError("file pointer activation verification failed")
 
             existing_versions = self._release_repository.list_versions(market, 100)
-            version_exists = any(
-                v.version_id == version_id for v in existing_versions
-            )
+            version_exists = any(v.version_id == version_id for v in existing_versions)
             if not version_exists:
                 record = ModelVersionRecord(
                     version_id=activated.version_id,
@@ -490,9 +464,7 @@ class ModelReleaseService:
             else:
                 record = next(v for v in existing_versions if v.version_id == version_id)
 
-            self._release_repository.activate(
-                market, version_id, run_id, "rollback"
-            )
+            self._release_repository.activate(market, version_id, run_id, "rollback")
             self._progress(run_id, "recording_release")
         except Exception:
             self._restore_file_pointer(market, prev_file_version)
@@ -500,9 +472,7 @@ class ModelReleaseService:
 
         return record
 
-    def _restore_file_pointer(
-        self, market: str, previous_version_id: str | None
-    ) -> None:
+    def _restore_file_pointer(self, market: str, previous_version_id: str | None) -> None:
         if previous_version_id is not None:
             try:
                 self._official_store.activate(market, previous_version_id)
@@ -523,7 +493,11 @@ class ModelReleaseService:
 
         # Verify policy exists and has positive fallback
         policy = bundle.parking_price_policy
-        if policy is None or policy.market_fallback is None or policy.market_fallback.price_twd <= 0:
+        if (
+            policy is None
+            or policy.market_fallback is None
+            or policy.market_fallback.price_twd <= 0
+        ):
             raise ValueError("parking price policy must have positive market fallback")
 
         test_input = _SMOKE_INPUTS.get(market)
@@ -533,6 +507,7 @@ class ModelReleaseService:
         import pandas as pd
 
         from qingpu_insight.model_features import input_frame
+
         data_date = pd.Timestamp(bundle.data_max_date)
         row = input_frame(test_input, data_date)
         bundle.pipeline.predict(row)
@@ -555,4 +530,6 @@ class ModelReleaseService:
         if not (flat_total > no_parking_total):
             raise ValueError("parking consistency: slope flat total must exceed no-parking total")
         if not (mechanical_total > no_parking_total):
-            raise ValueError("parking consistency: slope mechanical total must exceed no-parking total")
+            raise ValueError(
+                "parking consistency: slope mechanical total must exceed no-parking total"
+            )
