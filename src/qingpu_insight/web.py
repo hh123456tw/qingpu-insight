@@ -863,7 +863,7 @@ def _conversation_valuation(
         building_age_years=age,
         floor=floor,
         total_floors=total_floors,
-        parking_type=str(payload.get("parking_type") or ""),
+        parking_type="" if str(payload.get("parking_type") or "") == "無車位" else str(payload.get("parking_type") or ""),
         parking_area_ping=0,
         asking_total_price_twd=(
             int(payload["total_price_twd"])

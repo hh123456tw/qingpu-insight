@@ -349,14 +349,26 @@ def test_execute_runs_tuned_model_experiment_with_profiles_and_recency_weighting
             "use_recency_weights": use_recency_weights,
             "profile_names": [p.name for p in profiles],
         })
-        from qingpu_insight.model_training import run_model_experiment as orig
+        from qingpu_insight.model_training import (
+            run_model_experiment as orig,
+            evaluate_candidate,
+            candidate_estimators,
+            ProfileEvaluation,
+            TunedModelExperiment,
+        )
         result = orig(
             split,
             feature_columns=feature_columns,
             use_recency_weights=use_recency_weights,
             baseline_months=baseline_months,
         )
-        from qingpu_insight.model_training import ProfileEvaluation, TunedModelExperiment
+        if "ridge" not in result.final_test_results:
+            ridge_est = candidate_estimators(feature_columns=feature_columns)["ridge"]
+            ridge_eval = evaluate_candidate(
+                "ridge", ridge_est, split.train, split.test,
+                feature_columns=feature_columns,
+            )
+            result.final_test_results["ridge"] = ridge_eval
         profiles_tuple = tuple(
             ProfileEvaluation(profile=p, candidates=(), candidate_errors={})
             for p in profiles
@@ -365,9 +377,8 @@ def test_execute_runs_tuned_model_experiment_with_profiles_and_recency_weighting
             profile_results=profiles_tuple,
             selected_profile="balanced",
             selected_model="ridge",
-            selected_evaluation=result.final_test_results.get(
-                "ridge", result.final_test_results.get("baseline")),
-            selected_estimator=result.selected_estimator,
+            selected_evaluation=result.final_test_results["ridge"],
+            selected_estimator=result.final_test_results["ridge"].estimator,
             final_test_results=result.final_test_results,
             recommended=result.recommended,
             reason_codes=result.reason_codes,

@@ -7,6 +7,7 @@ import pytest
 
 from qingpu_insight.model_features import (
     FEATURE_COLUMNS,
+    PARKING_FEATURE_COLUMNS,
     ValuationInput,
     add_derived_features,
     build_model_frame,
@@ -162,6 +163,23 @@ def test_derived_features_are_identical_for_training_and_inference():
     assert trained["building_age_band"] == inferred["building_age_band"] == "5_10"
     assert trained["area_band"] == inferred["area_band"] == "small"
     assert trained["floor_band"] == inferred["floor_band"] == "middle"
+
+
+def test_house_feature_contract_excludes_parking():
+    assert "parking_type" not in FEATURE_COLUMNS
+    assert "parking_area_ping" not in FEATURE_COLUMNS
+    assert "parking_type" in PARKING_FEATURE_COLUMNS
+    assert "parking_area_ping" in PARKING_FEATURE_COLUMNS
+
+
+def test_no_parking_normalizes_stale_area(valid_resale_input):
+    value = replace(valid_resale_input, parking_type="", parking_area_ping=8)
+    assert value.parking_area_ping == 0
+
+
+def test_selected_parking_requires_positive_area(valid_resale_input):
+    with pytest.raises(ValueError, match="parking_area_ping must be greater than 0"):
+        replace(valid_resale_input, parking_type="坡道平面", parking_area_ping=0)
 
 
 def test_derived_feature_boundaries_and_missing_values():

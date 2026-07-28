@@ -283,7 +283,6 @@ NUMERIC_FEATURES = [
     "floor",
     "total_floors",
     "floor_ratio",
-    "parking_area_ping",
     "transaction_year",
     "transaction_month",
     "transaction_month_index",
@@ -291,7 +290,6 @@ NUMERIC_FEATURES = [
 CATEGORICAL_FEATURES = [
     "station_code",
     "building_type",
-    "parking_type",
     "station_building_type",
     "building_age_band",
     "area_band",

@@ -5,6 +5,8 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 
+PARKING_FEATURE_COLUMNS = ("parking_type", "parking_area_ping")
+
 BASE_FEATURE_COLUMNS = (
     "station_code",
     "station_distance_m",
@@ -17,8 +19,6 @@ BASE_FEATURE_COLUMNS = (
     "floor",
     "total_floors",
     "floor_ratio",
-    "parking_type",
-    "parking_area_ping",
     "transaction_year",
     "transaction_month",
 )
@@ -185,6 +185,10 @@ class ValuationInput:
     asking_total_price_twd: int | None = None
 
     def __post_init__(self):
+        if not self.parking_type:
+            object.__setattr__(self, "parking_area_ping", 0)
+        elif self.parking_area_ping <= 0:
+            raise ValueError("parking_area_ping must be greater than 0 when parking_type is selected")
         if self.transaction_type not in {"resale", "presale"}:
             raise ValueError("transaction_type must be resale or presale")
         if self.station_code not in {"A17", "A18", "A19"}:
@@ -246,8 +250,6 @@ def input_frame(value: ValuationInput, data_date: pd.Timestamp) -> pd.DataFrame:
         "floor": [value.floor],
         "total_floors": [value.total_floors],
         "floor_ratio": [value.floor / value.total_floors],
-        "parking_type": [value.parking_type],
-        "parking_area_ping": [value.parking_area_ping],
         "transaction_year": [data_date.year],
         "transaction_month": [data_date.month],
     }

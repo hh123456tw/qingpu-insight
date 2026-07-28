@@ -287,7 +287,6 @@ def confidence_assessment(
         "bathrooms",
         "floor",
         "total_floors",
-        "parking_area_ping",
     ]
     if pd.notna(input_row.at[0, "building_age_years"]):
         numeric_fields.append("building_age_years")
