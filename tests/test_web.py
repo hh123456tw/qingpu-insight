@@ -2333,6 +2333,7 @@ class StubModelTrainingService:
         self.job_service = job_service
         self.handoffs: list[str] = []
         self.requests: list = []
+        self.should_stop = True
 
     def submit(self, request):
         self.requests.append(request)
@@ -2343,6 +2344,9 @@ class StubModelTrainingService:
     def handoff(self, submission, request, executor):
         self.handoffs.append(submission.run.run_id)
         return executor.submit(submission.run.run_id, lambda: None)
+
+    def request_stop(self, run_id: str) -> bool:
+        return self.should_stop
 
 
 class StubModelObservatory:
@@ -2731,6 +2735,150 @@ class TestModelAdminApi:
         )
         assert response.status_code == 200
         assert response.data.decode() == "dummy report content"
+
+    # ------------------------------------------------------------------
+    # Stop endpoint tests
+    # ------------------------------------------------------------------
+
+    def test_model_training_stop_rejects_untrusted_host(
+        self, model_admin_client: FlaskClient,
+    ) -> None:
+        response = model_admin_client.post(
+            "/api/admin/model-training-runs/00000000-0000-4000-8000-000000000000/stop",
+            base_url="http://attacker.example",
+        )
+        assert response.status_code == 403
+
+    def test_model_training_stop_rejects_missing_csrf(
+        self, model_admin_client: FlaskClient,
+    ) -> None:
+        response = model_admin_client.post(
+            "/api/admin/model-training-runs/00000000-0000-4000-8000-000000000000/stop",
+        )
+        assert response.status_code == 403
+
+    def test_model_training_stop_rejects_invalid_uuid(
+        self, model_admin_client: FlaskClient,
+    ) -> None:
+        response = model_admin_client.post(
+            "/api/admin/model-training-runs/not-a-uuid/stop",
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+        assert response.get_json()["error"]["fields"]["run_id"] == "invalid_uuid"
+
+    def test_model_training_stop_returns_404_for_unknown_run(
+        self, model_admin_client: FlaskClient,
+    ) -> None:
+        response = model_admin_client.post(
+            "/api/admin/model-training-runs/00000000-0000-4000-8000-000000000000/stop",
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 404
+
+    def test_model_training_stop_returns_404_for_wrong_job_type(
+        self, model_admin_client: FlaskClient,
+    ) -> None:
+        js = model_admin_client.application.extensions[
+            "qingpu_admin_services"
+        ].job_service
+        bad_run = js.create("listing_update", "lu:active", "web")
+        bad_id = bad_run.run.run_id
+        response = model_admin_client.post(
+            f"/api/admin/model-training-runs/{bad_id}/stop",
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 404
+
+    def test_model_training_stop_returns_409_for_terminal_status(
+        self, model_admin_client: FlaskClient,
+    ) -> None:
+        js = model_admin_client.application.extensions[
+            "qingpu_admin_services"
+        ].job_service
+        submit_resp = model_admin_client.post(
+            "/api/admin/model-training-runs",
+            json={"markets": ["resale"]},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        run_id = submit_resp.get_json()["run_id"]
+        js.start(run_id)
+        js.succeed(run_id, "v1", {"done": True})
+
+        response = model_admin_client.post(
+            f"/api/admin/model-training-runs/{run_id}/stop",
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 409
+        assert response.get_json()["error"]["code"] == "not_stoppable"
+
+    def test_model_training_stop_returns_409_for_guided_run(
+        self, model_admin_client: FlaskClient,
+    ) -> None:
+        mts = model_admin_client.application.extensions[
+            "test_model_training_service"
+        ]
+        mts.should_stop = False
+        submit_resp = model_admin_client.post(
+            "/api/admin/model-training-runs",
+            json={"markets": ["resale"]},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        run_id = submit_resp.get_json()["run_id"]
+        response = model_admin_client.post(
+            f"/api/admin/model-training-runs/{run_id}/stop",
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 409
+        assert response.get_json()["error"]["code"] == "not_stoppable"
+        mts.should_stop = True
+
+    def test_model_training_stop_returns_202(
+        self, model_admin_client: FlaskClient,
+    ) -> None:
+        mts = model_admin_client.application.extensions[
+            "test_model_training_service"
+        ]
+        mts.should_stop = True
+        submit_resp = model_admin_client.post(
+            "/api/admin/model-training-runs",
+            json={"markets": ["resale"]},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        run_id = submit_resp.get_json()["run_id"]
+        response = model_admin_client.post(
+            f"/api/admin/model-training-runs/{run_id}/stop",
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 202
+        body = response.get_json()
+        assert body["run_id"] == run_id
+        assert body["stop_requested"] is True
+
+    def test_model_training_stop_repeated_request_returns_202(
+        self, model_admin_client: FlaskClient,
+    ) -> None:
+        mts = model_admin_client.application.extensions[
+            "test_model_training_service"
+        ]
+        mts.should_stop = True
+        submit_resp = model_admin_client.post(
+            "/api/admin/model-training-runs",
+            json={"markets": ["resale"]},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        run_id = submit_resp.get_json()["run_id"]
+        first = model_admin_client.post(
+            f"/api/admin/model-training-runs/{run_id}/stop",
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        second = model_admin_client.post(
+            f"/api/admin/model-training-runs/{run_id}/stop",
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert first.status_code == 202
+        assert second.status_code == 202
+        assert second.get_json()["stop_requested"] is True
 
 
 class TestModelAdminPage:

@@ -848,6 +848,9 @@ class ModelTrainingService:
             release_blockers=release_blockers,
         )
 
+    def request_stop(self, run_id: str) -> bool:
+        return self._automl_registry.request_stop(run_id)
+
     def start_run(self, run_id: str) -> Any:
         return self._jobs.start(run_id)
 

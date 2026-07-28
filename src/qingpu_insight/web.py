@@ -29,7 +29,7 @@ from qingpu_insight.evidence import UnknownCandidateError
 from qingpu_insight.health import HealthService
 from qingpu_insight.health_repository import MySQLHealthRepository
 from qingpu_insight.job_executor import LocalJobExecutor
-from qingpu_insight.jobs import JobRun, JobService, redact_job_message
+from qingpu_insight.jobs import ACTIVE_STATUSES, JobRun, JobService, redact_job_message
 from qingpu_insight.listing_metrics import (
     ListingFilters,
     listing_summary,
@@ -191,6 +191,8 @@ def _create_production_admin_services(
     build_executor = executor_factory or LocalJobExecutor
     executor = build_executor(service.job_service)
 
+    from qingpu_insight.automl_control import AutoMLControlRegistry
+    from qingpu_insight.automl_outputs import AutoMLRunOutputStore
     from qingpu_insight.model_artifacts import CandidateArtifactStore
     from qingpu_insight.model_observatory import ModelObservatory
     from qingpu_insight.model_training_service import (
@@ -201,11 +203,15 @@ def _create_production_admin_services(
     settings = get_settings(root)
     input_path = settings.processed_dir / "market_transactions.parquet"
     candidate_store = CandidateArtifactStore(root / "candidates")
+    automl_registry = AutoMLControlRegistry()
+    automl_output_store = AutoMLRunOutputStore(root / "outputs")
     mts = ModelTrainingService(
         service.job_service,
         candidate_store,
         input_path,
         SourceVersionProvider("unknown", True),
+        automl_registry=automl_registry,
+        automl_output_store=automl_output_store,
     )
     from qingpu_insight.model_release import OfficialModelStore as _OfficialModelStore
 
@@ -217,6 +223,7 @@ def _create_production_admin_services(
         service.job_service,
         input_path=input_path,
         official_store=official_store,
+        automl_output_store=automl_output_store,
     )
 
     for jt in ADMIN_JOB_TYPES:
@@ -1568,6 +1575,40 @@ def create_app(
         body = _public_job(submission.run)
         body["created"] = submission.created
         return jsonify(body), 202 if submission.created else 200
+
+    @app.post("/api/admin/model-training-runs/<run_id>/stop")
+    def admin_model_training_stop(run_id: str):
+        if not _is_trusted_local_request():
+            return jsonify({"error": {"code": "forbidden", "message": "僅限本機。"}}), 403
+        if request.headers.get("X-Qingpu-CSRF", "") != session.get("_csrf_token", ""):
+            return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
+        if admin_services is None or admin_services.model_training_service is None:
+            error = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
+            return jsonify({"error": error}), 503
+        try:
+            uuid.UUID(run_id)
+        except (ValueError, AttributeError):
+            return _invalid_request({"run_id": "invalid_uuid"})
+        try:
+            run = admin_services.job_service.get(run_id)
+        except Exception:
+            return jsonify(
+                {"error": {"code": "admin_unavailable", "message": "管理功能暫時無法使用。"}}
+            ), 503
+        if run is None:
+            return jsonify({"error": {"code": "not_found", "message": "工作不存在。"}}), 404
+        if run.job_type != "model_training":
+            return jsonify({"error": {"code": "not_found", "message": "工作不存在。"}}), 404
+        if run.status not in ACTIVE_STATUSES:
+            return jsonify(
+                {"error": {"code": "not_stoppable", "message": "此工作無法停止。"}}
+            ), 409
+        accepted = admin_services.model_training_service.request_stop(run_id)
+        if accepted:
+            return jsonify({"run_id": run_id, "stop_requested": True}), 202
+        return jsonify(
+            {"error": {"code": "not_stoppable", "message": "此工作無法停止。"}}
+        ), 409
 
     @app.get("/api/admin/model-training-runs/<run_id>/reports/<report_type>")
     def admin_model_training_report(run_id: str, report_type: str):
