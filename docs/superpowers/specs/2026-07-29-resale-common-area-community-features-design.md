@@ -196,7 +196,9 @@ source_notes
 
 ## 8. 實驗矩陣
 
-所有實驗使用相同資料切割、相同隨機種子、相同近期權重與相同 final test：
+所有實驗使用相同資料切割、相同隨機種子與相同近期權重。Baseline、E1 至 E4
+只在 train／calibration 區段比較並選出一個鎖定方案；不得用 final test 挑選特徵。
+方案鎖定後，只有 Baseline 與該方案各執行一次相同的 final test，以保留真正的樣本外證據：
 
 | 實驗 | 新增內容 |
 | --- | --- |
@@ -210,7 +212,7 @@ source_notes
 
 ## 9. 驗收與發布門檻
 
-新組合要成為推薦候選，必須同時符合：
+鎖定方案要成為推薦候選，必須在一次性 final test 同時符合：
 
 - Final-test MAE 相對 Baseline 至少改善 2%。
 - 整體 MAPE 不退步。
@@ -229,7 +231,8 @@ source_notes
 
 候選報告新增：
 
-- 每組實驗的 MAE、MAPE、RMSE、R²。
+- Baseline、E1 至 E4 的 calibration MAE、MAPE、RMSE、R²。
+- Baseline 與鎖定方案的一次性 final-test MAE、MAPE、RMSE、R²。
 - A17、A18、A19 分站誤差。
 - 已知建案與未知建案的分組誤差。
 - 公設比有效覆蓋率與分布。
