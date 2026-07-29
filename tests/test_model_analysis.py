@@ -17,7 +17,7 @@ from qingpu_insight.model_features import (
     FEATURE_COLUMNS,
     add_derived_features,
 )
-from qingpu_insight.model_training import split_by_time
+from qingpu_insight.model_training import run_model_experiment, split_by_time
 from qingpu_insight.model_tuning import TrainingProfile
 
 
@@ -86,6 +86,74 @@ def test_resale_diagnostics_exposes_a18_drift(large_model_frame):
 def test_diagnostics_are_json_serializable(large_model_frame):
     payload = build_resale_diagnostics(large_model_frame, split_by_time(large_model_frame))
     json.dumps(payload)
+
+
+def test_resale_diagnostics_projects_largest_errors_without_full_address(model_frame):
+    split = split_by_time(model_frame)
+    experiment = run_model_experiment(split)
+    candidate = experiment.final_test_results[experiment.selected_name]
+    source = model_frame.copy()
+    source["record_id"] = [f"tx-{i}" for i in range(len(source))]
+    source["road_key"] = "青商路"
+    source["address"] = "不應公開的完整門牌"
+
+    diagnostics = build_resale_diagnostics(
+        source,
+        split,
+        candidate,
+        FEATURE_COLUMNS,
+    )
+
+    rows = diagnostics["top_residuals"]
+    assert len(rows) == 20
+    assert rows[0]["absolute_error_twd_per_ping"] >= rows[-1][
+        "absolute_error_twd_per_ping"
+    ]
+    assert "address" not in rows[0]
+    assert set(rows[0]) >= {
+        "record_id",
+        "transaction_date",
+        "station_code",
+        "road_key",
+        "building_type",
+        "actual_twd_per_ping",
+        "predicted_twd_per_ping",
+        "absolute_error_twd_per_ping",
+        "absolute_percentage_error",
+        "flags",
+    }
+
+
+def test_resale_diagnostics_counts_confirmed_and_ambiguous_quality_rows(model_frame):
+    split = split_by_time(model_frame)
+    source = pd.DataFrame(
+        {
+            "transaction_subject": [
+                "房地(土地+建物)",
+                "建物",
+                "房地(土地+建物)+車位",
+                "房地(土地+建物)+車位",
+            ],
+            "remarks": [
+                "",
+                "",
+                "親友間交易",
+                "預售屋、或土地及建物分件登記案件",
+            ],
+        }
+    )
+
+    diagnostics = build_resale_diagnostics(
+        model_frame,
+        split,
+        source_frame=source,
+    )
+
+    assert diagnostics["data_quality"] == {
+        "special_relationship_excluded": 1,
+        "non_market_subject_excluded": 1,
+        "ambiguous_registration_note_count": 1,
+    }
 
 
 @pytest.fixture

@@ -3,9 +3,14 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from sklearn.base import clone
 
+from qingpu_insight.market_cleaning import (
+    MARKET_TRANSACTION_SUBJECTS,
+    SPECIAL_RELATIONSHIP_PATTERN,
+)
 from qingpu_insight.model_features import BASE_FEATURE_COLUMNS, FEATURE_COLUMNS
 from qingpu_insight.model_training import (
     ModelFitSpec,
@@ -113,6 +118,7 @@ def build_resale_diagnostics(
     split: TimeSplit,
     candidate: Any | None = None,
     feature_columns: tuple[str, ...] = FEATURE_COLUMNS,
+    source_frame: pd.DataFrame | None = None,
 ) -> dict[str, object]:
     station_counts = frame["station_code"].value_counts().to_dict()
     missing_rates = {
@@ -203,11 +209,18 @@ def build_resale_diagnostics(
     }
 
     evaluation_error_summary: list[dict[str, object]] = []
+    top_residuals: list[dict[str, object]] = []
     if candidate is not None:
         evaluation = split.test.copy()
         predictions = candidate.estimator.predict(evaluation[list(feature_columns)])
-        evaluation["_absolute_error"] = evaluation["target_unit_price_twd"].to_numpy() - predictions
-        evaluation["_absolute_error"] = evaluation["_absolute_error"].abs()
+        actual = evaluation["target_unit_price_twd"].to_numpy(dtype=float)
+        evaluation["_predicted"] = predictions
+        evaluation["_absolute_error"] = np.abs(actual - predictions)
+        evaluation["_absolute_percentage_error"] = (
+            evaluation["_absolute_error"].to_numpy()
+            / np.maximum(np.abs(actual), 100_000)
+            * 100
+        )
         grouped_errors = (
             evaluation.groupby(["station_code", "building_type"])
             .agg(
@@ -226,6 +239,46 @@ def build_resale_diagnostics(
             }
             for _, row in grouped_errors.iterrows()
         ]
+        high_price_threshold = float(evaluation["target_unit_price_twd"].quantile(0.95))
+        largest = evaluation.nlargest(20, "_absolute_error")
+        for index, row in largest.iterrows():
+            flags: list[str] = []
+            if float(row["target_unit_price_twd"]) >= high_price_threshold:
+                flags.append("高價尾端")
+            if float(row["_absolute_percentage_error"]) >= 30:
+                flags.append("高相對誤差")
+            top_residuals.append(
+                {
+                    "record_id": str(row.get("record_id", index)),
+                    "transaction_date": str(pd.Timestamp(row["transaction_date"]).date()),
+                    "station_code": str(row.get("station_code", "")),
+                    "road_key": str(row.get("road_key", "") or ""),
+                    "building_type": str(row.get("building_type", "") or ""),
+                    "actual_twd_per_ping": float(row["target_unit_price_twd"]),
+                    "predicted_twd_per_ping": float(row["_predicted"]),
+                    "absolute_error_twd_per_ping": float(row["_absolute_error"]),
+                    "absolute_percentage_error": float(
+                        row["_absolute_percentage_error"]
+                    ),
+                    "flags": flags,
+                }
+            )
+
+    quality_source = source_frame if source_frame is not None else frame
+    subjects = quality_source.get(
+        "transaction_subject",
+        pd.Series("", index=quality_source.index, dtype="string"),
+    ).fillna("")
+    remarks = quality_source.get(
+        "remarks",
+        pd.Series("", index=quality_source.index, dtype="string"),
+    ).fillna("")
+    special_relationship = remarks.str.contains(SPECIAL_RELATIONSHIP_PATTERN)
+    non_market_subject = subjects.ne("") & ~subjects.isin(MARKET_TRANSACTION_SUBJECTS)
+    ambiguous_registration = remarks.str.contains(
+        "預售屋、或土地及建物分件登記案件",
+        regex=False,
+    )
 
     return {
         "station_counts": {k: int(v) for k, v in sorted(station_counts.items())},
@@ -234,6 +287,12 @@ def build_resale_diagnostics(
         "building_type_summary": building_type_summary,
         "feature_extreme_rates": feature_extreme_rates,
         "evaluation_error_summary": evaluation_error_summary,
+        "top_residuals": top_residuals,
+        "data_quality": {
+            "special_relationship_excluded": int(special_relationship.sum()),
+            "non_market_subject_excluded": int(non_market_subject.sum()),
+            "ambiguous_registration_note_count": int(ambiguous_registration.sum()),
+        },
         "split_summary": split_summary,
     }
 

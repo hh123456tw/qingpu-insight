@@ -77,6 +77,9 @@ def _official_model_report(bundle: ValuationBundle) -> dict[str, Any]:
         },
         "stations": stations,
         "top_features": top_features,
+        "diagnostics": (
+            bundle.diagnostics if isinstance(bundle.diagnostics, dict) else {}
+        ),
     }
     policy = bundle.parking_price_policy
     if policy is not None:

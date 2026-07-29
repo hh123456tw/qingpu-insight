@@ -329,6 +329,7 @@ class ModelTrainingService:
                 use_recency_weights=is_resale,
                 recency_half_life_months=recency_half_life_months,
                 reporting_metrics=final_evaluation.metrics.to_dict(orient="index"),
+                reporting_diagnostics=diagnostics if is_resale else None,
             )
             bundle: ValuationBundle = joblib.load(artifact_path)
             parking_policy_dict = None
@@ -545,6 +546,7 @@ class ModelTrainingService:
                 split,
                 candidate=experiment.final_test_results[experiment.selected_model],
                 feature_columns=enhanced_features,
+                source_frame=frame,
             )
 
         selected_profile_obj = winning_profile
@@ -726,6 +728,14 @@ class ModelTrainingService:
             )
             locked_eval = trial_experiment.selection_results[0]
             model_name = trial_experiment.selected_name
+            if is_resale:
+                diagnostics = build_resale_diagnostics(
+                    model_frame,
+                    split,
+                    candidate=trial_experiment.final_test_results[model_name],
+                    feature_columns=tuple(feature_columns),
+                    source_frame=frame,
+                )
             seed_bundle = ValuationBundle(
                 transaction_type=market,
                 model_name="",

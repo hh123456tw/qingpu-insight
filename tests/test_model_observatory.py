@@ -43,6 +43,7 @@ def bundle_fixture(model_name: str = "ridge", transaction_type: str = "resale") 
         data_max_date="2024-01-01",
         metrics={},
         metrics_split="final_test",
+        diagnostics={},
     )
     bundle.parking_price_policy = ParkingPricePolicy(
         version=1,
@@ -271,6 +272,10 @@ class TestModelObservatoryStatus:
             {"feature": "station_distance_m", "importance": 42_804.1},
             {"feature": "building_age_years", "importance": 15_178.9},
         ]
+        bundle.diagnostics = {
+            "top_residuals": [{"record_id": "tx-1", "station_code": "A18"}],
+            "data_quality": {"special_relationship_excluded": 10},
+        }
         status = observatory_fixture(
             tmp_path,
             official_models={"resale": bundle},
@@ -300,6 +305,10 @@ class TestModelObservatoryStatus:
                 {"feature": "station_distance_m", "importance": 42_804.1},
                 {"feature": "building_age_years", "importance": 15_178.9},
             ],
+            "diagnostics": {
+                "top_residuals": [{"record_id": "tx-1", "station_code": "A18"}],
+                "data_quality": {"special_relationship_excluded": 10},
+            },
             "parking_policy": {
                 "version": 1,
                 "by_type": {
