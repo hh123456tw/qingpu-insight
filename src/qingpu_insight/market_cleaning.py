@@ -1,4 +1,5 @@
 import hashlib
+import re
 from dataclasses import asdict, dataclass
 
 import pandas as pd
@@ -6,12 +7,19 @@ import pandas as pd
 SQM_PER_PING = 3.305785
 PRICE_PER_PING_MIN = 100_000
 PRICE_PER_PING_MAX = 2_000_000
+MARKET_TRANSACTION_SUBJECTS = frozenset(
+    {"房地(土地+建物)", "房地(土地+建物)+車位"}
+)
+SPECIAL_RELATIONSHIP_PATTERN = re.compile(
+    r"親友|員工|共有人|特殊關係|二等親"
+)
 
 REQUIRED_COLUMNS = frozenset(
     {
         "transaction_type",
         "record_id",
         "transaction_date",
+        "transaction_subject",
         "source_file",
         "building_area_sqm",
         "unit_price_sqm_twd",
@@ -71,7 +79,21 @@ def build_market_dataset(frame: pd.DataFrame) -> tuple[pd.DataFrame, MarketQuali
     )
     valid_area = output["building_area_ping"].between(5, 200, inclusive="both")
     valid_date = output["transaction_date"].notna()
-    output["analysis_eligible"] = residential & in_circle & valid_price & valid_area & valid_date
+    market_subject = output["transaction_subject"].isin(
+        MARKET_TRANSACTION_SUBJECTS
+    )
+    remarks = (
+        output["remarks"]
+        if "remarks" in output
+        else pd.Series("", index=output.index, dtype="object")
+    )
+    special_relationship = remarks.fillna("").str.contains(
+        SPECIAL_RELATIONSHIP_PATTERN
+    )
+    base_eligible = residential & in_circle & valid_price & valid_area & valid_date
+    output["analysis_eligible"] = (
+        base_eligible & market_subject & ~special_relationship
+    )
 
     reasons = {
         "non_residential": int((~residential).sum()),
@@ -80,6 +102,10 @@ def build_market_dataset(frame: pd.DataFrame) -> tuple[pd.DataFrame, MarketQuali
         "invalid_area": int((residential & in_circle & valid_price & ~valid_area).sum()),
         "invalid_date": int(
             (residential & in_circle & valid_price & valid_area & ~valid_date).sum()
+        ),
+        "non_market_subject": int((base_eligible & ~market_subject).sum()),
+        "special_relationship": int(
+            (base_eligible & market_subject & special_relationship).sum()
         ),
     }
     reasons = {name: count for name, count in reasons.items() if count}

@@ -29,6 +29,7 @@ def sample_rows() -> pd.DataFrame:
             "longitude": [121.21, 121.22, 121.21, None],
             "latitude": [25.01, 25.02, 25.01, None],
             "source_file": ["a.csv", "b.csv", "a.csv", "a.csv"],
+            "remarks": ["", "", "", ""],
         }
     )
 
@@ -62,3 +63,33 @@ def test_build_market_dataset_validates_transaction_type() -> None:
     df.loc[0, "transaction_type"] = "unknown"
     with pytest.raises(ValueError, match="Invalid transaction_type"):
         build_market_dataset(df)
+
+
+def test_build_market_dataset_excludes_confirmed_non_market_transactions() -> None:
+    normal = sample_rows().iloc[[0]].copy()
+    normal["record_id"] = "normal"
+
+    building_only = normal.copy()
+    building_only["record_id"] = "building"
+    building_only["transaction_subject"] = "建物"
+
+    related_party = normal.copy()
+    related_party["record_id"] = "related"
+    related_party["remarks"] = "親友、員工、共有人或其他特殊關係間之交易；"
+
+    ambiguous_registration = normal.copy()
+    ambiguous_registration["record_id"] = "ambiguous"
+    ambiguous_registration["remarks"] = "預售屋、或土地及建物分件登記案件；"
+
+    clean, quality = build_market_dataset(
+        pd.concat(
+            [normal, building_only, related_party, ambiguous_registration],
+            ignore_index=True,
+        )
+    )
+
+    assert clean["record_id"].tolist() == ["normal", "ambiguous"]
+    assert quality.exclusion_reasons == {
+        "non_market_subject": 1,
+        "special_relationship": 1,
+    }
