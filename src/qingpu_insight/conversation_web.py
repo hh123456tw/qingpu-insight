@@ -24,6 +24,10 @@ from qingpu_insight.conversation_contracts import (
     ListingImportRequest,
     ReplyCreateRequest,
 )
+from qingpu_insight.conversation_presentation import (
+    project_citation_details,
+    project_price_summary,
+)
 from qingpu_insight.conversation_urls import (
     Unsupported591Url,
     parse_initial_591_url,
@@ -89,7 +93,16 @@ def _evidence_to_json(ev: Any) -> dict[str, Any]:
     }
 
 
-def _message_to_json(msg: Any, conversation: Any) -> dict[str, Any]:
+def _message_to_json(
+    msg: Any,
+    conversation: Any,
+    evidence_pack: Any | None = None,
+) -> dict[str, Any]:
+    citation_details = (
+        project_citation_details(evidence_pack, msg.citations)
+        if evidence_pack is not None
+        else []
+    )
     return {
         "id": msg.id,
         "conversation_id": msg.conversation_id,
@@ -103,6 +116,12 @@ def _message_to_json(msg: Any, conversation: Any) -> dict[str, Any]:
         "requested_model": conversation.default_model,
         "fallback_reason": getattr(msg, "fallback_reason", None),
         "citations": msg.citations,
+        "citation_details": citation_details,
+        "price_summary": (
+            project_price_summary(evidence_pack)
+            if msg.role == "assistant" and evidence_pack is not None
+            else None
+        ),
         "created_at": msg.created_at.isoformat(),
     }
 
@@ -405,9 +424,25 @@ def create_conversation_blueprint(
             limit=limit,
             before_sequence=before_sequence,
         )
+        revisions = {
+            message.evidence_revision
+            for message in messages
+            if message.evidence_revision is not None
+        }
+        evidence_by_revision = {
+            revision: repository.get_evidence_pack(
+                conversation_id=conversation_id,
+                revision=revision,
+            )
+            for revision in revisions
+        }
         return jsonify({
             "items": [
-                _message_to_json(message, conversation)
+                _message_to_json(
+                    message,
+                    conversation,
+                    evidence_by_revision.get(message.evidence_revision),
+                )
                 for message in messages
             ],
             "limit": limit,

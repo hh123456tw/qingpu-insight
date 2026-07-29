@@ -252,6 +252,20 @@ assert.equal(details._children[1]._children[1].textContent, "listing.area");
 assert.equal(asst.renderCitationDetails([]), null);
 assert.equal(asst.renderCitationDetails(null), null);
 
+var localizedDetails = asst.renderCitationDetails(
+  ["listing.price"],
+  [{
+    id: "listing.price",
+    label: "591 開價",
+    value: "1,350 萬",
+    source: "591",
+  }]
+);
+assert.ok(collectText(localizedDetails).indexOf("591 開價") !== -1);
+assert.ok(collectText(localizedDetails).indexOf("1,350 萬") !== -1);
+assert.ok(collectText(localizedDetails).indexOf("listing.price") === -1);
+assert.equal(localizedDetails.getAttribute("open"), null);
+
 // --- renderMessage with citations accordion ---
 
 var msgWithCitations = {
@@ -302,6 +316,39 @@ var track = ppDiv._children[0];
 assert.equal(track.className, "price-range-track");
 // Should have price-marker children
 assert.ok(track._children.length >= 2);
+
+// --- renderMessage with deterministic price summary ---
+
+var msgWithSummary = {
+  role: "assistant",
+  content: "請核對同社區近期成交案例。",
+  citations: ["listing.price"],
+  citation_details: [{
+    id: "listing.price",
+    label: "591 開價",
+    value: "1,350 萬",
+    source: "591",
+  }],
+  price_summary: {
+    asking_twd: 13500000,
+    low_twd: 14034000,
+    point_twd: 17546000,
+    high_twd: 21058000,
+    position: "below",
+    gap_twd: 534000,
+    gap_percent: 3.8,
+    confidence: "low",
+    confidence_reason: "估價區間較寬",
+  },
+};
+var summaryMessage = asst.renderMessage(msgWithSummary, null);
+assert.equal(summaryMessage._children[1].className,
+  "reply-price-summary price-summary-below");
+var summaryText = collectText(summaryMessage._children[1]);
+assert.ok(summaryText.indexOf("低於估價下限 53.4 萬（3.8%）") !== -1);
+assert.ok(summaryText.indexOf("591 顯示的是開價，不代表最後成交價。") !== -1);
+assert.equal(summaryMessage._children[3].tagName, "DETAILS");
+assert.equal(summaryMessage._children[3].getAttribute("open"), null);
 
 // Historical evidence keeps precise TWD strings and low/high estimate fields.
 asst.renderEvidencePanel({

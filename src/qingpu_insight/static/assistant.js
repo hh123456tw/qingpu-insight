@@ -60,19 +60,85 @@
     return content.replace(/（依據：[^）]+）/g, "");
   }
 
-  function renderCitationDetails(citations) {
+  function renderCitationDetails(citations, citationDetails) {
     if (typeof document === "undefined") return null;
     if (!Array.isArray(citations) || !citations.length) return null;
+    var detailMap = {};
+    if (Array.isArray(citationDetails)) {
+      citationDetails.forEach(function (detail) {
+        if (detail && detail.id) detailMap[detail.id] = detail;
+      });
+    }
     var details = el("details", { "class": "message-citations" });
     details.appendChild(el("summary", {}, ["\u67e5\u770b\u8cc7\u6599\u4f9d\u64da\uff08" + citations.length + "\uff09"]));
     var ul = document.createElement("ul");
     citations.forEach(function (c) {
+      var detail = detailMap[c];
       var li = document.createElement("li");
-      li.textContent = c;
+      if (detail) {
+        li.appendChild(el("strong", { "class": "citation-label" }, [detail.label || c]));
+        if (detail.value) {
+          li.appendChild(el("span", { "class": "citation-value" }, [detail.value]));
+        }
+        if (detail.source) {
+          li.appendChild(el("span", { "class": "citation-source" }, [detail.source]));
+        }
+      } else {
+        li.textContent = c;
+      }
       ul.appendChild(li);
     });
     details.appendChild(ul);
     return details;
+  }
+
+  function renderPriceSummary(summary) {
+    if (typeof document === "undefined" || !summary || !display) return null;
+    var position = summary.position;
+    var statusText;
+    if (position === "inconsistent") {
+      statusText = "估值資料不一致，請重新估價。";
+    } else if (position === "below") {
+      statusText = "低於估價下限 " + display.formatTotalWan(summary.gap_twd)
+        + "（" + summary.gap_percent.toFixed(1) + "%）";
+    } else if (position === "above") {
+      statusText = "高於估價上限 " + display.formatTotalWan(summary.gap_twd)
+        + "（" + summary.gap_percent.toFixed(1) + "%）";
+    } else {
+      statusText = "落在模型估價區間內";
+    }
+
+    var wrapper = el("section", {
+      "class": "reply-price-summary price-summary-" + position,
+      "aria-label": "價格比較",
+    });
+    wrapper.appendChild(el("p", { "class": "price-summary-status" }, [statusText]));
+    wrapper.appendChild(el("div", { "class": "price-summary-grid" }, [
+      el("div", {}, [
+        el("span", { "class": "price-summary-label" }, ["591 開價"]),
+        el("strong", {}, [display.formatTotalWan(summary.asking_twd)]),
+      ]),
+      el("div", {}, [
+        el("span", { "class": "price-summary-label" }, ["模型估價區間"]),
+        el("strong", {}, [
+          display.formatTotalWan(summary.low_twd)
+            + "～" + display.formatTotalWan(summary.high_twd),
+        ]),
+      ]),
+      el("div", {}, [
+        el("span", { "class": "price-summary-label" }, ["模型信心"]),
+        el("strong", {}, [display.localizeConfidence(summary.confidence)]),
+      ]),
+    ]));
+    if (summary.confidence_reason) {
+      wrapper.appendChild(el("p", { "class": "price-summary-reason" }, [
+        summary.confidence_reason,
+      ]));
+    }
+    wrapper.appendChild(el("p", { "class": "asking-price-note" }, [
+      "591 顯示的是開價，不代表最後成交價。",
+    ]));
+    return wrapper;
   }
 
   function renderPricePosition(low, point, high, asking) {
@@ -334,6 +400,10 @@
       header.appendChild(el("span", { "class": "revision-badge" }, [badge]));
     }
     div.appendChild(header);
+    if (msg.role === "assistant" && msg.price_summary) {
+      var summaryEl = renderPriceSummary(msg.price_summary);
+      if (summaryEl) div.appendChild(summaryEl);
+    }
     var rawContent = msg.content || "";
     var cleaned = rawContent;
     if (msg.role === "assistant") {
@@ -349,7 +419,7 @@
     contentDiv.textContent = cleaned;
     div.appendChild(contentDiv);
     if (Array.isArray(msg.citations) && msg.citations.length) {
-      var citationEl = renderCitationDetails(msg.citations);
+      var citationEl = renderCitationDetails(msg.citations, msg.citation_details);
       if (citationEl) div.appendChild(citationEl);
     }
     if (display && msg.price_low != null && msg.price_point != null) {
@@ -803,6 +873,7 @@
     fallbackLabel: fallbackLabel,
     stripLegacyInlineCitations: stripLegacyInlineCitations,
     renderCitationDetails: renderCitationDetails,
+    renderPriceSummary: renderPriceSummary,
     renderEvidencePanel: renderEvidencePanel,
     renderMessage: renderMessage,
     renderSuggestedQuestions: renderSuggestedQuestions,

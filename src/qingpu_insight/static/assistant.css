@@ -357,6 +357,57 @@ body {
   white-space: pre-wrap;
 }
 
+/* --- Deterministic Price Summary --- */
+
+.reply-price-summary {
+  margin: 0.35rem 0 0.65rem;
+  padding: 0.65rem;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: 6px;
+}
+
+.reply-price-summary.price-summary-above,
+.reply-price-summary.price-summary-inconsistent {
+  border-left-color: var(--accent-warm);
+}
+
+.price-summary-status {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.price-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.price-summary-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.price-summary-label {
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.price-summary-grid strong {
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.price-summary-reason,
+.asking-price-note {
+  margin: 0.45rem 0 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
 /* Composer */
 
 .composer {
@@ -511,13 +562,31 @@ body {
 
 .message-citations ul {
   margin: 0.25rem 0 0;
-  padding-left: 1.2rem;
+  padding: 0;
+  list-style: none;
 }
 
 .message-citations li {
+  display: grid;
+  grid-template-columns: minmax(8rem, 0.8fr) minmax(8rem, 1fr) auto;
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--line);
   font-size: 0.75rem;
   color: var(--muted);
-  margin-bottom: 0.15rem;
+}
+
+.citation-label {
+  color: var(--ink);
+}
+
+.citation-value {
+  font-variant-numeric: tabular-nums;
+}
+
+.citation-source {
+  font-size: 0.68rem;
 }
 
 /* Responsive */
@@ -530,6 +599,15 @@ body {
 }
 
 @media (max-width: 640px) {
+  .price-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .message-citations li {
+    grid-template-columns: 1fr;
+    gap: 0.1rem;
+  }
+
   body {
     overflow: auto;
   }

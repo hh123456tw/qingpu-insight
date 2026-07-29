@@ -394,6 +394,51 @@ class TestGetMessages:
         args, kwargs = repository.get_messages.call_args
         assert kwargs["limit"] == 50
 
+    def test_get_messages_projects_revision_price_summary_and_citations(
+        self, conversation_app, repository, sample_messages
+    ):
+        repository.get_messages.return_value = sample_messages
+        repository.get_evidence_pack.return_value = SimpleNamespace(
+            facts=[
+                {
+                    "id": "listing.price",
+                    "label": "開價總價",
+                    "value": "1,350 萬",
+                    "source": "591",
+                },
+                {
+                    "id": "fact-1",
+                    "label": "模型估價區間",
+                    "value": "1,403 萬 至 2,106 萬",
+                    "source": "估值模型",
+                },
+            ],
+            valuation={
+                "low_estimate_twd": 14_034_000,
+                "point_estimate_twd": 17_546_000,
+                "high_estimate_twd": 21_058_000,
+                "confidence": "low",
+                "confidence_reasons": ["估價區間較寬"],
+            },
+        )
+
+        response = conversation_app.get("/api/conversations/conv-1/messages")
+
+        assistant = response.get_json()["items"][1]
+        assert assistant["price_summary"]["position"] == "below"
+        assert assistant["price_summary"]["gap_percent"] == 3.8
+        assert assistant["citation_details"] == [
+            {
+                "id": "fact-1",
+                "label": "模型估價區間",
+                "value": "1,403 萬 至 2,106 萬",
+                "source": "估值模型",
+            }
+        ]
+        repository.get_evidence_pack.assert_called_once_with(
+            conversation_id="conv-1", revision=1
+        )
+
     def test_get_messages_with_before(self, conversation_app, repository, sample_messages):
         repository.get_messages.return_value = sample_messages
         response = conversation_app.get(

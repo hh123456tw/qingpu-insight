@@ -260,6 +260,8 @@ class TestRuleConversationProvider:
         assert "listing.price" in cited
         assert "valuation.point" in cited
         assert "valuation.asking_position" in cited
+        assert "valuation.asking_gap_percent" not in cited
+        assert "market.sample_size" in cited
         assert not any(fid.startswith("comparable.") for fid in cited)
 
     def test_rule_summary_falls_back_to_newhouse_listing_facts(self) -> None:
