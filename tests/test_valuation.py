@@ -995,14 +995,31 @@ def test_train_artifact_round_trip(tmp_path):
     )
     selected = FakeSelected(name="baseline", estimator=estimator, metrics=metrics)
 
-    result_path = train_artifact("resale", selected, split, bundle, tmp_path)
+    final_test_metrics = {
+        "overall": {
+            "mae": 42_000,
+            "mape": 8,
+            "rmse": 52_000,
+            "r2": 0.7,
+            "count": 100,
+        }
+    }
+    result_path = train_artifact(
+        "resale",
+        selected,
+        split,
+        bundle,
+        tmp_path,
+        reporting_metrics=final_test_metrics,
+    )
     assert result_path.exists()
     assert result_path.name == "resale.joblib"
 
     loaded: ValuationBundle = joblib.load(result_path)
     assert loaded.transaction_type == "resale"
     assert loaded.model_name == "baseline"
-    assert loaded.metrics["overall"]["mae"] == 50000
+    assert loaded.metrics == final_test_metrics
+    assert loaded.metrics_split == "final_test"
 
 
 def test_train_artifact_half_life(tmp_path, monkeypatch):

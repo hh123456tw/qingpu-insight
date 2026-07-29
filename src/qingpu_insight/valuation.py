@@ -40,6 +40,7 @@ class ValuationBundle:
     data_min_date: str
     data_max_date: str
     metrics: dict[str, Any]
+    metrics_split: str = "legacy_unknown"
     feature_columns: tuple[str, ...] = BASE_FEATURE_COLUMNS
     parking_price_policy: ParkingPricePolicy | None = None
 
@@ -48,6 +49,8 @@ class ValuationBundle:
             return BASE_FEATURE_COLUMNS
         if name == "parking_price_policy":
             return None
+        if name == "metrics_split":
+            return "legacy_unknown"
         raise AttributeError(f"ValuationBundle has no attribute {name!r}")
 
 
@@ -644,6 +647,7 @@ def train_artifact(
     training_frame: pd.DataFrame | None = None,
     use_recency_weights: bool = False,
     recency_half_life_months: int = 48,
+    reporting_metrics: dict[str, Any] | None = None,
 ) -> Path:
     from sklearn.base import clone
     from sklearn.inspection import permutation_importance
@@ -740,7 +744,12 @@ def train_artifact(
         reference_rows=train_frame,
         data_min_date=str(train_frame["transaction_date"].min().date()),
         data_max_date=str(train_frame["transaction_date"].max().date()),
-        metrics=selected.metrics.to_dict(orient="index"),
+        metrics=(
+            deepcopy(reporting_metrics)
+            if reporting_metrics is not None
+            else selected.metrics.to_dict(orient="index")
+        ),
+        metrics_split="final_test" if reporting_metrics is not None else "selection",
         feature_columns=feature_columns,
         parking_price_policy=parking_policy,
     )

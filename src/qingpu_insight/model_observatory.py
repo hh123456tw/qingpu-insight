@@ -65,6 +65,7 @@ def _official_model_report(bundle: ValuationBundle) -> dict[str, Any]:
             top_features.append({"feature": item["feature"], "importance": score})
 
     report = {
+        "evaluation_split": bundle.metrics_split,
         "data_min_date": str(bundle.data_min_date),
         "data_max_date": str(bundle.data_max_date),
         "test_count": _public_number(overall.get("count"), integer=True),

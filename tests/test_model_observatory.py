@@ -42,6 +42,7 @@ def bundle_fixture(model_name: str = "ridge", transaction_type: str = "resale") 
         data_min_date="2023-01-01",
         data_max_date="2024-01-01",
         metrics={},
+        metrics_split="final_test",
     )
     bundle.parking_price_policy = ParkingPricePolicy(
         version=1,
@@ -52,6 +53,13 @@ def bundle_fixture(model_name: str = "ridge", transaction_type: str = "resale") 
         market_fallback=ParkingPriceStat(price_twd=1_200_000, sample_size=100),
     )
     return bundle
+
+
+def test_legacy_bundle_metrics_split_is_unknown() -> None:
+    bundle = bundle_fixture()
+    del bundle.metrics_split
+
+    assert bundle.metrics_split == "legacy_unknown"
 
 
 def manifest_fixture(
@@ -273,6 +281,7 @@ class TestModelObservatoryStatus:
         assert model["activated_at"]
         assert model["artifact_sha256"]
         assert model["report"] == {
+            "evaluation_split": "final_test",
             "data_min_date": "2023-01-01",
             "data_max_date": "2024-01-01",
             "test_count": 696,

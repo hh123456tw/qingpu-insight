@@ -315,6 +315,7 @@ class ModelTrainingService:
     ) -> MarketTrainingResult:
         diagnostics = diagnostics or {}
         analysis_experiments = analysis_experiments or []
+        final_evaluation = experiment.final_test_results[model_name]
 
         try:
             artifact_path = train_artifact(
@@ -327,6 +328,7 @@ class ModelTrainingService:
                 training_frame=model_frame if is_resale else None,
                 use_recency_weights=is_resale,
                 recency_half_life_months=recency_half_life_months,
+                reporting_metrics=final_evaluation.metrics.to_dict(orient="index"),
             )
             bundle: ValuationBundle = joblib.load(artifact_path)
             parking_policy_dict = None
