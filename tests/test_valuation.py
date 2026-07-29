@@ -9,7 +9,13 @@ import pandas as pd
 import pytest
 from sklearn.dummy import DummyRegressor
 
-from qingpu_insight.model_features import FEATURE_COLUMNS, ValuationInput
+from qingpu_insight.community_features import CommunityFeatureValues
+from qingpu_insight.model_features import (
+    COMMON_AREA_FEATURE_COLUMNS,
+    COMMUNITY_FEATURE_COLUMNS,
+    FEATURE_COLUMNS,
+    ValuationInput,
+)
 from qingpu_insight.parking_valuation import ParkingPricePolicy, ParkingPriceStat
 from qingpu_insight.valuation import (
     ModelRegistry,
@@ -1248,3 +1254,38 @@ class TestModelRegistryOfficialPreference:
         )
         assert result["model"]["version"] == "official-v2"
         assert result["model"]["version"] != "fallback"
+
+
+# --- Task 6: Shared features ---
+
+
+class TestValuationSharedFeatures:
+    def test_common_area_ratio(self, bundle, market, valid_resale_input):
+        bundle.feature_columns = FEATURE_COLUMNS + COMMON_AREA_FEATURE_COLUMNS
+        input_ = replace(valid_resale_input, common_area_ratio=0.35)
+        result = valuate(input_, FakeRegistry(bundle), market)
+        assert result["degraded"] is False
+        assert "estimated_unit_price_per_ping_twd" in result
+
+    def test_known_community(self, bundle, market, valid_resale_input):
+        bundle.feature_columns = FEATURE_COLUMNS + COMMUNITY_FEATURE_COLUMNS
+        bundle.community_feature_snapshot = {
+            "comm1": CommunityFeatureValues(
+                known="comm1",
+                prior_count_24m=10,
+                prior_median_twd_per_ping_24m=500_000.0,
+                premium_vs_station_24m=50_000.0,
+            )
+        }
+        input_ = replace(valid_resale_input, community_id="comm1")
+        result = valuate(input_, FakeRegistry(bundle), market)
+        assert result["degraded"] is False
+        assert "estimated_unit_price_per_ping_twd" in result
+
+    def test_unknown_community(self, bundle, market, valid_resale_input):
+        bundle.feature_columns = FEATURE_COLUMNS + COMMUNITY_FEATURE_COLUMNS
+        bundle.community_feature_snapshot = {}
+        input_ = replace(valid_resale_input, community_id="nonexistent")
+        result = valuate(input_, FakeRegistry(bundle), market)
+        assert result["degraded"] is False
+        assert "estimated_unit_price_per_ping_twd" in result

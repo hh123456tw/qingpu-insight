@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from qingpu_insight.community_features import CommunityFeatureValues
 from qingpu_insight.model_features import (
     COMMON_AREA_FEATURE_COLUMNS,
     COMMUNITY_FEATURE_COLUMNS,
@@ -321,3 +322,96 @@ def test_community_feature_columns_constants_match():
 def test_common_area_and_management_constants():
     assert COMMON_AREA_FEATURE_COLUMNS == ("common_area_ratio",)
     assert MANAGEMENT_FEATURE_COLUMNS == ("has_management",)
+
+
+class TestCommonAreaRatioValidation:
+    def test_accepts_valid_values(self, valid_resale_input):
+        for ratio in (0.0, 0.35, 0.70):
+            value = replace(valid_resale_input, common_area_ratio=ratio)
+            assert value.common_area_ratio == ratio
+
+    def test_rejects_out_of_range(self, valid_resale_input):
+        with pytest.raises(ValueError, match="common_area_ratio"):
+            replace(valid_resale_input, common_area_ratio=-0.1)
+        with pytest.raises(ValueError, match="common_area_ratio"):
+            replace(valid_resale_input, common_area_ratio=1.0)
+
+    def test_rejects_non_finite(self, valid_resale_input):
+        with pytest.raises(ValueError, match="common_area_ratio"):
+            replace(valid_resale_input, common_area_ratio=float("inf"))
+        with pytest.raises(ValueError, match="common_area_ratio"):
+            replace(valid_resale_input, common_area_ratio=float("nan"))
+
+    def test_allows_omission(self, valid_resale_input):
+        assert valid_resale_input.common_area_ratio is None
+
+
+def test_unknown_community_id_does_not_crash(valid_resale_input):
+    value = replace(valid_resale_input, community_id="unknown_comm")
+    assert value.community_id == "unknown_comm"
+
+
+class TestInputFrameSharedFeatures:
+    def test_with_common_area_ratio(self, valid_resale_input):
+        value = replace(valid_resale_input, common_area_ratio=0.35)
+        cols = FEATURE_COLUMNS + COMMON_AREA_FEATURE_COLUMNS
+        result = input_frame(value, pd.Timestamp("2026-06-12"), feature_columns=cols)
+        assert list(result.columns) == list(cols)
+        assert result.iloc[0]["common_area_ratio"] == 0.35
+
+    def test_omitted_common_area_ratio_is_nan(self, valid_resale_input):
+        value = replace(valid_resale_input, common_area_ratio=None)
+        cols = FEATURE_COLUMNS + COMMON_AREA_FEATURE_COLUMNS
+        result = input_frame(value, pd.Timestamp("2026-06-12"), feature_columns=cols)
+        assert pd.isna(result.iloc[0]["common_area_ratio"])
+
+    def test_with_known_community(self, valid_resale_input):
+        snapshot = {
+            "comm1": CommunityFeatureValues(
+                known="comm1",
+                prior_count_24m=10,
+                prior_median_twd_per_ping_24m=500_000.0,
+                premium_vs_station_24m=50_000.0,
+            )
+        }
+        value = replace(valid_resale_input, community_id="comm1")
+        cols = FEATURE_COLUMNS + COMMUNITY_FEATURE_COLUMNS
+        result = input_frame(
+            value,
+            pd.Timestamp("2026-06-12"),
+            feature_columns=cols,
+            community_snapshot=snapshot,
+        )
+        assert list(result.columns) == list(cols)
+        assert result.iloc[0]["community_known"] == "comm1"
+        assert result.iloc[0]["community_prior_count_24m"] == 10
+        assert result.iloc[0]["community_prior_median_twd_per_ping_24m"] == 500_000.0
+        assert result.iloc[0]["community_premium_vs_station_24m"] == 50_000.0
+
+    def test_with_unknown_community(self, valid_resale_input):
+        value = replace(valid_resale_input, community_id="nonexistent")
+        cols = FEATURE_COLUMNS + COMMUNITY_FEATURE_COLUMNS
+        result = input_frame(
+            value,
+            pd.Timestamp("2026-06-12"),
+            feature_columns=cols,
+            community_snapshot={},
+        )
+        assert list(result.columns) == list(cols)
+        assert result.iloc[0]["community_known"] == "unknown"
+        assert pd.isna(result.iloc[0]["community_prior_median_twd_per_ping_24m"])
+        assert pd.isna(result.iloc[0]["community_premium_vs_station_24m"])
+
+    def test_without_shared_features_returns_baseline(self, valid_resale_input):
+        result = input_frame(valid_resale_input, pd.Timestamp("2026-06-12"))
+        assert list(result.columns) == list(FEATURE_COLUMNS)
+        assert "common_area_ratio" not in result.columns
+
+    def test_old_v3_artifact_receives_exact_old_frame(self, valid_resale_input):
+        result = input_frame(
+            valid_resale_input,
+            pd.Timestamp("2026-06-12"),
+            feature_columns=FEATURE_COLUMNS,
+        )
+        assert list(result.columns) == list(FEATURE_COLUMNS)
+        assert "community_known" not in result.columns
