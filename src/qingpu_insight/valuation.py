@@ -583,25 +583,6 @@ def valuate(
         row["parking_type"] = input_.parking_type
     if "parking_area_ping" in bundle.feature_columns:
         row["parking_area_ping"] = input_.parking_area_ping
-    if "common_area_ratio" in bundle.feature_columns:
-        row["common_area_ratio"] = input_.common_area_ratio
-    if bundle.community_feature_snapshot is not None and any(
-        c.startswith("community_") for c in bundle.feature_columns
-    ):
-        if (
-            input_.community_id is not None
-            and input_.community_id in bundle.community_feature_snapshot
-        ):
-            cv = bundle.community_feature_snapshot[input_.community_id]
-            row["community_known"] = cv.known
-            row["community_prior_count_24m"] = cv.prior_count_24m
-            row["community_prior_median_twd_per_ping_24m"] = cv.prior_median_twd_per_ping_24m
-            row["community_premium_vs_station_24m"] = cv.premium_vs_station_24m
-        else:
-            row["community_known"] = "unknown"
-            row["community_prior_count_24m"] = 0
-            row["community_prior_median_twd_per_ping_24m"] = None
-            row["community_premium_vs_station_24m"] = None
 
     unit_price = float(bundle.pipeline.predict(row)[0])
     parking_estimate = estimate_parking_price(bundle.parking_price_policy, input_.parking_type)
