@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -291,6 +292,36 @@ class ModelTrainingService:
         self._automl_registry = automl_registry or AutoMLControlRegistry()
         self._automl_output_store = automl_output_store
 
+    def _merge_market_quality_diagnostics(
+        self,
+        diagnostics: dict[str, object],
+    ) -> dict[str, object]:
+        quality_path = next(
+            (
+                parent / "outputs" / "reports" / "m1-market-quality.json"
+                for parent in self._input_path.resolve().parents
+                if (parent / "outputs" / "reports" / "m1-market-quality.json").exists()
+            ),
+            None,
+        )
+        if quality_path is None:
+            return diagnostics
+        try:
+            payload = json.loads(quality_path.read_text(encoding="utf-8"))
+            exclusions = payload.get("exclusion_reasons", {})
+        except (OSError, json.JSONDecodeError, AttributeError):
+            return diagnostics
+        data_quality = diagnostics.get("data_quality")
+        if not isinstance(data_quality, dict) or not isinstance(exclusions, dict):
+            return diagnostics
+        data_quality["special_relationship_excluded"] = int(
+            exclusions.get("special_relationship", 0)
+        )
+        data_quality["non_market_subject_excluded"] = int(
+            exclusions.get("non_market_subject", 0)
+        )
+        return diagnostics
+
     def _finalize_candidate(
         self,
         run_id: str,
@@ -548,6 +579,7 @@ class ModelTrainingService:
                 feature_columns=enhanced_features,
                 source_frame=frame,
             )
+            diagnostics = self._merge_market_quality_diagnostics(diagnostics)
 
         selected_profile_obj = winning_profile
         profile_results = [
@@ -736,6 +768,7 @@ class ModelTrainingService:
                     feature_columns=tuple(feature_columns),
                     source_frame=frame,
                 )
+                diagnostics = self._merge_market_quality_diagnostics(diagnostics)
             seed_bundle = ValuationBundle(
                 transaction_type=market,
                 model_name="",

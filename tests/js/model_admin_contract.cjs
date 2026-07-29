@@ -97,6 +97,11 @@ var officialReport = admin.buildOfficialReportView({
   evaluation_split: "final_test",
   test_count: 630,
   diagnostics: {
+    data_quality: {
+      special_relationship_excluded: 446,
+      non_market_subject_excluded: 18,
+      ambiguous_registration_note_count: 10672,
+    },
     top_residuals: [{
       transaction_date: "2026-05-01",
       station_code: "A18",
@@ -114,6 +119,10 @@ assert.equal(officialReport.residualRows[0].actual, "60 萬／坪");
 assert.equal(officialReport.residualRows[0].predicted, "48 萬／坪");
 assert.equal(officialReport.residualRows[0].error, "12 萬／坪");
 assert.equal(officialReport.residualRows[0].percentageError, "20.0%");
+assert.equal(
+  officialReport.dataQualitySummary,
+  "資料清理：排除特殊關係 446 筆、非市場標的 18 筆；分件登記備註 10,672 筆僅列為觀察，未整批排除。"
+);
 
 // Custom tuning fixtures
 var custom = {

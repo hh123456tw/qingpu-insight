@@ -182,6 +182,7 @@
       legacy_unknown: "舊版指標（來源未記錄）",
     };
     var diagnostics = report.diagnostics || {};
+    var dataQuality = diagnostics.data_quality || {};
     var residuals = Array.isArray(diagnostics.top_residuals)
       ? diagnostics.top_residuals.slice(0, 20)
       : [];
@@ -203,7 +204,15 @@
           flags: Array.isArray(row.flags) ? row.flags.join("、") : "",
         };
       }),
-      dataQuality: diagnostics.data_quality || {},
+      dataQuality: dataQuality,
+      dataQualitySummary:
+        "資料清理：排除特殊關係 " +
+        Number(dataQuality.special_relationship_excluded || 0).toLocaleString("zh-TW") +
+        " 筆、非市場標的 " +
+        Number(dataQuality.non_market_subject_excluded || 0).toLocaleString("zh-TW") +
+        " 筆；分件登記備註 " +
+        Number(dataQuality.ambiguous_registration_note_count || 0).toLocaleString("zh-TW") +
+        " 筆僅列為觀察，未整批排除。",
     };
   }
 

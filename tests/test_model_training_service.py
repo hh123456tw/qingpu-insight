@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -454,6 +455,41 @@ def test_resale_training_writes_schema_v2_analysis(tmp_path, market_parquet):
     source = pd.read_parquet(market_parquet)
     resale_max = source.loc[source["transaction_type"].eq("resale"), "transaction_date"].max()
     assert artifact.data_max_date == str(resale_max.date())
+
+
+def test_training_diagnostics_merge_market_quality_exclusions(tmp_path: Path) -> None:
+    input_path = tmp_path / "data" / "processed" / "market_transactions.parquet"
+    input_path.parent.mkdir(parents=True)
+    report_path = tmp_path / "outputs" / "reports" / "m1-market-quality.json"
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text(
+        json.dumps(
+            {
+                "exclusion_reasons": {
+                    "special_relationship": 446,
+                    "non_market_subject": 18,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    service = object.__new__(ModelTrainingService)
+    service._input_path = input_path
+    diagnostics = {
+        "data_quality": {
+            "special_relationship_excluded": 0,
+            "non_market_subject_excluded": 0,
+            "ambiguous_registration_note_count": 10_672,
+        }
+    }
+
+    merged = service._merge_market_quality_diagnostics(diagnostics)
+
+    assert merged["data_quality"] == {
+        "special_relationship_excluded": 446,
+        "non_market_subject_excluded": 18,
+        "ambiguous_registration_note_count": 10_672,
+    }
 
 
 def test_presale_training_does_not_run_resale_analysis(tmp_path, market_parquet):

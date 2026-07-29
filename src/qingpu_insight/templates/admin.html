@@ -299,6 +299,10 @@
         var residualSummary = document.createElement("summary");
         residualSummary.textContent = "誤差診斷（前 20 筆）";
         residualDetails.appendChild(residualSummary);
+        var qualitySummary = document.createElement("p");
+        qualitySummary.className = "official-report-limitation";
+        qualitySummary.textContent = reportView.dataQualitySummary;
+        residualDetails.appendChild(qualitySummary);
         if (reportView.residualRows.length === 0) {
           var emptyResidual = document.createElement("p");
           emptyResidual.className = "ma-empty";
