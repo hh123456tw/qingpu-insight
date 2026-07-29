@@ -339,14 +339,34 @@ var msgWithSummary = {
     gap_percent: 3.8,
     confidence: "low",
     confidence_reason: "估價區間較寬",
+    market_low_twd: 16000000,
+    market_high_twd: 22000000,
+    market_sample_size: 4,
+    market_position: "below",
+    market_gap_twd: 2500000,
+    market_gap_percent: 15.6,
+    conservative_width_ratio: 1.0,
+    conservative_reference_low: true,
   },
 };
 var summaryMessage = asst.renderMessage(msgWithSummary, null);
 assert.equal(summaryMessage._children[1].className,
   "reply-price-summary price-summary-below");
 var summaryText = collectText(summaryMessage._children[1]);
-assert.ok(summaryText.indexOf("低於估價下限 53.4 萬（3.8%）") !== -1);
+assert.ok(summaryText.indexOf("低於相似成交價格帶 250 萬（15.6%）") !== -1);
+assert.ok(summaryText.indexOf("模型估值") !== -1);
+assert.ok(summaryText.indexOf("1,754.6 萬") !== -1);
+assert.ok(summaryText.indexOf("相似成交價格帶") !== -1);
+assert.ok(summaryText.indexOf("1,600 萬～2,200 萬") !== -1);
+assert.ok(summaryText.indexOf("參考性低，不建議單靠模型範圍判斷出價") !== -1);
 assert.ok(summaryText.indexOf("591 顯示的是開價，不代表最後成交價。") !== -1);
+var rangeDetails = summaryMessage._children[1]._children.find(function (child) {
+  return child.tagName === "DETAILS";
+});
+assert.ok(rangeDetails, "90% conservative model range should be disclosed");
+assert.equal(rangeDetails.getAttribute("open"), null);
+assert.ok(collectText(rangeDetails).indexOf("查看模型保守範圍（90%）") !== -1);
+assert.ok(collectText(rangeDetails).indexOf("1,403.4 萬～2,105.8 萬") !== -1);
 assert.equal(summaryMessage._children[3].tagName, "DETAILS");
 assert.equal(summaryMessage._children[3].getAttribute("open"), null);
 

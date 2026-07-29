@@ -21,6 +21,12 @@ def _pack(*, asking="1,350 萬", low=14_034_000, point=17_546_000, high=21_058_0
                 "value": "10 筆",
                 "source": "實價登錄",
             },
+            {
+                "id": "listing.area",
+                "label": "建物面積",
+                "value": "40 坪",
+                "source": "591",
+            },
         ],
         valuation={
             "low_estimate_twd": low,
@@ -28,7 +34,9 @@ def _pack(*, asking="1,350 萬", low=14_034_000, point=17_546_000, high=21_058_0
             "high_estimate_twd": high,
             "confidence": "low",
             "confidence_reasons": ["估價區間較寬"],
+            "estimated_parking_price_twd": 1_000_000,
         },
+        comparables=[],
     )
 
 
@@ -45,6 +53,14 @@ def test_projects_boundary_based_price_summary():
         "gap_percent": 3.8,
         "confidence": "low",
         "confidence_reason": "估價區間較寬",
+        "market_low_twd": None,
+        "market_high_twd": None,
+        "market_sample_size": 0,
+        "market_position": "insufficient",
+        "market_gap_twd": None,
+        "market_gap_percent": None,
+        "conservative_width_ratio": 0.4,
+        "conservative_reference_low": True,
     }
 
 
@@ -85,3 +101,45 @@ def test_projects_localized_citation_details_and_unknown_fallback():
         "value": "",
         "source": "",
     }
+
+
+def test_projects_high_similarity_comparable_price_band():
+    pack = _pack(asking="1,350 萬", low=10_000_000, point=20_000_000, high=30_000_000)
+    pack.comparables.extend(
+        [
+            {"similarity_score": 0.90, "dwelling_unit_price_per_ping_twd": 300_000},
+            {"similarity_score": 0.80, "dwelling_unit_price_per_ping_twd": 400_000},
+            {"similarity_score": 0.70, "dwelling_unit_price_per_ping_twd": 500_000},
+            {"similarity_score": 0.60, "dwelling_unit_price_per_ping_twd": 600_000},
+            {"similarity_score": 0.59, "dwelling_unit_price_per_ping_twd": 2_000_000},
+        ]
+    )
+
+    summary = project_price_summary(pack)
+
+    assert summary["market_low_twd"] == 16_000_000
+    assert summary["market_high_twd"] == 22_000_000
+    assert summary["market_sample_size"] == 4
+    assert summary["market_position"] == "below"
+    assert summary["market_gap_twd"] == 2_500_000
+    assert summary["market_gap_percent"] == 15.6
+    assert summary["conservative_width_ratio"] == 1.0
+    assert summary["conservative_reference_low"] is True
+
+
+def test_omits_comparable_band_when_fewer_than_three_cases_qualify():
+    pack = _pack()
+    pack.comparables.extend(
+        [
+            {"similarity_score": 0.80, "dwelling_unit_price_per_ping_twd": 400_000},
+            {"similarity_score": 0.70, "dwelling_unit_price_per_ping_twd": 500_000},
+            {"similarity_score": 0.59, "dwelling_unit_price_per_ping_twd": 600_000},
+        ]
+    )
+
+    summary = project_price_summary(pack)
+
+    assert summary["market_low_twd"] is None
+    assert summary["market_high_twd"] is None
+    assert summary["market_sample_size"] == 2
+    assert summary["market_position"] == "insufficient"

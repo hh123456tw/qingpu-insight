@@ -94,18 +94,20 @@
 
   function renderPriceSummary(summary) {
     if (typeof document === "undefined" || !summary || !display) return null;
-    var position = summary.position;
+    var position = summary.market_position || "insufficient";
     var statusText;
-    if (position === "inconsistent") {
+    if (summary.position === "inconsistent") {
       statusText = "估值資料不一致，請重新估價。";
     } else if (position === "below") {
-      statusText = "低於估價下限 " + display.formatTotalWan(summary.gap_twd)
-        + "（" + summary.gap_percent.toFixed(1) + "%）";
+      statusText = "低於相似成交價格帶 " + display.formatTotalWan(summary.market_gap_twd)
+        + "（" + summary.market_gap_percent.toFixed(1) + "%）";
     } else if (position === "above") {
-      statusText = "高於估價上限 " + display.formatTotalWan(summary.gap_twd)
-        + "（" + summary.gap_percent.toFixed(1) + "%）";
+      statusText = "高於相似成交價格帶 " + display.formatTotalWan(summary.market_gap_twd)
+        + "（" + summary.market_gap_percent.toFixed(1) + "%）";
+    } else if (position === "inside") {
+      statusText = "開價落在相似成交價格帶內";
     } else {
-      statusText = "落在模型估價區間內";
+      statusText = "高相似度成交案例不足，暫不提供成交價格帶";
     }
 
     var wrapper = el("section", {
@@ -115,15 +117,21 @@
     wrapper.appendChild(el("p", { "class": "price-summary-status" }, [statusText]));
     wrapper.appendChild(el("div", { "class": "price-summary-grid" }, [
       el("div", {}, [
-        el("span", { "class": "price-summary-label" }, ["591 開價"]),
-        el("strong", {}, [display.formatTotalWan(summary.asking_twd)]),
+        el("span", { "class": "price-summary-label" }, ["模型估值"]),
+        el("strong", {}, [display.formatTotalWan(summary.point_twd)]),
       ]),
       el("div", {}, [
-        el("span", { "class": "price-summary-label" }, ["模型估價區間"]),
+        el("span", { "class": "price-summary-label" }, ["相似成交價格帶"]),
         el("strong", {}, [
-          display.formatTotalWan(summary.low_twd)
-            + "～" + display.formatTotalWan(summary.high_twd),
+          summary.market_low_twd != null && summary.market_high_twd != null
+            ? display.formatTotalWan(summary.market_low_twd)
+              + "～" + display.formatTotalWan(summary.market_high_twd)
+            : "案例不足",
         ]),
+      ]),
+      el("div", {}, [
+        el("span", { "class": "price-summary-label" }, ["591 開價"]),
+        el("strong", {}, [display.formatTotalWan(summary.asking_twd)]),
       ]),
       el("div", {}, [
         el("span", { "class": "price-summary-label" }, ["模型信心"]),
@@ -135,9 +143,22 @@
         summary.confidence_reason,
       ]));
     }
+    if (summary.conservative_reference_low) {
+      wrapper.appendChild(el("p", { "class": "price-summary-warning" }, [
+        "參考性低，不建議單靠模型範圍判斷出價。",
+      ]));
+    }
     wrapper.appendChild(el("p", { "class": "asking-price-note" }, [
       "591 顯示的是開價，不代表最後成交價。",
     ]));
+    var rangeDetails = el("details", { "class": "model-range-details" });
+    rangeDetails.appendChild(el("summary", {}, ["查看模型保守範圍（90%）"]));
+    rangeDetails.appendChild(el("p", {}, [
+      display.formatTotalWan(summary.low_twd)
+        + "～" + display.formatTotalWan(summary.high_twd)
+        + "。這是模型誤差範圍，不等同合理成交價。",
+    ]));
+    wrapper.appendChild(rangeDetails);
     return wrapper;
   }
 

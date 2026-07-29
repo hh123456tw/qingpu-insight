@@ -264,6 +264,33 @@ def test_comparables_limited_to_10() -> None:
     assert len(ev.comparables) == 10
 
 
+def test_model_comparables_take_priority_over_market_fallback() -> None:
+    snapshot = _make_snapshot()
+    model_comparables = [
+        {
+            "record_id": f"model-{index}",
+            "similarity_score": 0.7,
+            "dwelling_unit_price_per_ping_twd": 400000 + index,
+        }
+        for index in range(3)
+    ]
+
+    builder = ConversationEvidenceBuilder(
+        valuation_service=lambda _payload: {
+            "point_estimate_twd": 15_000_000,
+            "low_estimate_twd": 13_500_000,
+            "high_estimate_twd": 16_500_000,
+            "confidence": "medium",
+            "comparables": model_comparables,
+        },
+        market_service=lambda _payload: [{"record_id": "fallback"}],
+    )
+
+    evidence = builder.build(snapshot=snapshot)
+
+    assert list(evidence.comparables) == model_comparables
+
+
 # ---------------------------------------------------------------------------
 # valuation & comparable facts
 # ---------------------------------------------------------------------------

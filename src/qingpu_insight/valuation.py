@@ -256,9 +256,10 @@ def similar_transactions(
     top = scores[:5]
 
     comparables_list = []
-    for similarity, row in top:
+    for rank, (similarity, row) in enumerate(top, start=1):
         comparables_list.append(
             {
+                "rank": rank,
                 "record_id": str(row["record_id"]),
                 "transaction_type": str(row["transaction_type"]),
                 "transaction_date": str(pd.Timestamp(row["transaction_date"]).date()),
@@ -266,7 +267,11 @@ def similar_transactions(
                 "building_type": str(row["building_type"]),
                 "building_area_ping": round(float(row["building_area_ping"]), 2),
                 "unit_price_per_ping_twd": round(float(row["unit_price_per_ping_twd"])),
+                "dwelling_unit_price_per_ping_twd": round(
+                    float(row.get("target_unit_price_twd", row["unit_price_per_ping_twd"]))
+                ),
                 "total_price_twd": round(float(row["total_price_twd"])),
+                "price_twd": round(float(row["total_price_twd"])),
                 "floor_ratio": round(float(row.get("floor_ratio", 0)), 4),
                 "longitude": round(float(row.get("longitude", 0)), 4),
                 "latitude": round(float(row.get("latitude", 0)), 4),

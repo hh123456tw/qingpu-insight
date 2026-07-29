@@ -59,6 +59,28 @@ def _price_fact_twd(pack: Any, fact_id: str) -> float | None:
     return _positive_number(value)
 
 
+def _fact_number(pack: Any, fact_id: str) -> float | None:
+    fact = next((item for item in _facts(pack) if item.get("id") == fact_id), None)
+    if fact is None:
+        return None
+    value = str(fact.get("value", "")).strip().replace(",", "")
+    match = re.search(r"(-?\d+(?:\.\d+)?)", value)
+    return _positive_number(match.group(1)) if match else None
+
+
+def _quantile(values: list[float], probability: float) -> float:
+    ordered = sorted(values)
+    position = (len(ordered) - 1) * probability
+    lower_index = math.floor(position)
+    upper_index = math.ceil(position)
+    if lower_index == upper_index:
+        return ordered[lower_index]
+    fraction = position - lower_index
+    return ordered[lower_index] + (
+        ordered[upper_index] - ordered[lower_index]
+    ) * fraction
+
+
 def _rounded_twd(value: float) -> int:
     return int(round(value))
 
@@ -91,6 +113,14 @@ def project_price_summary(pack: Any) -> dict[str, Any] | None:
         "gap_percent": None,
         "confidence": valuation.get("confidence"),
         "confidence_reason": None,
+        "market_low_twd": None,
+        "market_high_twd": None,
+        "market_sample_size": 0,
+        "market_position": "insufficient",
+        "market_gap_twd": None,
+        "market_gap_percent": None,
+        "conservative_width_ratio": round((high - low) / point, 3),
+        "conservative_reference_low": (high - low) / point > 0.40,
     }
 
     reasons = valuation.get("confidence_reasons")
@@ -103,6 +133,45 @@ def project_price_summary(pack: Any) -> dict[str, Any] | None:
     if not low <= point <= high:
         summary["position"] = "inconsistent"
         return summary
+
+    comparables = _field(pack, "comparables", [])
+    eligible_unit_prices: list[float] = []
+    if isinstance(comparables, list):
+        for comparable in comparables:
+            if not isinstance(comparable, Mapping):
+                continue
+            similarity = _positive_number(comparable.get("similarity_score"))
+            unit_price = _positive_number(
+                comparable.get("dwelling_unit_price_per_ping_twd")
+            )
+            if similarity is not None and similarity >= 0.60 and unit_price is not None:
+                eligible_unit_prices.append(unit_price)
+    summary["market_sample_size"] = len(eligible_unit_prices)
+
+    area = _fact_number(pack, "listing.area")
+    if len(eligible_unit_prices) >= 3 and area is not None:
+        parking = _positive_number(valuation.get("estimated_parking_price_twd")) or 0
+        market_low = _quantile(eligible_unit_prices, 0.25) * area + parking
+        market_high = _quantile(eligible_unit_prices, 0.75) * area + parking
+        summary["market_low_twd"] = _rounded_twd(market_low)
+        summary["market_high_twd"] = _rounded_twd(market_high)
+        if asking < market_low:
+            gap = market_low - asking
+            summary.update(
+                market_position="below",
+                market_gap_twd=_rounded_twd(gap),
+                market_gap_percent=round(gap / market_low * 100, 1),
+            )
+        elif asking > market_high:
+            gap = asking - market_high
+            summary.update(
+                market_position="above",
+                market_gap_twd=_rounded_twd(gap),
+                market_gap_percent=round(gap / market_high * 100, 1),
+            )
+        else:
+            summary["market_position"] = "inside"
+
     if asking < low:
         gap = low - asking
         summary.update(

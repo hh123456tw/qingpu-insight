@@ -870,6 +870,8 @@ def _conversation_valuation(
         limitations.append("591 未提供可驗證車位坪數，正式估值以 0 坪計入")
     return {
         "point_estimate_twd": result["estimated_total_price_twd"],
+        "estimated_building_price_twd": result.get("estimated_building_price_twd"),
+        "estimated_parking_price_twd": result.get("estimated_parking_price_twd"),
         "low_estimate_twd": low,
         "high_estimate_twd": high,
         "confidence": result["confidence"],
@@ -877,6 +879,7 @@ def _conversation_valuation(
         "asking_price_assessment": result.get("asking_price_assessment"),
         "model_version": model.get("version", "unknown"),
         "dataset_version": result.get("data_date", "unknown"),
+        "comparables": result.get("comparables", []),
         "limitations": limitations,
     }
 

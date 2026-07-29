@@ -152,10 +152,19 @@ def test_conversation_valuation_uses_official_model_adapter(
         captured["input"] = input_
         return {
             "estimated_total_price_twd": 16000000,
+            "estimated_building_price_twd": 14500000,
+            "estimated_parking_price_twd": 1500000,
             "interval_total_price_twd": (14500000, 17500000),
             "confidence": "medium",
             "confidence_reasons": ["comparable_count"],
             "asking_price_assessment": "合理區間",
+            "comparables": [
+                {
+                    "record_id": "c1",
+                    "similarity_score": 0.8,
+                    "dwelling_unit_price_per_ping_twd": 480000,
+                }
+            ],
             "data_date": "2026-06-13",
             "model": {"version": "official-v3"},
         }
@@ -184,6 +193,8 @@ def test_conversation_valuation_uses_official_model_adapter(
     assert result["point_estimate_twd"] == 16000000
     assert result["model_version"] == "official-v3"
     assert result["dataset_version"] == "2026-06-13"
+    assert result["estimated_parking_price_twd"] == 1500000
+    assert result["comparables"][0]["similarity_score"] == 0.8
 
 
 def test_conversation_valuation_maps_591_elevator_building_type(

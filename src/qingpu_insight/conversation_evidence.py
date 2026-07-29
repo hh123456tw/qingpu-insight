@@ -63,8 +63,15 @@ class ConversationEvidenceBuilder:
             if can_valuate:
                 try:
                     raw = self._valuation_service(payload)
+                    raw_comparables = raw.get("comparables")
+                    if isinstance(raw_comparables, list):
+                        comparables = list(raw_comparables)
                     valuation = {
-                        **raw,
+                        **{
+                            key: value
+                            for key, value in raw.items()
+                            if key != "comparables"
+                        },
                         "model_version": raw.get("model_version", self._model_version),
                         "dataset_version": raw.get("dataset_version", self._dataset_version),
                     }
@@ -76,7 +83,7 @@ class ConversationEvidenceBuilder:
         else:
             limitations.append("估值模型尚未啟用")
 
-        if self._market_service is not None:
+        if self._market_service is not None and not comparables:
             try:
                 comparables = list(self._market_service(payload))
             except Exception:

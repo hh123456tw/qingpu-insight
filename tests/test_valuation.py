@@ -653,6 +653,38 @@ def test_comparable_similarity_is_absolute_not_batch_relative(bundle):
     )
 
 
+def test_similar_transactions_exposes_dwelling_unit_price(bundle):
+    input_row = pd.DataFrame(
+        {
+            "station_code": ["A17"],
+            "building_area_ping": [30],
+            "station_distance_m": [500],
+            "bedrooms": [3],
+            "building_age_years": [6.0],
+            "floor_ratio": [0.5],
+            "building_type": ["住宅大樓"],
+        }
+    )
+    candidates = [
+        {
+            **_candidate(record_id=f"C{index}"),
+            "target_unit_price_twd": 320_000 + index * 10_000,
+        }
+        for index in range(3)
+    ]
+
+    result = similar_transactions(bundle, input_row, _market(candidates))
+
+    first = result["comparables"][0]
+    assert first["dwelling_unit_price_per_ping_twd"] in {
+        320_000,
+        330_000,
+        340_000,
+    }
+    assert first["rank"] == 1
+    assert first["price_twd"] == first["total_price_twd"]
+
+
 def test_missing_optional_age_renormalizes_weights():
     candidate = _candidate(age=float("nan"))
     input_row_without_age = pd.Series(
