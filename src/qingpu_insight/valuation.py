@@ -1,5 +1,6 @@
 import hashlib
 import json
+from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +10,7 @@ import joblib
 import numpy as np
 import pandas as pd
 
+from qingpu_insight.community_features import CommunityFeatureValues
 from qingpu_insight.model_features import (
     BASE_FEATURE_COLUMNS,
     FEATURE_COLUMNS,
@@ -44,6 +46,10 @@ class ValuationBundle:
     diagnostics: dict[str, Any] | None = None
     feature_columns: tuple[str, ...] = BASE_FEATURE_COLUMNS
     parking_price_policy: ParkingPricePolicy | None = None
+    community_registry_version: str | None = None
+    community_registry_rows: Sequence[dict[str, object]] = ()
+    community_feature_snapshot: dict[str, CommunityFeatureValues] | None = None
+    shared_feature_experiment: dict[str, object] | None = None
 
     def __getattr__(self, name):
         if name == "feature_columns":
@@ -53,6 +59,14 @@ class ValuationBundle:
         if name == "metrics_split":
             return "legacy_unknown"
         if name == "diagnostics":
+            return None
+        if name == "community_registry_version":
+            return None
+        if name == "community_registry_rows":
+            return ()
+        if name == "community_feature_snapshot":
+            return None
+        if name == "shared_feature_experiment":
             return None
         raise AttributeError(f"ValuationBundle has no attribute {name!r}")
 

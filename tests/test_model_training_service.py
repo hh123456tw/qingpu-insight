@@ -432,7 +432,7 @@ def test_resale_training_writes_schema_v2_analysis(tmp_path, market_parquet):
     assert result.market == "resale"
     assert result.feature_contract_version == 3
     assert result.diagnostics["station_counts"]["A18"] > 0
-    assert len(result.feature_experiments) == 7
+    assert len(result.feature_experiments) == 8
     assert len(result.backtests) == 3
     assert result.selected_profile in {"quick", "balanced", "thorough"}
     assert result.profile_results
@@ -1074,3 +1074,89 @@ class TestAutoMLOrchestration:
 
         assert len(manifest.results) == 1
         assert manifest.results[0].market == "presale"
+
+
+class TestSharedFeatureOrchestration:
+    def test_guided_resale_has_shared_feature_evidence(
+        self, tmp_path: Path, market_parquet: Path
+    ):
+        service, jobs = service_fixture(tmp_path, input_path=market_parquet)
+        run = service.submit(ModelTrainingRequest(("resale",))).run
+        jobs.start(run.run_id)
+        manifest = service.execute(run.run_id, ModelTrainingRequest(("resale",)))
+        assert manifest is not None
+        result = manifest.results[0]
+        assert result.feature_contract_version >= 3
+        has_shared_exp = any(
+            e.get("name") == "shared_feature_experiment" for e in result.feature_experiments
+        )
+        assert has_shared_exp
+        artifact = joblib.load(
+            tmp_path / "candidates" / str(manifest.run_id) / result.artifact_file
+        )
+        assert artifact.community_registry_version is None or isinstance(
+            artifact.community_registry_version, str
+        )
+
+    def test_guided_presale_behavior_unchanged(self, tmp_path: Path, market_parquet: Path):
+        service, jobs = service_fixture(tmp_path, input_path=market_parquet)
+        run = service.submit(ModelTrainingRequest(("presale",))).run
+        jobs.start(run.run_id)
+        manifest = service.execute(run.run_id, ModelTrainingRequest(("presale",)))
+        result = manifest.results[0]
+        assert result.feature_experiments == []
+        assert result.backtests == []
+        assert result.feature_contract_version == 0
+        artifact = joblib.load(
+            tmp_path / "candidates" / str(manifest.run_id) / result.artifact_file
+        )
+        assert artifact.community_registry_version is None
+        assert artifact.community_registry_rows == ()
+        assert artifact.community_feature_snapshot is None
+
+    def test_guided_resale_stores_shared_feature_experiment_evidence(
+        self, tmp_path: Path, market_parquet: Path
+    ):
+        service, jobs = service_fixture(tmp_path, input_path=market_parquet)
+        run = service.submit(ModelTrainingRequest(("resale",))).run
+        jobs.start(run.run_id)
+        manifest = service.execute(run.run_id, ModelTrainingRequest(("resale",)))
+        result = manifest.results[0]
+        shared_exps = [
+            e for e in result.feature_experiments if e.get("name") == "shared_feature_experiment"
+        ]
+        assert len(shared_exps) == 1
+        se = shared_exps[0]
+        assert "locked_feature_set_name" in se
+        assert "locked_feature_columns" in se
+        assert "selection_reason" in se
+        assert "calibration_experiments" in se
+        artifact = joblib.load(
+            tmp_path / "candidates" / str(manifest.run_id) / result.artifact_file
+        )
+        assert artifact.shared_feature_experiment is not None
+        assert artifact.shared_feature_experiment.get("name") == "shared_feature_experiment"
+
+    def test_community_feature_snapshot_stored_and_valid(
+        self, tmp_path: Path, market_parquet: Path
+    ):
+        service, jobs = service_fixture(tmp_path, input_path=market_parquet)
+        run = service.submit(ModelTrainingRequest(("resale",))).run
+        jobs.start(run.run_id)
+        manifest = service.execute(run.run_id, ModelTrainingRequest(("resale",)))
+        result = manifest.results[0]
+        artifact = joblib.load(
+            tmp_path / "candidates" / str(manifest.run_id) / result.artifact_file
+        )
+        snapshot = artifact.community_feature_snapshot
+        assert snapshot is None or isinstance(snapshot, dict)
+
+    def test_shared_feature_gate_appears_in_release_checks(
+        self, tmp_path: Path, market_parquet: Path
+    ):
+        service, jobs = service_fixture(tmp_path, input_path=market_parquet)
+        run = service.submit(ModelTrainingRequest(("resale",))).run
+        jobs.start(run.run_id)
+        manifest = service.execute(run.run_id, ModelTrainingRequest(("resale",)))
+        result = manifest.results[0]
+        assert "shared_feature_gate_passed" in result.release_checks

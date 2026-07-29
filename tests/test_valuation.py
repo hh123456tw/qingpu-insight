@@ -594,6 +594,33 @@ def test_old_bundle_pickle_gets_no_parking_policy(bundle):
     assert bundle.parking_price_policy is None
 
 
+def test_old_bundle_pickle_gets_safe_defaults_for_community_fields():
+    dummy = DummyRegressor()
+    dummy.fit(np.zeros((5, 5)), np.ones(5))
+    bundle = ValuationBundle(
+        transaction_type="resale",
+        model_name="test",
+        model_version="v1",
+        pipeline=dummy,
+        interval_abs_residual_twd_per_ping=50000,
+        feature_ranges={},
+        feature_hard_ranges={},
+        feature_medians={},
+        global_importance=[],
+        reference_rows=pd.DataFrame(),
+        data_min_date="2024-01-01",
+        data_max_date="2024-12-31",
+        metrics={},
+    )
+    for attr in ("community_registry_version", "community_registry_rows",
+                 "community_feature_snapshot", "shared_feature_experiment"):
+        bundle.__dict__.pop(attr, None)
+    assert bundle.community_registry_version is None
+    assert bundle.community_registry_rows == ()
+    assert bundle.community_feature_snapshot is None
+    assert bundle.shared_feature_experiment is None
+
+
 # --- Task 2 helpers ---
 
 
