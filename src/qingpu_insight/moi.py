@@ -9,6 +9,8 @@ COLUMN_MAP = {
     "土地位置建物門牌": "address",
     "土地區段位置建物區段門牌": "address",
     "交易年月日": "transaction_date",
+    "主建物面積": "main_building_area_sqm",
+    "附屬建物面積": "auxiliary_building_area_sqm",
     "建物移轉總面積平方公尺": "building_area_sqm",
     "總價元": "total_price_twd",
     "單價元平方公尺": "unit_price_sqm_twd",
@@ -38,6 +40,8 @@ CANONICAL_COLUMNS = [
     "address",
     "transaction_date",
     "building_area_sqm",
+    "main_building_area_sqm",
+    "auxiliary_building_area_sqm",
     "total_price_twd",
     "unit_price_sqm_twd",
     "building_type",
@@ -59,6 +63,8 @@ CANONICAL_COLUMNS = [
 
 NUMERIC_COLUMNS = [
     "building_area_sqm",
+    "main_building_area_sqm",
+    "auxiliary_building_area_sqm",
     "total_price_twd",
     "unit_price_sqm_twd",
     "parking_area_sqm",
@@ -129,6 +135,12 @@ def read_moi_csv(
         if column not in frame:
             frame[column] = pd.NA
         frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    if "has_management" in frame:
+        frame["has_management"] = frame["has_management"].map(
+            {"有": True, "無": False}
+        )
+    else:
+        frame["has_management"] = pd.NA
     for column in ("record_id", "building_type", "floor", "total_floors", "parking_type"):
         if column not in frame:
             frame[column] = pd.NA

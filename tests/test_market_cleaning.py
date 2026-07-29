@@ -1,7 +1,10 @@
 import pandas as pd
 import pytest
 
-from qingpu_insight.market_cleaning import build_market_dataset
+from qingpu_insight.market_cleaning import (
+    add_shared_property_features,
+    build_market_dataset,
+)
 
 
 def sample_rows() -> pd.DataFrame:
@@ -30,6 +33,10 @@ def sample_rows() -> pd.DataFrame:
             "latitude": [25.01, 25.02, 25.01, None],
             "source_file": ["a.csv", "b.csv", "a.csv", "a.csv"],
             "remarks": ["", "", "", ""],
+            "main_building_area_sqm": [pd.NA] * 4,
+            "auxiliary_building_area_sqm": [pd.NA] * 4,
+            "parking_area_sqm": [33.0, 0.0, 33.0, 33.0],
+            "has_management": [pd.NA] * 4,
         }
     )
 
@@ -93,3 +100,92 @@ def test_build_market_dataset_excludes_confirmed_non_market_transactions() -> No
         "non_market_subject": 1,
         "special_relationship": 1,
     }
+
+
+def test_add_shared_property_features_normal_case() -> None:
+    frame = pd.DataFrame({
+        "main_building_area_sqm": [61.2],
+        "auxiliary_building_area_sqm": [4.8],
+        "building_area_sqm": [110.0],
+        "parking_area_sqm": [25.0],
+        "has_management": [True],
+    })
+    result = add_shared_property_features(frame)
+    usable = 61.2 + 4.8
+    non_parking = 110.0 - 25.0
+    expected_ratio = 1 - usable / non_parking
+    assert result["common_area_ratio"].iloc[0] == pytest.approx(expected_ratio)
+    assert result["common_area_ratio_valid"].iloc[0]
+
+
+def test_add_shared_property_features_missing_components() -> None:
+    frame = pd.DataFrame({
+        "main_building_area_sqm": [pd.NA],
+        "auxiliary_building_area_sqm": [pd.NA],
+        "building_area_sqm": [110.0],
+        "parking_area_sqm": [25.0],
+        "has_management": [pd.NA],
+    })
+    result = add_shared_property_features(frame)
+    assert pd.isna(result["common_area_ratio"].iloc[0])
+    assert not result["common_area_ratio_valid"].iloc[0]
+
+
+def test_add_shared_property_features_zero_denominator() -> None:
+    frame = pd.DataFrame({
+        "main_building_area_sqm": [61.2],
+        "auxiliary_building_area_sqm": [4.8],
+        "building_area_sqm": [25.0],
+        "parking_area_sqm": [25.0],
+        "has_management": [True],
+    })
+    result = add_shared_property_features(frame)
+    assert pd.isna(result["common_area_ratio"].iloc[0])
+    assert not result["common_area_ratio_valid"].iloc[0]
+
+
+def test_add_shared_property_features_parking_larger_than_total() -> None:
+    frame = pd.DataFrame({
+        "main_building_area_sqm": [61.2],
+        "auxiliary_building_area_sqm": [4.8],
+        "building_area_sqm": [50.0],
+        "parking_area_sqm": [60.0],
+        "has_management": [True],
+    })
+    result = add_shared_property_features(frame)
+    assert pd.isna(result["common_area_ratio"].iloc[0])
+    assert not result["common_area_ratio_valid"].iloc[0]
+
+
+def test_add_shared_property_features_negative_ratio() -> None:
+    frame = pd.DataFrame({
+        "main_building_area_sqm": [100.0],
+        "auxiliary_building_area_sqm": [0.0],
+        "building_area_sqm": [50.0],
+        "parking_area_sqm": [0.0],
+        "has_management": [True],
+    })
+    result = add_shared_property_features(frame)
+    usable = 100.0 + 0.0
+    non_parking = 50.0 - 0.0
+    ratio = 1 - usable / non_parking
+    assert ratio < 0
+    assert pd.isna(result["common_area_ratio"].iloc[0])
+    assert not result["common_area_ratio_valid"].iloc[0]
+
+
+def test_add_shared_property_features_ratio_above_threshold() -> None:
+    frame = pd.DataFrame({
+        "main_building_area_sqm": [10.0],
+        "auxiliary_building_area_sqm": [5.0],
+        "building_area_sqm": [100.0],
+        "parking_area_sqm": [0.0],
+        "has_management": [True],
+    })
+    result = add_shared_property_features(frame)
+    usable = 10.0 + 5.0
+    non_parking = 100.0 - 0.0
+    ratio = 1 - usable / non_parking
+    assert ratio > 0.70
+    assert pd.isna(result["common_area_ratio"].iloc[0])
+    assert not result["common_area_ratio_valid"].iloc[0]
