@@ -423,7 +423,7 @@ AutoML 模式與引導調參為互斥選擇。AutoML 不自動發布任何模型
 - 日期語義：`data_max_date` 是訓練資料最後一筆交易的日期，也是模型「知道」的最後日期
 
 **候選模型家族**
-現有候選模型為 `Ridge`、`RandomForest`、`HistGradientBoosting` 及 `RecentMedianBaseline`（僅作為基準線，不作為正式模型發布）。**XGBoost 被刻意排除**：本專案的資料規模（數千筆）不需要 XGBoost 的分散式加速優勢，且 `HistGradientBoostingRegressor` 在相同資料上已達到可比或更好的表現，同時減少相依套件數量。
+現有候選模型為 `Ridge`、`RandomForest`、`HistGradientBoosting`、`HistGradientBoosting（對數價格）` 及 `RecentMedianBaseline`（僅作為基準線，不作為正式模型發布）。中古屋 v3 特徵契約加入 TWD97 空間座標；對數價格模型只在時間外驗證與年度回測較佳時入選。**XGBoost 被刻意排除**：本專案的資料規模（數千至一萬多筆）不需要 XGBoost 的分散式加速優勢，且 scikit-learn HGB 能減少相依套件與部署複雜度。
 
 **衍生特徵**
 在中古屋基本特徵（車站距離、坪數、類型、樓層、車位等 15 個欄位）之上，新增五個衍生特徵：
@@ -576,6 +576,8 @@ pwsh -NoProfile -Command {
 - 訓練資料範圍與筆數
 - 使用的 profile 與超參數
 - 候選模型和 baseline 指標
+- 明確區分校準集與 final test 指標
+- 最大誤差前 20 筆與資料品質排除計數（不顯示完整門牌）
 - A17／A18／A19 分站結果
 - 三次年度回溯測試
 - 每一項發布資格及失敗原因
@@ -685,6 +687,7 @@ $env:QINGPU_GEMINI_MODEL = "<available-model-id>"
 |------|------|
 | [M1 市場資料方法論](docs/m1-market-methodology.md) | 住宅篩選、生活圈、定位與市場指標 |
 | [M2 AI 估價方法論](docs/m2-valuation-methodology.md) | 特徵、調參、時間切割、指標與模型限制 |
+| [中古屋估價誤差研究](docs/research/2026-07-29-resale-model-error-analysis.md) | RMSE 根因、資料清理、空間特徵實驗與面試摘要 |
 | [M3 刊登方法論](docs/m3-listing-methodology.md) | 591 擷取、批次、事件與隱私邊界 |
 | [M4 刊登定位方法論](docs/m4-location-methodology.md) | 地址證據、定位信心與發布控制 |
 
