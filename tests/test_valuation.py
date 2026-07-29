@@ -271,11 +271,11 @@ def test_confidence_compares_interval_in_unit_price_units(bundle):
         bundle,
         row,
         500_000,
-        (400_000, 600_001),
+        (299_999, 700_001),
         [{"similarity_score": 0.7}, {"similarity_score": 0.8}, {"similarity_score": 0.9}],
     )
     assert result["confidence"] == "medium"
-    assert "估價區間寬度超過估計總價 30%" in result["confidence_reasons"]
+    assert "估價誤差半徑超過估計單價 40%" in result["confidence_reasons"]
 
 
 def test_confidence_low_when_degraded():

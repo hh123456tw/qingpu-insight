@@ -120,7 +120,7 @@ def project_price_summary(pack: Any) -> dict[str, Any] | None:
         "market_gap_twd": None,
         "market_gap_percent": None,
         "conservative_width_ratio": round((high - low) / point, 3),
-        "conservative_reference_low": (high - low) / point > 0.40,
+        "conservative_reference_low": valuation.get("confidence") == "low",
     }
 
     reasons = valuation.get("confidence_reasons")

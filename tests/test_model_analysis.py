@@ -229,6 +229,39 @@ def test_release_checks_require_two_passing_backtests():
     assert checks["recommended"] is False
 
 
+def test_release_checks_allow_one_historical_station_regression():
+    checks = evaluate_release_checks(
+        _metrics(97.0, a18=18.0),
+        _metrics(100.0),
+        [
+            _backtest(True, stations_within_limit=True),
+            _backtest(True, stations_within_limit=False),
+            _backtest(True, stations_within_limit=True),
+        ],
+        date(2026, 6, 12),
+        date(2026, 6, 12),
+    )
+    assert checks["backtests_passed"] is True
+    assert checks["backtest_stations_within_limit"] is True
+    assert checks["recommended"] is True
+
+
+def test_release_checks_reject_two_historical_station_regressions():
+    checks = evaluate_release_checks(
+        _metrics(97.0, a18=18.0),
+        _metrics(100.0),
+        [
+            _backtest(True, stations_within_limit=False),
+            _backtest(True, stations_within_limit=False),
+            _backtest(True, stations_within_limit=True),
+        ],
+        date(2026, 6, 12),
+        date(2026, 6, 12),
+    )
+    assert checks["backtest_stations_within_limit"] is False
+    assert checks["recommended"] is False
+
+
 def test_release_checks_require_all_three_backtests():
     checks = evaluate_release_checks(
         _metrics(97.0, a18=18.0),

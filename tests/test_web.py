@@ -175,13 +175,13 @@ def test_conversation_valuation_uses_official_model_adapter(
         object(),  # type: ignore[arg-type]
         {
             "listing_type": "sale",
-            "area_ping": 30,
+            "area_ping": 40.32,
             "layout": "3房2廳2衛",
             "building_type": "住宅大樓",
             "floor": "12F/15F",
             "total_floors": 15,
             "age_years": 5,
-            "parking_type": "無車位",
+            "parking_type": "10. 32坪，平面式，已含售金內",
             "total_price_twd": 15800000,
             "latitude": 25.01,
             "longitude": 121.21,
@@ -190,6 +190,9 @@ def test_conversation_valuation_uses_official_model_adapter(
 
     assert captured["input"].station_code == "A18"
     assert captured["input"].bedrooms == 3
+    assert captured["input"].building_area_ping == 30
+    assert captured["input"].parking_type == "坡道平面"
+    assert captured["input"].parking_area_ping == 10.32
     assert result["point_estimate_twd"] == 16000000
     assert result["model_version"] == "official-v3"
     assert result["dataset_version"] == "2026-06-13"
@@ -1962,7 +1965,11 @@ def test_production_admin_composition_requires_database_and_strong_secret(
     repo = MemoryAdminJobRepository()
     service = StubListingUpdateService(JobService(repo))
     executor = FakeAdminExecutor()
-    monkeypatch.setattr(cli, "_create_listing_update_service", lambda root: service)
+    monkeypatch.setattr(
+        cli,
+        "_create_listing_update_service",
+        lambda root, **kwargs: service,
+    )
     monkeypatch.setattr(web, "LocalJobExecutor", lambda job_service: executor)
     monkeypatch.setenv(
         "QINGPU_DATABASE_URL",

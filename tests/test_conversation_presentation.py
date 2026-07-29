@@ -77,6 +77,15 @@ def test_projects_inside_above_and_inconsistent_states():
     assert inconsistent["gap_percent"] is None
 
 
+def test_medium_confidence_does_not_show_low_reference_warning():
+    pack = _pack(low=8_762_000, point=13_365_000, high=17_969_000)
+    pack.valuation["confidence"] = "medium"
+
+    summary = project_price_summary(pack)
+
+    assert summary["conservative_reference_low"] is False
+
+
 def test_missing_or_invalid_values_omit_summary():
     assert project_price_summary(_pack(asking="—")) is None
     assert project_price_summary(_pack(low=0)) is None

@@ -295,8 +295,10 @@ def confidence_assessment(
     if degraded:
         return {"confidence": "low", "confidence_reasons": ["使用降級模型（近期中位數基準）"]}
 
-    interval_width = interval[1] - interval[0]
-    width_ratio = interval_width / unit_price if unit_price > 0 else 1
+    interval_half_width = (interval[1] - interval[0]) / 2
+    half_width_ratio = (
+        interval_half_width / unit_price if unit_price > 0 else 1
+    )
 
     numeric_fields = [
         "building_area_ping",
@@ -329,9 +331,9 @@ def confidence_assessment(
     if p5_fails > 0:
         fails += 1
         reasons.append("部分輸入數值超出主要訓練範圍")
-    if width_ratio > 0.30:
+    if half_width_ratio > 0.40:
         fails += 1
-        reasons.append("估價區間寬度超過估計總價 30%")
+        reasons.append("估價誤差半徑超過估計單價 40%")
     if good_comparables < 3:
         fails += 1
         reasons.append("高相似度成交案例不足（少於 3 筆 ≥ 0.60）")

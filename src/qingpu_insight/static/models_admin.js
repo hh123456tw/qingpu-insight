@@ -122,7 +122,7 @@
     station_regression: "A17–A19 有生活圈退步超過 10%",
     a18_not_improved: "A18 MAPE 未優於基準模型",
     backtest_insufficient: "三期回測中優於基準模型的期數不足",
-    backtest_station_regression: "回測生活圈退步超過 10%",
+    backtest_station_regression: "三期回測有兩期以上的生活圈退步超過 10%",
     candidate_stale: "候選模型資料落後最新官方資料超過 180 天",
     artifact_missing: "模型檔案遺失",
     sha256_mismatch: "模型檔案驗證失敗",

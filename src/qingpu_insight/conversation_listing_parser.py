@@ -555,9 +555,27 @@ def parse_listing_detail(
         )
     age_years = _extract_age_years(age_text)
 
-    parking_type = _element_text(
-        soup, ".info-parking", "[class*='parking']", "[class*='車位']"
-    )
+    parking_type = None
+    if listing_type == "sale":
+        parking_type = _labeled_value(
+            soup,
+            row_selector=".detail-house-item",
+            label_selector=".detail-house-key",
+            value_selector=".detail-house-value",
+            label="車位",
+        )
+    if parking_type is None and listing_type == "sale":
+        parking_type = _labeled_value(
+            soup,
+            row_selector=".info-addr-content",
+            label_selector=".info-addr-key",
+            value_selector=".info-addr-value-text, .info-addr-value",
+            label="車位",
+        )
+    if parking_type is None:
+        parking_type = _element_text(
+            soup, ".info-parking", "[class*='parking']", "[class*='車位']"
+        )
 
     latitude = jsonld_fields.get("latitude")
     longitude = jsonld_fields.get("longitude")

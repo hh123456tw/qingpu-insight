@@ -459,6 +459,31 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
             err = {"code": "invalid_request", "message": str(e)}
             return jsonify({"error": err}), 400
 
+        if (
+            submission.created
+            and rt.executor is not None
+            and hasattr(submission, "preview")
+            and hasattr(rt.model_release_service, "handoff")
+        ):
+            try:
+                rt.model_release_service.handoff(
+                    submission,
+                    submission.preview,
+                    rt.executor,
+                )
+            except Exception:
+                if rt.job_service is not None:
+                    rt.job_service.fail(
+                        submission.run.run_id,
+                        "handoff_failed",
+                        "model release handoff failed",
+                    )
+                err = {
+                    "code": "handoff_failed",
+                    "message": "模型發布工作無法啟動。",
+                }
+                return jsonify({"error": err}), 503
+
         body = _admin_public_job(submission.run)
         body["created"] = submission.created
         return jsonify(body), 202 if submission.created else 200

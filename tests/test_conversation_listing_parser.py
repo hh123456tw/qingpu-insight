@@ -77,6 +77,10 @@ class TestParseSaleDetail:
   <span>：</span>
   <div class="detail-house-value"><nmbx></nmbx>華廈</div>
 </div>
+<div class="detail-house-item">
+  <div class="detail-house-key">車位</div>
+  <div class="detail-house-value">10.32坪，平面式，已含售金內</div>
+</div>
 <div class="info-addr-content">
   <span class="info-addr-key">地址</span>
   <span class="info-addr-value-text">桃園市中壢區高鐵站前路</span>
@@ -103,6 +107,7 @@ class TestParseSaleDetail:
         assert result.address == "桃園市中壢區高鐵站前路"
         assert result.community_name == "測試社區"
         assert result.building_type == "華廈"
+        assert result.parking_type == "10.32坪，平面式，已含售金內"
         assert result.latitude == Decimal("25.0094795")
         assert result.longitude == Decimal("121.2187076")
 

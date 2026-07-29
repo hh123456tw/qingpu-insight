@@ -40,6 +40,13 @@ class OfficialModelManifest:
     activated_at: datetime
 
 
+@dataclass(frozen=True)
+class ModelReleaseSubmission:
+    run: object
+    created: bool
+    preview: OperationPreview
+
+
 class OfficialModelStore:
     def __init__(self, root: Path) -> None:
         self._root = root.resolve()
@@ -367,16 +374,30 @@ class ModelReleaseService:
             idempotency_key=idempotency_key,
             trigger="manual",
         )
-        return submission
+        return ModelReleaseSubmission(
+            run=submission.run,
+            created=submission.created,
+            preview=preview,
+        )
 
     def execute(self, run_id: str, preview: OperationPreview) -> ModelVersionRecord:
         op = preview.payload.get("operation")
         if op == "publish":
-            return self._execute_publish(run_id, preview)
+            result = self._execute_publish(run_id, preview)
         elif op == "rollback":
-            return self._execute_rollback(run_id, preview)
+            result = self._execute_rollback(run_id, preview)
         else:
             raise ValueError(f"unknown operation {op!r}")
+        self._job_service.succeed(
+            run_id,
+            result.version_id,
+            {
+                "operation": str(preview.payload["operation"]),
+                "market": result.market,
+                "version_id": result.version_id,
+            },
+        )
+        return result
 
     def handoff(self, submission, preview, executor) -> None:
         executor.submit(

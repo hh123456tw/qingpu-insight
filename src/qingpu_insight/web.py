@@ -180,11 +180,17 @@ def _create_production_admin_services(
     executor_factory=None,
 ) -> AdminServices:
     # Task 3 owns URL parsing and visible-Selenium dependency construction.
-    from qingpu_insight.cli import _create_listing_update_service
+    from qingpu_insight.cli import (
+        _create_listing_update_service,
+        create_mysql_connection_factory,
+    )
 
-    service_kwargs = {}
-    if connection_factory is not None:
-        service_kwargs["connection_factory"] = connection_factory
+    operation_connection_factory = (
+        connection_factory or create_mysql_connection_factory()
+    )
+    service_kwargs = {
+        "connection_factory": operation_connection_factory,
+    }
     if source_factory is not None:
         service_kwargs["source_factory"] = source_factory
     service = _create_listing_update_service(root, **service_kwargs)
@@ -241,22 +247,20 @@ def _create_production_admin_services(
         OperationPreviewService,
     )
 
-    release_repo = MySQLModelReleaseRepository(connection_factory) if connection_factory else None
-    preview_repo = (
-        MySQLOperationPreviewRepository(connection_factory) if connection_factory else None
+    release_repo = MySQLModelReleaseRepository(
+        operation_connection_factory
     )
-    preview_service = OperationPreviewService(repository=preview_repo) if preview_repo else None
-    model_release_service = (
-        ModelReleaseService(
-            official_store=official_store,
-            release_repository=release_repo,
-            preview_service=preview_service,
-            job_service=service.job_service,
-            candidate_store=candidate_store,
-            artifact_dir=root / "artifacts",
-        )
-        if release_repo and preview_service
-        else None
+    preview_repo = MySQLOperationPreviewRepository(
+        operation_connection_factory
+    )
+    preview_service = OperationPreviewService(repository=preview_repo)
+    model_release_service = ModelReleaseService(
+        official_store=official_store,
+        release_repository=release_repo,
+        preview_service=preview_service,
+        job_service=service.job_service,
+        candidate_store=candidate_store,
+        artifact_dir=root / "artifacts",
     )
 
     _backup_job_svc = None
@@ -776,6 +780,9 @@ _CONVERSATION_LAYOUT_RE = re.compile(
     r"(?P<bathrooms>\d+)\s*衛"
 )
 _CONVERSATION_FLOOR_RE = re.compile(r"(?P<floor>\d+)\s*[Ff]")
+_CONVERSATION_PARKING_AREA_RE = re.compile(
+    r"(?P<area>\d+(?:\s*\.\s*\d+)?)\s*坪"
+)
 
 
 def _conversation_model_building_type(
@@ -796,6 +803,27 @@ def _conversation_model_building_type(
             return "華廈(10層含以下有電梯)"
         return "住宅大樓(11層含以上有電梯)"
     return value
+
+
+def _conversation_parking(
+    raw_parking: object,
+) -> tuple[str, float]:
+    value = str(raw_parking or "").strip()
+    if not value or "無車位" in value:
+        return "", 0
+    area_match = _CONVERSATION_PARKING_AREA_RE.search(value)
+    if area_match is None:
+        return "", 0
+    area = float(re.sub(r"\s+", "", area_match.group("area")))
+    if area <= 0:
+        return "", 0
+    if "機械" in value:
+        parking_type = "坡道機械"
+    elif "平面" in value:
+        parking_type = "坡道平面"
+    else:
+        parking_type = "其他"
+    return parking_type, area
 
 
 def _conversation_valuation(
@@ -824,7 +852,13 @@ def _conversation_valuation(
 
     total_floors = int(payload["total_floors"])
     floor = int(floor_match.group("floor"))
-    area = float(payload["area_ping"])
+    total_area = float(payload["area_ping"])
+    parking_type, parking_area = _conversation_parking(
+        payload.get("parking_type")
+    )
+    area = total_area - parking_area
+    if area <= 0:
+        raise ValueError("parking area must be smaller than total area")
     building_type = _conversation_model_building_type(
         payload.get("building_type"),
         total_floors,
@@ -842,10 +876,8 @@ def _conversation_valuation(
         building_age_years=age,
         floor=floor,
         total_floors=total_floors,
-        parking_type=""
-        if str(payload.get("parking_type") or "") == "無車位"
-        else str(payload.get("parking_type") or ""),
-        parking_area_ping=0,
+        parking_type=parking_type,
+        parking_area_ping=parking_area,
         asking_total_price_twd=(
             int(payload["total_price_twd"]) if payload.get("total_price_twd") is not None else None
         ),
@@ -866,8 +898,14 @@ def _conversation_valuation(
     limitations = [
         f"捷運生活圈與距離由最近一筆實價登錄推定（該成交距物件約 {nearest['distance_m']} 公尺）"
     ]
-    if payload.get("parking_type"):
-        limitations.append("591 未提供可驗證車位坪數，正式估值以 0 坪計入")
+    if payload.get("parking_type") and not parking_type:
+        limitations.append(
+            "591 未提供可驗證車位坪數，本次未另加車位估值"
+        )
+    elif parking_type:
+        limitations.append(
+            f"房屋坪數已從建物總坪數扣除車位 {parking_area:g} 坪"
+        )
     return {
         "point_estimate_twd": result["estimated_total_price_twd"],
         "estimated_building_price_twd": result.get("estimated_building_price_twd"),
