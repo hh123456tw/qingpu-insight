@@ -193,6 +193,8 @@ def test_conversation_valuation_uses_official_model_adapter(
     assert captured["input"].building_area_ping == 30
     assert captured["input"].parking_type == "坡道平面"
     assert captured["input"].parking_area_ping == 10.32
+    assert captured["input"].twd97_x == pytest.approx(272_000, abs=2_000)
+    assert captured["input"].twd97_y == pytest.approx(2_766_000, abs=2_000)
     assert result["point_estimate_twd"] == 16000000
     assert result["model_version"] == "official-v3"
     assert result["dataset_version"] == "2026-06-13"

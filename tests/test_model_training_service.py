@@ -429,7 +429,7 @@ def test_resale_training_writes_schema_v2_analysis(tmp_path, market_parquet):
     result = manifest.results[0]
     assert manifest.schema_version == 3
     assert result.market == "resale"
-    assert result.feature_contract_version == 2
+    assert result.feature_contract_version == 3
     assert result.diagnostics["station_counts"]["A18"] > 0
     assert len(result.feature_experiments) == 7
     assert len(result.backtests) == 3

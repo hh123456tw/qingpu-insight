@@ -2,7 +2,19 @@ import pandas as pd
 import pytest
 
 from qingpu_insight.config import Station
-from qingpu_insight.geo import assign_life_circle, station_points
+from qingpu_insight.geo import assign_life_circle, station_points, wgs84_to_twd97
+
+
+def test_wgs84_to_twd97_projects_listing_location() -> None:
+    x, y = wgs84_to_twd97(121.2187076, 25.0094795)
+
+    assert x == pytest.approx(272_000, abs=2_000)
+    assert y == pytest.approx(2_766_000, abs=2_000)
+
+
+def test_wgs84_to_twd97_rejects_nonfinite_coordinates() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        wgs84_to_twd97(float("nan"), 25.0094795)
 
 
 def test_station_points_requires_exact_official_doorplates() -> None:

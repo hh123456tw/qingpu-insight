@@ -575,6 +575,13 @@ def valuate(
     comparable_scope = comparables_result["comparable_scope"]
 
     assessing = confidence_assessment(bundle, row, unit_price, interval, comparables_list)
+    if (
+        "location_known" in bundle.feature_columns
+        and row.at[0, "location_known"] == "missing"
+    ):
+        assessing["confidence_reasons"].append(
+            "未提供精確位置，僅能依生活圈與捷運距離估價"
+        )
     if bundle.parking_price_policy is None:
         assessing["confidence_reasons"].append("legacy_parking")
 
@@ -723,6 +730,7 @@ def train_artifact(
             "building_age_band",
             "area_band",
             "floor_band",
+            "location_known",
         ):
             continue
         values = train_frame[col].dropna()

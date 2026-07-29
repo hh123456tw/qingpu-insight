@@ -407,6 +407,8 @@ NUMERIC_FEATURES = [
     "transaction_year",
     "transaction_month",
     "transaction_month_index",
+    "twd97_x",
+    "twd97_y",
 ]
 CATEGORICAL_FEATURES = [
     "station_code",
@@ -415,6 +417,7 @@ CATEGORICAL_FEATURES = [
     "building_age_band",
     "area_band",
     "floor_band",
+    "location_known",
 ]
 
 

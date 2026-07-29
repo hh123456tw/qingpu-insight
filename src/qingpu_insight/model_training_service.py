@@ -511,7 +511,7 @@ class ModelTrainingService:
                     for fe in exp_list
                 ]
                 enhanced_features = exp_list[1].feature_columns
-                feature_contract_ver = 2
+                feature_contract_ver = 3
 
             experiment = run_tuned_model_experiment(
                 split,
@@ -770,6 +770,7 @@ class ModelTrainingService:
                     "release_blockers": [],
                 },
                 fit_spec=trial.fit_spec,
+                feature_contract_version=3 if is_resale else 0,
             )
             if not result.recommended:
                 release_blockers.extend(result.reason_codes)

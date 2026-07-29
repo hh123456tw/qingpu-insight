@@ -87,9 +87,44 @@ def test_build_model_frame_parses_chinese_total_floors(fixture_frame):
     assert resale["floor_ratio"].notna().all()
 
 
+def test_build_model_frame_adds_spatial_features(fixture_frame):
+    fixture_frame["twd97_x"] = [276000.0, np.nan, 275000.0, 274000.0, 273000.0, 272000.0]
+    fixture_frame["twd97_y"] = [
+        2767000.0,
+        np.nan,
+        2766000.0,
+        2765000.0,
+        2764000.0,
+        2763000.0,
+    ]
+
+    resale = build_model_frame(fixture_frame, "resale").set_index("record_id")
+
+    assert resale.loc["R1", "twd97_x"] == pytest.approx(276000.0)
+    assert resale.loc["R1", "location_known"] == "known"
+    assert resale.loc["R2", "location_known"] == "missing"
+
+
 def test_input_frame_matches_training_feature_columns(valid_resale_input):
     online = input_frame(valid_resale_input, pd.Timestamp("2026-06-12"))
     assert list(online.columns) == list(FEATURE_COLUMNS)
+
+
+def test_input_frame_supports_missing_exact_location(valid_resale_input):
+    value = replace(valid_resale_input, twd97_x=None, twd97_y=None)
+
+    row = input_frame(value, pd.Timestamp("2026-06-12")).iloc[0]
+
+    assert pd.isna(row["twd97_x"])
+    assert pd.isna(row["twd97_y"])
+    assert row["location_known"] == "missing"
+
+
+def test_valuation_input_requires_complete_finite_coordinate_pair(valid_resale_input):
+    with pytest.raises(ValueError, match="provided together"):
+        replace(valid_resale_input, twd97_x=276000.0, twd97_y=None)
+    with pytest.raises(ValueError, match="finite"):
+        replace(valid_resale_input, twd97_x=float("inf"), twd97_y=2767000.0)
 
 
 def test_presale_input_rejects_age_and_floor_above_total(valid_presale_input):

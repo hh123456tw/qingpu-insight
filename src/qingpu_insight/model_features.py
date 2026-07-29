@@ -28,6 +28,9 @@ DERIVED_FEATURE_COLUMNS = (
     "building_age_band",
     "area_band",
     "floor_band",
+    "twd97_x",
+    "twd97_y",
+    "location_known",
 )
 FEATURE_COLUMNS = BASE_FEATURE_COLUMNS + DERIVED_FEATURE_COLUMNS
 
@@ -97,6 +100,15 @@ def parking_adjusted_target(row: pd.Series) -> tuple[float, str]:
 
 def add_derived_features(frame: pd.DataFrame) -> pd.DataFrame:
     result = frame.copy()
+    for coordinate in ("twd97_x", "twd97_y"):
+        if coordinate not in result:
+            result[coordinate] = np.nan
+        result[coordinate] = pd.to_numeric(result[coordinate], errors="coerce")
+    coordinates_known = (
+        np.isfinite(result["twd97_x"].to_numpy(dtype=float))
+        & np.isfinite(result["twd97_y"].to_numpy(dtype=float))
+    )
+    result["location_known"] = np.where(coordinates_known, "known", "missing")
     if "transaction_date" in result:
         dates = pd.to_datetime(result["transaction_date"])
     else:
@@ -183,6 +195,8 @@ class ValuationInput:
     parking_type: str = ""
     parking_area_ping: float = 0
     asking_total_price_twd: int | None = None
+    twd97_x: float | None = None
+    twd97_y: float | None = None
 
     def __post_init__(self):
         if not self.parking_type:
@@ -235,6 +249,12 @@ class ValuationInput:
             raise ValueError("building_age_years must be between 0 and 100")
         if self.asking_total_price_twd is not None and self.asking_total_price_twd <= 0:
             raise ValueError("asking_total_price_twd must be > 0")
+        if (self.twd97_x is None) != (self.twd97_y is None):
+            raise ValueError("twd97_x and twd97_y must be provided together")
+        if self.twd97_x is not None and not all(
+            math.isfinite(value) for value in (self.twd97_x, self.twd97_y)
+        ):
+            raise ValueError("coordinates must be finite")
 
 
 def input_frame(value: ValuationInput, data_date: pd.Timestamp) -> pd.DataFrame:
@@ -254,5 +274,7 @@ def input_frame(value: ValuationInput, data_date: pd.Timestamp) -> pd.DataFrame:
         "floor_ratio": [value.floor / value.total_floors],
         "transaction_year": [data_date.year],
         "transaction_month": [data_date.month],
+        "twd97_x": [value.twd97_x],
+        "twd97_y": [value.twd97_y],
     }
-    return add_derived_features(pd.DataFrame(data))
+    return add_derived_features(pd.DataFrame(data)).loc[:, list(FEATURE_COLUMNS)]

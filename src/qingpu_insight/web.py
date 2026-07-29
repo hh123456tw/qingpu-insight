@@ -26,6 +26,7 @@ from qingpu_insight.admin_web import ADMIN_JOB_TYPES, AdminRuntime, create_admin
 from qingpu_insight.backup_repository import MySQLBackupRepository
 from qingpu_insight.config import get_settings
 from qingpu_insight.evidence import UnknownCandidateError
+from qingpu_insight.geo import wgs84_to_twd97
 from qingpu_insight.health import HealthService
 from qingpu_insight.health_repository import MySQLHealthRepository
 from qingpu_insight.job_executor import LocalJobExecutor
@@ -864,6 +865,13 @@ def _conversation_valuation(
         total_floors,
     )
     age = None if transaction_type == "presale" else float(payload["age_years"])
+    longitude = payload.get("longitude")
+    latitude = payload.get("latitude")
+    coordinates = (
+        wgs84_to_twd97(float(longitude), float(latitude))
+        if longitude is not None and latitude is not None
+        else (None, None)
+    )
     valuation_input = ValuationInput(
         transaction_type=transaction_type,
         station_code=str(nearest["station_code"]),
@@ -881,6 +889,8 @@ def _conversation_valuation(
         asking_total_price_twd=(
             int(payload["total_price_twd"]) if payload.get("total_price_twd") is not None else None
         ),
+        twd97_x=coordinates[0],
+        twd97_y=coordinates[1],
     )
     market = data_source.load(MarketFilters(transaction_type=transaction_type))
     if market.empty:

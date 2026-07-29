@@ -1,9 +1,22 @@
+import math
+
 import numpy as np
 import pandas as pd
 from pyproj import Transformer
 
 from qingpu_insight.addresses import match_addresses
 from qingpu_insight.config import Station
+
+_WGS84_TO_TWD97 = Transformer.from_crs("EPSG:4326", "EPSG:3826", always_xy=True)
+
+
+def wgs84_to_twd97(longitude: float, latitude: float) -> tuple[float, float]:
+    if not all(math.isfinite(value) for value in (longitude, latitude)):
+        raise ValueError("coordinates must be finite")
+    x, y = _WGS84_TO_TWD97.transform(longitude, latitude)
+    if not all(math.isfinite(value) for value in (x, y)):
+        raise ValueError("coordinates must be finite")
+    return float(x), float(y)
 
 
 def station_points(stations: tuple[Station, ...], doorplates: pd.DataFrame) -> pd.DataFrame:
