@@ -12,6 +12,14 @@ from qingpu_insight.model_training import (
 from qingpu_insight.model_tuning import TrainingProfile
 from qingpu_insight.valuation import ValuationBundle
 
+MODEL_DISPLAY_NAMES = {
+    "hist_gradient_boosting_log": "HGB（對數價格）",
+}
+
+
+def _model_display_name(name: str) -> str:
+    return MODEL_DISPLAY_NAMES.get(name, name)
+
 
 def compute_interval_summary(
     bundle: ValuationBundle,
@@ -232,11 +240,14 @@ def write_model_card(
         ]
     for c in candidates:
         marker = " ✓" if c.name == bundle.model_name else ""
-        lines.append(f"- {c.name}：MAE = {c.overall_mae:,.0f}{marker}")
+        lines.append(
+            f"- {_model_display_name(c.name)}：MAE = {c.overall_mae:,.0f}{marker}"
+        )
 
     if bundle.transaction_type == "resale":
         lines.extend(
             [
+                "- HGB（對數價格）只有在驗證與跨年度回測較佳時才會入選。",
                 "",
                 "## 近期資料加權",
                 (

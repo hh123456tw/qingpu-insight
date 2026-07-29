@@ -88,6 +88,25 @@ def test_build_hgb_from_exact_fit_spec() -> None:
     assert model.l2_regularization == 2.5
 
 
+def test_build_hgb_supports_log_target_transform() -> None:
+    spec = ModelFitSpec(
+        model_name="hist_gradient_boosting",
+        parameters={
+            "learning_rate": 0.07,
+            "max_iter": 275,
+            "max_leaf_nodes": 47,
+            "l2_regularization": 2.5,
+        },
+        recency_half_life_months=36,
+        target_transform="log",
+    )
+
+    pipeline = build_estimator(spec, FEATURE_COLUMNS, seed=42)
+
+    assert pipeline.named_steps["model"].regressor.max_iter == 275
+    assert spec.snapshot()["target_transform"] == "log"
+
+
 def test_build_rf_from_exact_fit_spec() -> None:
     spec = ModelFitSpec(
         model_name="random_forest",

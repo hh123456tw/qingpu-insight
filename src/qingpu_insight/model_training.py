@@ -6,7 +6,7 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator
-from sklearn.compose import ColumnTransformer
+from sklearn.compose import ColumnTransformer, TransformedTargetRegressor
 from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import Ridge
@@ -215,12 +215,14 @@ class ModelFitSpec:
     model_name: Literal["random_forest", "hist_gradient_boosting"]
     parameters: dict[str, int | float]
     recency_half_life_months: int | None
+    target_transform: Literal["identity", "log"] = "identity"
 
     def snapshot(self) -> dict[str, object]:
         return {
             "model_name": self.model_name,
             "parameters": dict(self.parameters),
             "recency_half_life_months": self.recency_half_life_months,
+            "target_transform": self.target_transform,
         }
 
 
@@ -265,10 +267,20 @@ def build_estimator(
         "l2_regularization": spec.parameters["l2_regularization"],
         "random_state": seed,
     }
+    model: Any = HistGradientBoostingRegressor(**hgb_params)
+    if spec.target_transform == "log":
+        model = TransformedTargetRegressor(
+            regressor=model,
+            func=np.log,
+            inverse_func=np.exp,
+            check_inverse=False,
+        )
+    elif spec.target_transform != "identity":
+        raise ValueError(f"unknown target transform: {spec.target_transform}")
     return Pipeline(
         [
             ("features", preprocessor),
-            ("model", HistGradientBoostingRegressor(**hgb_params)),
+            ("model", model),
         ]
     )
 
@@ -495,6 +507,26 @@ def candidate_estimators(
                         max_leaf_nodes=31,
                         l2_regularization=1.0,
                         random_state=seed,
+                    ),
+                ),
+            ]
+        ),
+        "hist_gradient_boosting_log": Pipeline(
+            [
+                ("features", make_preprocessor(feature_columns)),
+                (
+                    "model",
+                    TransformedTargetRegressor(
+                        regressor=HistGradientBoostingRegressor(
+                            learning_rate=profile.hgb_learning_rate,
+                            max_iter=profile.hgb_max_iter,
+                            max_leaf_nodes=31,
+                            l2_regularization=1.0,
+                            random_state=seed,
+                        ),
+                        func=np.log,
+                        inverse_func=np.exp,
+                        check_inverse=False,
                     ),
                 ),
             ]

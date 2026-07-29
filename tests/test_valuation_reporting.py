@@ -260,6 +260,16 @@ def test_model_card_with_profile_uses_exact_half_life(
     assert "24 個月" not in text
 
 
+def test_model_card_explains_log_target_candidate(
+    tmp_path, trained_bundle, experiment, leakage
+):
+    path = write_model_card(trained_bundle, experiment, leakage, tmp_path)
+
+    text = path.read_text(encoding="utf-8")
+    assert "HGB（對數價格）" in text
+    assert "驗證與跨年度回測" in text
+
+
 def test_write_evaluation_with_automl_info(tmp_path, trained_bundle, experiment):
     import json
     from dataclasses import replace

@@ -258,7 +258,26 @@ def test_evaluate_candidate_returns_evaluation(model_frame):
 
 def test_candidate_inventory_contains_required_models():
     estimators = candidate_estimators(seed=42)
-    assert set(estimators) == {"ridge", "random_forest", "hist_gradient_boosting"}
+    assert set(estimators) == {
+        "ridge",
+        "random_forest",
+        "hist_gradient_boosting",
+        "hist_gradient_boosting_log",
+    }
+
+
+def test_log_target_candidate_predicts_original_price_units(model_frame):
+    split = split_by_time(model_frame)
+    estimator = candidate_estimators(seed=42)["hist_gradient_boosting_log"]
+
+    result = evaluate_candidate(
+        "hist_gradient_boosting_log",
+        estimator,
+        split.train,
+        split.test,
+    )
+
+    assert 1_000 < result.overall_mae < 1_000_000
 
 
 def test_preprocessor_keeps_intentionally_empty_presale_age(model_frame):
@@ -540,11 +559,14 @@ def test_candidate_estimators_use_profile_parameters() -> None:
     forest = estimators["random_forest"].named_steps["model"]
     assert hgb.learning_rate == 0.03
     assert hgb.max_iter == 444
+    log_hgb = estimators["hist_gradient_boosting_log"].named_steps["model"].regressor
+    assert log_hgb.learning_rate == 0.03
+    assert log_hgb.max_iter == 444
     assert forest.n_estimators == 555
     assert len({
         id(pipeline.named_steps["features"])
         for pipeline in estimators.values()
-    }) == 3
+    }) == 4
 
 
 def test_evaluate_candidate_uses_requested_half_life(
