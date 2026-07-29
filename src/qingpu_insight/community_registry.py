@@ -96,18 +96,8 @@ def _validate(data: pd.DataFrame) -> None:
         y_raw = row.get("twd97_y")
         if pd.isna(x_raw) and pd.isna(y_raw):
             continue
-        has_x = not pd.isna(x_raw)
-        has_y = not pd.isna(y_raw)
-        if has_x and not isinstance(x_raw, (int, float)):
-            raise ValueError(
-                f"Non-numeric coordinates for {row['community_id']}: ({x_raw}, {y_raw})"
-            )
-        if has_y and not isinstance(y_raw, (int, float)):
-            raise ValueError(
-                f"Non-numeric coordinates for {row['community_id']}: ({x_raw}, {y_raw})"
-            )
-        x = float(x_raw) if has_x else float("nan")
-        y = float(y_raw) if has_y else float("nan")
+        x = float(x_raw) if not pd.isna(x_raw) else float("nan")
+        y = float(y_raw) if not pd.isna(y_raw) else float("nan")
         if not (math.isfinite(x) and math.isfinite(y)):
             raise ValueError(
                 f"Non-finite coordinates for {row['community_id']}: ({x}, {y})"

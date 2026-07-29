@@ -292,6 +292,47 @@ def test_match_by_coordinate_unknown_when_far(tmp_path: Path) -> None:
     assert result.community_id is None
 
 
+def test_match_transaction_by_coordinate_within_radius(tmp_path: Path) -> None:
+    csv = tmp_path / "coords_match.csv"
+    _write_csv(csv,
+        "community_id,canonical_name,aliases,station_code,address_patterns,"
+        "twd97_x,twd97_y,completion_year,source_notes\r\n"
+        "a,社區A,,A17,road1,275000.0,2765000.0,2020,verified\r\n"
+        "b,社區B,,A18,road2,276000.0,2766000.0,2021,verified\r\n"
+        "c,社區C,,A19,road3,277000.0,2767000.0,2022,verified\r\n"
+        "d,社區D,,A17,road4,278000.0,2768000.0,2023,verified\r\n"
+        "e,社區E,,A18,road5,279000.0,2769000.0,2024,verified\r\n"
+        "f,社區F,,A19,road6,280000.0,2770000.0,2025,verified\r\n"
+        "g,社區G,,A17,road7,281000.0,2771000.0,2020,verified\r\n"
+        "h,社區H,,A18,road8,282000.0,2772000.0,2021,verified\r\n"
+        "i,社區I,,A19,road9,283000.0,2773000.0,2022,verified\r\n"
+        "j,社區J,,A17,road10,284000.0,2774000.0,2023,verified\r\n"
+        "k,社區K,,A18,road11,285000.0,2775000.0,2024,verified\r\n"
+        "l,社區L,,A19,road12,286000.0,2776000.0,2025,verified\r\n"
+        "m,社區M,,A17,road13,287000.0,2777000.0,2020,verified\r\n"
+        "n,社區N,,A18,road14,288000.0,2778000.0,2021,verified\r\n"
+        "o,社區O,,A19,road15,289000.0,2779000.0,2022,verified\r\n"
+        "p,社區P,,A17,road16,290000.0,2780000.0,2023,verified\r\n"
+        "q,社區Q,,A18,road17,291000.0,2781000.0,2024,verified\r\n"
+        "r,社區R,,A19,road18,292000.0,2782000.0,2025,verified\r\n"
+        "s,社區S,,A17,road19,293000.0,2783000.0,2020,verified\r\n"
+        "t,社區T,,A18,road20,294000.0,2784000.0,2021,verified\r\n"
+    )
+    r = CommunityRegistry.from_csv(csv)
+    result = r.match_transaction(
+        twd97_x=275100.0, twd97_y=2765100.0, completion_year=2020,
+    )
+    assert result.method == "coordinate"
+    assert result.confidence == "medium"
+    assert result.community_id == "a"
+    result = r.match_transaction(
+        twd97_x=100.0, twd97_y=100.0, completion_year=2020,
+    )
+    assert result.method == "unknown"
+    assert result.confidence == "none"
+    assert result.community_id is None
+
+
 # ── Matching: unknown ─────────────────────────────────────
 
 
