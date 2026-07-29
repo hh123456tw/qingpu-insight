@@ -421,6 +421,10 @@ NUMERIC_FEATURES = [
     "transaction_month_index",
     "twd97_x",
     "twd97_y",
+    "common_area_ratio",
+    "community_prior_count_24m",
+    "community_prior_median_twd_per_ping_24m",
+    "community_premium_vs_station_24m",
 ]
 CATEGORICAL_FEATURES = [
     "station_code",
@@ -430,6 +434,8 @@ CATEGORICAL_FEATURES = [
     "area_band",
     "floor_band",
     "location_known",
+    "community_known",
+    "has_management",
 ]
 
 

@@ -11,8 +11,9 @@ from qingpu_insight.market_cleaning import (
     MARKET_TRANSACTION_SUBJECTS,
     SPECIAL_RELATIONSHIP_PATTERN,
 )
-from qingpu_insight.model_features import BASE_FEATURE_COLUMNS, FEATURE_COLUMNS
+from qingpu_insight.model_features import BASE_FEATURE_COLUMNS, FEATURE_COLUMNS, RESALE_FEATURE_SETS
 from qingpu_insight.model_training import (
+    CandidateEvaluation,
     ModelFitSpec,
     RecentMedianBaseline,
     TimeSplit,
@@ -42,6 +43,91 @@ ABLATIONS = {
     "without_area_band": ("area_band",),
     "without_floor_band": ("floor_band",),
 }
+
+
+@dataclass(frozen=True)
+class SharedFeatureExperimentResult:
+    calibration_experiments: tuple[FeatureExperiment, ...]
+    locked_feature_set_name: str
+    locked_feature_columns: tuple[str, ...]
+    selection_reason: str
+
+
+_RESALE_LOCKABLE = frozenset(
+    {"baseline_v3", "common_area", "community", "common_area_community"}
+)
+
+
+def run_shared_feature_experiments(split: TimeSplit) -> SharedFeatureExperimentResult:
+    experiments: list[FeatureExperiment] = []
+
+    for name, feature_columns in RESALE_FEATURE_SETS.items():
+        all_candidates = candidate_estimators(feature_columns=feature_columns)
+        candidate_results: list[CandidateEvaluation] = []
+        candidate_errors: dict[str, str] = {}
+
+        for model_name, est in all_candidates.items():
+            try:
+                result = evaluate_candidate(
+                    model_name,
+                    est,
+                    split.train,
+                    split.calibration,
+                    feature_columns=feature_columns,
+                )
+                candidate_results.append(result)
+            except Exception:
+                candidate_errors[model_name] = "candidate_failed"
+
+        if candidate_results:
+            best = min(candidate_results, key=lambda r: r.overall_mae)
+            experiments.append(
+                FeatureExperiment(
+                    name=name,
+                    feature_columns=feature_columns,
+                    selected_model=best.name,
+                    metrics=best.metrics.to_dict(orient="index"),
+                    candidate_errors=candidate_errors,
+                )
+            )
+        else:
+            experiments.append(
+                FeatureExperiment(
+                    name=name,
+                    feature_columns=feature_columns,
+                    selected_model=None,
+                    metrics={},
+                    candidate_errors=candidate_errors,
+                )
+            )
+
+    lockable = [
+        e for e in experiments if e.name in _RESALE_LOCKABLE and e.selected_model is not None
+    ]
+    if not lockable:
+        raise ValueError("no lockable feature set experiment completed")
+
+    def _sort_key(e: FeatureExperiment) -> tuple:
+        overall = e.metrics.get("overall", {})
+        mae = overall.get("mae", float("inf"))
+        mape = overall.get("mape", float("inf"))
+        n_features = len(e.feature_columns)
+        return (mae, mape, n_features)
+
+    best = min(lockable, key=_sort_key)
+    best_mae = best.metrics.get("overall", {}).get("mae", float("inf"))
+    best_mape = best.metrics.get("overall", {}).get("mape", float("inf"))
+    selection_reason = (
+        f"locked {best.name} (MAE={best_mae:.1f}, MAPE={best_mape:.2f}, "
+        f"features={len(best.feature_columns)})"
+    )
+
+    return SharedFeatureExperimentResult(
+        calibration_experiments=tuple(experiments),
+        locked_feature_set_name=best.name,
+        locked_feature_columns=best.feature_columns,
+        selection_reason=selection_reason,
+    )
 
 
 def run_feature_experiments(split: TimeSplit) -> tuple[FeatureExperiment, ...]:
