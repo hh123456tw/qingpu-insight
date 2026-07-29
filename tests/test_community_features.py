@@ -230,6 +230,9 @@ class TestCommunityFeatureSnapshot:
         values = snapshot["comm_a"]
         assert values.prior_count_24m == 5
         assert values.prior_median_twd_per_ping_24m == 320000.0
+        pre_cutoff = frame[frame["transaction_date"] <= pd.Timestamp("2024-06-01")]
+        pre_cutoff_comm_a = pre_cutoff[pre_cutoff["community_known"] == "comm_a"]
+        assert len(pre_cutoff_comm_a) == values.prior_count_24m
 
     def test_omits_unreliable_values(self):
         """When count < 5, median and premium are None."""

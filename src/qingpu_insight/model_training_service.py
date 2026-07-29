@@ -44,6 +44,7 @@ from qingpu_insight.model_artifacts import (
 from qingpu_insight.model_features import (
     BASE_FEATURE_COLUMNS,
     COMMUNITY_FEATURE_COLUMNS,
+    FEATURE_COLUMNS,
     build_model_frame,
 )
 from qingpu_insight.model_training import (
@@ -335,6 +336,9 @@ class ModelTrainingService:
         baseline_metrics: dict[str, object],
         backtests: list[dict[str, object]],
         has_shared_features: bool,
+        test_coverage: float | None = None,
+        validation_evidence: dict[str, object] | None = None,
+        registry_version: str | None = None,
     ) -> dict[str, bool]:
         checks: dict[str, bool] = {}
         if not has_shared_features:
@@ -351,19 +355,46 @@ class ModelTrainingService:
         )
         stations_ok = all(
             candidate_metrics.get(f"station:{s}", {}).get("mape", float("inf"))
-            <= baseline_metrics.get(f"station:{s}", {}).get("mape", float("-inf")) + 1.0
+            <= baseline_metrics.get(f"station:{s}", {}).get("mape", float("inf")) + 1.0
             for s in ("A17", "A18", "A19")
         )
         backtests_ok = len(backtests) >= 2 and sum(
             1 for bt in backtests if bt.get("passed")
         ) >= 2
 
-        passed = all((overall_mae_improved_2pct, mape_not_worsened, stations_ok, backtests_ok))
+        pi_coverage_ok = test_coverage is None or test_coverage >= 0.90
+
+        validation_ok = True
+        if validation_evidence is not None:
+            labeled_pages = validation_evidence.get("labeled_pages", 0)
+            validation_ok = labeled_pages >= 20
+            parsing_success = validation_evidence.get("public_area_parsing_success", 0.0)
+            validation_ok = validation_ok and parsing_success >= 0.70
+            community_recognition = validation_evidence.get("known_community_recognition", 0.0)
+            validation_ok = validation_ok and community_recognition >= 0.80
+            if registry_version is not None:
+                evidence_digest = validation_evidence.get("registry_digest")
+                if (evidence_digest is not None and registry_version is not None
+                        and evidence_digest != registry_version):
+                    validation_ok = False
+        else:
+            validation_ok = False
+
+        passed = all((
+            overall_mae_improved_2pct,
+            mape_not_worsened,
+            stations_ok,
+            backtests_ok,
+            pi_coverage_ok,
+            validation_ok,
+        ))
 
         checks["shared_mae_improved_2pct"] = overall_mae_improved_2pct
         checks["shared_mape_not_worsened"] = mape_not_worsened
         checks["shared_stations_within_limit"] = stations_ok
         checks["shared_backtests_passed"] = backtests_ok
+        checks["shared_pi_coverage_ok"] = pi_coverage_ok
+        checks["shared_validation_ok"] = validation_ok
         checks["shared_feature_gate_passed"] = passed
         return checks
 
@@ -388,7 +419,8 @@ class ModelTrainingService:
         automl_info: dict[str, object] | None = None,
         fit_spec: ModelFitSpec | None = None,
         feature_contract_version: int = 0,
-        registry: CommunityRegistry | None = None,
+        fallback_profiles: tuple | None = None,
+        validation_evidence: dict[str, object] | None = None,
     ) -> MarketTrainingResult:
         diagnostics = diagnostics or {}
         analysis_experiments = analysis_experiments or []
@@ -445,6 +477,13 @@ class ModelTrainingService:
         except Exception as exc:
             raise ModelTrainingError("candidate_write_failed", str(exc)) from exc
 
+        interval_summary = compute_interval_summary(
+            bundle,
+            experiment.final_test_results[model_name],
+            split,
+        )
+        test_coverage = interval_summary["test_coverage"]
+
         serialized_backtests: list[dict[str, object]] = []
         release_checks: dict[str, bool] = {}
         if is_resale:
@@ -491,8 +530,126 @@ class ModelTrainingService:
                     baseline_metrics,
                     serialized_backtests,
                     has_shared,
+                    test_coverage=test_coverage,
+                    validation_evidence=validation_evidence,
+                    registry_version=seed_bundle.community_registry_version,
                 )
                 release_checks.update(shared_checks)
+
+                shared_gate_passed = shared_checks.get("shared_feature_gate_passed", True)
+                if (is_resale and has_shared and not shared_gate_passed
+                        and fallback_profiles is not None):
+                    from qingpu_insight.model_training import run_tuned_model_experiment
+
+                    fallback_exp = run_tuned_model_experiment(
+                        split,
+                        profiles=fallback_profiles,
+                        feature_columns=FEATURE_COLUMNS,
+                        use_recency_weights=True,
+                        baseline_months=12,
+                    )
+
+                    model_name = fallback_exp.selected_model
+                    locked_eval = fallback_exp.selected_evaluation
+                    enhanced_features = FEATURE_COLUMNS
+                    feature_contract_version = 3
+                    release_checks["shared_feature_fallback"] = True
+                    release_checks["shared_feature_fallback_reason"] = (
+                        "shared_feature_gate_failed_fallback_to_baseline_v3"
+                    )
+
+                    fallback_bundle = ValuationBundle(
+                        transaction_type=market,
+                        model_name="",
+                        model_version="",
+                        pipeline=None,
+                        interval_abs_residual_twd_per_ping=0,
+                        feature_ranges={},
+                        feature_hard_ranges={},
+                        feature_medians={},
+                        global_importance=[],
+                        reference_rows=pd.DataFrame(),
+                        data_min_date=str(split.train["transaction_date"].min().date()),
+                        data_max_date=str(split.train["transaction_date"].max().date()),
+                        metrics={},
+                        feature_columns=enhanced_features,
+                        community_registry_version=seed_bundle.community_registry_version,
+                        community_registry_rows=seed_bundle.community_registry_rows,
+                        community_feature_snapshot=seed_bundle.community_feature_snapshot,
+                    )
+
+                    reporting_metrics = (
+                        fallback_exp.final_test_results[model_name].metrics.to_dict(orient="index")
+                    )
+                    new_artifact_path = train_artifact(
+                        market,
+                        locked_eval,
+                        split,
+                        fallback_bundle,
+                        stage,
+                        feature_columns=enhanced_features,
+                        training_frame=model_frame,
+                        use_recency_weights=True,
+                        recency_half_life_months=recency_half_life_months,
+                        reporting_metrics=reporting_metrics,
+                        reporting_diagnostics=diagnostics,
+                    )
+                    bundle = joblib.load(new_artifact_path)
+                    bundle.community_registry_version = seed_bundle.community_registry_version
+                    bundle.community_registry_rows = seed_bundle.community_registry_rows
+                    bundle.community_feature_snapshot = seed_bundle.community_feature_snapshot
+                    shared_exp = None
+                    if analysis_experiments:
+                        for exp in analysis_experiments:
+                            if (
+                                isinstance(exp, dict)
+                                and exp.get("name") == "shared_feature_experiment"
+                            ):
+                                shared_exp = exp
+                                break
+                    bundle.shared_feature_experiment = shared_exp
+                    joblib.dump(bundle, new_artifact_path)
+
+                    raw_backtests = run_annual_backtests(
+                        model_frame,
+                        model_name,
+                        enhanced_features,
+                        fit_spec=fit_spec,
+                    )
+                    serialized_backtests = []
+                    for bt in raw_backtests:
+                        bt_copy = dict(bt)
+                        for key in (
+                            "cutoff_date",
+                            "train_max_date",
+                            "test_min_date",
+                            "source_max_date",
+                        ):
+                            if key in bt_copy and isinstance(bt_copy[key], pd.Timestamp):
+                                bt_copy[key] = str(bt_copy[key].date())
+                        serialized_backtests.append(bt_copy)
+
+                    baseline_metrics = (
+                        fallback_exp.final_test_results["baseline"].metrics.to_dict(orient="index")
+                    )
+                    candidate_metrics = (
+                        fallback_exp.final_test_results[model_name].metrics.to_dict(orient="index")
+                    )
+                    release_checks = evaluate_release_checks(
+                        candidate_metrics,
+                        baseline_metrics,
+                        serialized_backtests,
+                        data_max_ts,
+                        latest_official_ts,
+                    )
+                    artifact_path = new_artifact_path
+                    experiment = fallback_exp
+                    interval_summary = compute_interval_summary(
+                        bundle,
+                        experiment.final_test_results[model_name],
+                        split,
+                    )
+                    test_coverage = interval_summary["test_coverage"]
             except Exception as exc:
                 raise ModelTrainingError("candidate_write_failed", str(exc)) from exc
 
@@ -749,7 +906,7 @@ class ModelTrainingService:
             selected_profile=selected_profile_obj,
             profile_results=profile_results,
             feature_contract_version=feature_contract_ver,
-            registry=registry,
+            fallback_profiles=plan.profiles if is_resale and has_shared_features else None,
         )
 
     def _execute_automl_market(
@@ -969,7 +1126,6 @@ class ModelTrainingService:
                 },
                 fit_spec=trial.fit_spec,
                 feature_contract_version=fcv,
-                registry=registry,
             )
             if not result.recommended:
                 release_blockers.extend(result.reason_codes)
