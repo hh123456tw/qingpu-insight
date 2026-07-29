@@ -3094,6 +3094,7 @@ class TestModelAdminPage:
         assert "job_polling.js" in html
         assert "models_admin.js" in html
         assert "查看詳細數據" in html
+        assert "誤差診斷（前 20 筆）" in html
         assert "平均每坪估錯多少元" in html
         assert "重要特徵（前五項）" in html
         assert "renderTrainingDetail(detailRun, true)" in html

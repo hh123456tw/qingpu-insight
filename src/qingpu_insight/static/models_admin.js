@@ -167,6 +167,46 @@
     return labels[status] || status || "—";
   }
 
+  function formatUnitPrice(value) {
+    var number = Number(value);
+    if (!Number.isFinite(number)) return "—";
+    var wan = number / 10000;
+    return (Number.isInteger(wan) ? wan.toFixed(0) : wan.toFixed(1)) + " 萬／坪";
+  }
+
+  function buildOfficialReportView(report) {
+    report = report || {};
+    var splitLabels = {
+      final_test: "最終測試集",
+      selection: "候選選擇集",
+      legacy_unknown: "舊版指標（來源未記錄）",
+    };
+    var diagnostics = report.diagnostics || {};
+    var residuals = Array.isArray(diagnostics.top_residuals)
+      ? diagnostics.top_residuals.slice(0, 20)
+      : [];
+    return {
+      splitLabel: splitLabels[report.evaluation_split] || "評估資料",
+      testCount: report.test_count == null ? "—" : String(report.test_count),
+      residualRows: residuals.map(function (row) {
+        return {
+          date: row.transaction_date || "—",
+          station: row.station_code || "—",
+          road: row.road_key || "—",
+          actual: formatUnitPrice(row.actual_twd_per_ping),
+          predicted: formatUnitPrice(row.predicted_twd_per_ping),
+          error: formatUnitPrice(row.absolute_error_twd_per_ping),
+          percentageError:
+            row.absolute_percentage_error == null
+              ? "—"
+              : Number(row.absolute_percentage_error).toFixed(1) + "%",
+          flags: Array.isArray(row.flags) ? row.flags.join("、") : "",
+        };
+      }),
+      dataQuality: diagnostics.data_quality || {},
+    };
+  }
+
   function buildReleasePreviewPayload(action, market, id) {
     if (action === "publish") {
       return { action: action, market: market, run_id: id };
@@ -578,6 +618,7 @@
     formatDatetime: formatDatetime,
     marketLabel: marketLabel,
     statusLabel: statusLabel,
+    buildOfficialReportView: buildOfficialReportView,
     buildReleasePreviewPayload: buildReleasePreviewPayload,
     canConfirmDangerousAction: canConfirmDangerousAction,
     submitTraining: submitTraining,

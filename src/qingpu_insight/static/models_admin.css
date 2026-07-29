@@ -103,3 +103,35 @@
   color: var(--muted);
   font-size: 0.8rem;
 }
+
+.official-residual-report {
+  margin-top: 0.8rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.55rem;
+}
+
+.official-residual-report > summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.official-residual-table-wrap {
+  margin-top: 0.55rem;
+  overflow-x: auto;
+}
+
+.official-residual-table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.official-residual-table th,
+.official-residual-table td {
+  padding: 0.35rem;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  white-space: nowrap;
+}

@@ -203,18 +203,20 @@
       function appendOfficialReport(card, model) {
         var report = model && model.report;
         if (!report) return;
+        var reportView = ma.buildOfficialReportView(report);
 
         var details = document.createElement("details");
         details.className = "official-model-report";
         var summary = document.createElement("summary");
-        summary.textContent = "查看詳細數據";
+        summary.textContent = "查看詳細數據（" + reportView.splitLabel + "）";
         details.appendChild(summary);
 
         var meta = document.createElement("div");
         meta.className = "official-report-meta";
         var metaLines = [
+          "評估資料：" + reportView.splitLabel,
           "資料期間：" + (report.data_min_date || "—") + " ～ " + (report.data_max_date || "—"),
-          "測試筆數：" + (report.test_count == null ? "—" : report.test_count),
+          "測試筆數：" + reportView.testCount,
           "發布狀態：目前正式使用中",
           "發布時間：" + (model.activated_at ? ma.formatDatetime(model.activated_at) : "—"),
           "來源訓練 ID：" + (model.source_run_id || "—"),
@@ -291,6 +293,57 @@
           });
         }
         details.appendChild(featureList);
+
+        var residualDetails = document.createElement("details");
+        residualDetails.className = "official-residual-report";
+        var residualSummary = document.createElement("summary");
+        residualSummary.textContent = "誤差診斷（前 20 筆）";
+        residualDetails.appendChild(residualSummary);
+        if (reportView.residualRows.length === 0) {
+          var emptyResidual = document.createElement("p");
+          emptyResidual.className = "ma-empty";
+          emptyResidual.textContent = "這個模型版本沒有保存逐筆誤差診斷。";
+          residualDetails.appendChild(emptyResidual);
+        } else {
+          var residualWrap = document.createElement("div");
+          residualWrap.className = "official-residual-table-wrap";
+          var residualTable = document.createElement("table");
+          residualTable.className = "official-residual-table";
+          var residualHead = document.createElement("thead");
+          var headRow = document.createElement("tr");
+          ["日期", "生活圈", "路段", "實際", "預測", "絕對誤差", "APE", "旗標"].forEach(
+            function (label) {
+              var header = document.createElement("th");
+              header.textContent = label;
+              headRow.appendChild(header);
+            }
+          );
+          residualHead.appendChild(headRow);
+          residualTable.appendChild(residualHead);
+          var residualBody = document.createElement("tbody");
+          reportView.residualRows.forEach(function (item) {
+            var row = document.createElement("tr");
+            [
+              item.date,
+              item.station,
+              item.road,
+              item.actual,
+              item.predicted,
+              item.error,
+              item.percentageError,
+              item.flags || "—",
+            ].forEach(function (text) {
+              var cell = document.createElement("td");
+              cell.textContent = text;
+              row.appendChild(cell);
+            });
+            residualBody.appendChild(row);
+          });
+          residualTable.appendChild(residualBody);
+          residualWrap.appendChild(residualTable);
+          residualDetails.appendChild(residualWrap);
+        }
+        details.appendChild(residualDetails);
 
         var limitation = document.createElement("p");
         limitation.className = "official-report-limitation";

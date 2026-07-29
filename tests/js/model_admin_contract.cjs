@@ -93,6 +93,28 @@ assert.equal(admin.marketLabel("presale"), "預售屋");
 assert.equal(admin.statusLabel("succeeded"), "成功");
 assert.equal(admin.statusLabel("interrupted"), "已中斷");
 
+var officialReport = admin.buildOfficialReportView({
+  evaluation_split: "final_test",
+  test_count: 630,
+  diagnostics: {
+    top_residuals: [{
+      transaction_date: "2026-05-01",
+      station_code: "A18",
+      road_key: "青商路",
+      actual_twd_per_ping: 600000,
+      predicted_twd_per_ping: 480000,
+      absolute_error_twd_per_ping: 120000,
+      absolute_percentage_error: 20,
+      flags: ["高價尾端"],
+    }],
+  },
+});
+assert.equal(officialReport.splitLabel, "最終測試集");
+assert.equal(officialReport.residualRows[0].actual, "60 萬／坪");
+assert.equal(officialReport.residualRows[0].predicted, "48 萬／坪");
+assert.equal(officialReport.residualRows[0].error, "12 萬／坪");
+assert.equal(officialReport.residualRows[0].percentageError, "20.0%");
+
 // Custom tuning fixtures
 var custom = {
   hgb_learning_rate: "0.05",
