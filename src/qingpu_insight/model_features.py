@@ -33,6 +33,29 @@ DERIVED_FEATURE_COLUMNS = (
     "location_known",
 )
 FEATURE_COLUMNS = BASE_FEATURE_COLUMNS + DERIVED_FEATURE_COLUMNS
+COMMON_AREA_FEATURE_COLUMNS = ("common_area_ratio",)
+MANAGEMENT_FEATURE_COLUMNS = ("has_management",)
+COMMUNITY_FEATURE_COLUMNS = (
+    "community_known",
+    "community_prior_count_24m",
+    "community_prior_median_twd_per_ping_24m",
+    "community_premium_vs_station_24m",
+)
+
+RESALE_FEATURE_SETS = {
+    "baseline_v3": FEATURE_COLUMNS,
+    "common_area": FEATURE_COLUMNS + COMMON_AREA_FEATURE_COLUMNS,
+    "community": FEATURE_COLUMNS + COMMUNITY_FEATURE_COLUMNS,
+    "common_area_community": (
+        FEATURE_COLUMNS + COMMON_AREA_FEATURE_COLUMNS + COMMUNITY_FEATURE_COLUMNS
+    ),
+    "common_area_community_management": (
+        FEATURE_COLUMNS
+        + COMMON_AREA_FEATURE_COLUMNS
+        + COMMUNITY_FEATURE_COLUMNS
+        + MANAGEMENT_FEATURE_COLUMNS
+    ),
+}
 
 _CHINESE_DIGITS = {
     "一": 1,

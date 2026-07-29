@@ -6,8 +6,12 @@ import pandas as pd
 import pytest
 
 from qingpu_insight.model_features import (
+    COMMON_AREA_FEATURE_COLUMNS,
+    COMMUNITY_FEATURE_COLUMNS,
     FEATURE_COLUMNS,
+    MANAGEMENT_FEATURE_COLUMNS,
     PARKING_FEATURE_COLUMNS,
+    RESALE_FEATURE_SETS,
     ValuationInput,
     add_derived_features,
     build_model_frame,
@@ -232,3 +236,88 @@ def test_derived_feature_boundaries_and_missing_values():
     assert result["building_age_band"].tolist() == ["0_5", "5_10", "20_plus", "missing"]
     assert result["area_band"].tolist() == ["small", "standard", "standard", "large"]
     assert result["floor_band"].tolist() == ["low", "middle", "middle", "unknown"]
+
+
+_BASELINE_COLUMNS = (
+    "station_code",
+    "station_distance_m",
+    "building_area_ping",
+    "building_type",
+    "bedrooms",
+    "living_rooms",
+    "bathrooms",
+    "building_age_years",
+    "floor",
+    "total_floors",
+    "floor_ratio",
+    "transaction_year",
+    "transaction_month",
+    "transaction_month_index",
+    "station_building_type",
+    "building_age_band",
+    "area_band",
+    "floor_band",
+    "twd97_x",
+    "twd97_y",
+    "location_known",
+)
+
+
+def test_legacy_feature_columns_unchanged():
+    assert FEATURE_COLUMNS == _BASELINE_COLUMNS
+
+
+def test_resale_feature_sets_baseline_equals_feature_columns():
+    assert RESALE_FEATURE_SETS["baseline_v3"] is FEATURE_COLUMNS
+
+
+def test_resale_feature_sets_keys():
+    assert set(RESALE_FEATURE_SETS.keys()) == {
+        "baseline_v3",
+        "common_area",
+        "community",
+        "common_area_community",
+        "common_area_community_management",
+    }
+
+
+def test_resale_feature_sets_extend_baseline():
+    for name in RESALE_FEATURE_SETS:
+        for col in _BASELINE_COLUMNS:
+            assert col in RESALE_FEATURE_SETS[name], f"{name} missing {col}"
+
+
+def test_common_area_column_in_sets():
+    assert "common_area_ratio" in RESALE_FEATURE_SETS["common_area"]
+    assert "common_area_ratio" in RESALE_FEATURE_SETS["common_area_community"]
+    assert "common_area_ratio" in RESALE_FEATURE_SETS["common_area_community_management"]
+    assert "common_area_ratio" not in RESALE_FEATURE_SETS["baseline_v3"]
+    assert "common_area_ratio" not in RESALE_FEATURE_SETS["community"]
+
+
+def test_community_columns_in_sets():
+    for col in COMMUNITY_FEATURE_COLUMNS:
+        assert col in RESALE_FEATURE_SETS["community"]
+        assert col in RESALE_FEATURE_SETS["common_area_community"]
+        assert col in RESALE_FEATURE_SETS["common_area_community_management"]
+        assert col not in RESALE_FEATURE_SETS["baseline_v3"]
+        assert col not in RESALE_FEATURE_SETS["common_area"]
+
+
+def test_management_column_in_sets():
+    assert "has_management" in RESALE_FEATURE_SETS["common_area_community_management"]
+    assert "has_management" not in RESALE_FEATURE_SETS["baseline_v3"]
+
+
+def test_community_feature_columns_constants_match():
+    assert COMMUNITY_FEATURE_COLUMNS == (
+        "community_known",
+        "community_prior_count_24m",
+        "community_prior_median_twd_per_ping_24m",
+        "community_premium_vs_station_24m",
+    )
+
+
+def test_common_area_and_management_constants():
+    assert COMMON_AREA_FEATURE_COLUMNS == ("common_area_ratio",)
+    assert MANAGEMENT_FEATURE_COLUMNS == ("has_management",)
