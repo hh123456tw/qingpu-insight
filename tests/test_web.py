@@ -1273,6 +1273,16 @@ def test_post_valuation_rejects_presale_with_stable_error_code(valuation_client)
     }
 
 
+def test_post_valuation_rejects_incomplete_presale_with_stable_error_code(valuation_client):
+    response = valuation_client.post("/api/valuations", json={"transaction_type": "presale"})
+    assert response.status_code == 400
+    assert response.get_json()["error"] == {
+        "code": "presale_valuation_disabled",
+        "message": "目前已停止預售屋估價。",
+        "fields": {"transaction_type": "resale_only"},
+    }
+
+
 @pytest.fixture
 def valid_payload():
     return dict(VALID_RESALE_PAYLOAD)

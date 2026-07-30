@@ -478,6 +478,13 @@ def _json_default(obj: Any) -> Any:
 
 
 def parse_valuation_payload(payload: dict[str, Any]) -> ValuationInput:
+    transaction_type = str(payload.get("transaction_type", "resale"))
+    if transaction_type == "presale":
+        raise ApiInputError(
+            "目前已停止預售屋估價。",
+            {"transaction_type": "resale_only"},
+            code="presale_valuation_disabled",
+        )
     required = (
         "station_code",
         "building_area_ping",
@@ -492,13 +499,6 @@ def parse_valuation_payload(payload: dict[str, Any]) -> ValuationInput:
     missing = {name: "required" for name in required if payload.get(name) in (None, "")}
     if missing:
         raise ApiInputError("請完整填寫估價條件。", missing)
-    transaction_type = str(payload.get("transaction_type", "resale"))
-    if transaction_type == "presale":
-        raise ApiInputError(
-            "目前已停止預售屋估價。",
-            {"transaction_type": "resale_only"},
-            code="presale_valuation_disabled",
-        )
     parking_type = payload.get("parking_type", "")
     parking_area = float(payload.get("parking_area_ping", 0))
     if not parking_type:
