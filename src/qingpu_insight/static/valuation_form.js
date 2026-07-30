@@ -21,8 +21,15 @@
     return { disabled: disabled, normalizedArea: normalizedArea, valid: valid, message: message };
   }
 
+  function communitiesForStation(communities, stationCode) {
+    return (communities || []).filter(function(c) {
+      return c.station_code === stationCode;
+    });
+  }
+
   return {
     firstErrorControlId: firstErrorControlId,
     parkingState: parkingState,
+    communitiesForStation: communitiesForStation,
   };
 });
