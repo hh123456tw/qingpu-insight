@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import urllib.parse
@@ -1070,13 +1071,50 @@ def _create_model_training_service(root: Path) -> ModelTrainingService:
 
     job_repo = MySQLJobRepository(factory)
     job_service = JobService(job_repo)
-    source_version_provider = SourceVersionProvider(commit="unknown", dirty=False)
+    source_version_provider = _read_git_source_version(root)
     return ModelTrainingService(
         jobs=job_service,
         store=store,
         input_path=input_path,
         source_version_provider=source_version_provider,
     )
+
+
+def _read_git_source_version(root: Path) -> SourceVersionProvider:
+    """Read conservative source provenance without requiring a Git checkout."""
+    fallback = SourceVersionProvider(commit="unknown", dirty=True)
+    try:
+        commit_result = subprocess.run(
+            ["git", "rev-parse", "--verify", "HEAD"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return fallback
+
+    commit = commit_result.stdout.strip()
+    valid_commit = re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", commit)
+    if commit_result.returncode != 0 or valid_commit is None:
+        return fallback
+
+    try:
+        status_result = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=normal"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return SourceVersionProvider(commit=commit, dirty=True)
+
+    if status_result.returncode != 0:
+        return SourceVersionProvider(commit=commit, dirty=True)
+    return SourceVersionProvider(commit=commit, dirty=bool(status_result.stdout.strip()))
 
 
 # --- M4.3 ops helpers ---

@@ -6,7 +6,7 @@
 
 > 本工具僅供資料分析、課程展示與購屋研究，不構成正式不動產鑑價、投資建議或未來價格預測。
 
-> **公開產品範圍：只支援中古屋（`resale`）。** 預售屋（`presale`）底層官方資料仍保留作為資料沿革與研究素材，但不進入公開市場指標、估價、模型訓練、候選／正式模型發布或 591 物件入口。既有預售屋 artifact、候選與歷史對話不會被刪除。
+> **公開產品範圍：只支援中古屋（`resale`）。** 預售屋（`presale`）底層官方資料仍保留作為資料沿革與研究素材，但不進入公開市場指標、估價、模型訓練、候選／正式模型發布或 591 物件入口。既有預售屋正式 artifact 與 MySQL 歷史工作／對話資料仍保留；目前工作區沒有 legacy 本機 presale candidate／report 目錄，因此不宣稱保存不存在的本機目錄。
 
 ## 專案定位
 
@@ -364,7 +364,7 @@ Remove-Item Env:MYSQL_PWD
 | `candidates/<run_id>/reports/resale-evaluation.json` | model-train | 中古屋候選模型評估報告 |
 | `candidates/<run_id>/reports/resale-model-card.md` | model-train | 中古屋模型卡 |
 
-候選訓練需要可用的 `QINGPU_DATABASE_URL` 記錄管理工作狀態。既有預售屋 artifact、候選與報告只作為歷史資料保留，不會被新的訓練流程覆寫或發布。
+候選訓練需要可用的 `QINGPU_DATABASE_URL` 記錄管理工作狀態。既有預售屋正式 artifact 與 MySQL 歷史工作／對話資料只作為歷史資料保留，不會被新的訓練流程覆寫或發布；目前工作區沒有 legacy 本機 presale candidate／report 目錄可供保存。
 
 Web 操作頁支援三組固定調參設定（快速／平衡／精細）及選用自訂設定，
 自動在校準集比較各 profile 結果、鎖定最佳候選，並在測試集隔離驗證。

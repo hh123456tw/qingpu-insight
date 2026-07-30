@@ -9,6 +9,15 @@
   var _clickHandler = null;
   var _keydownHandler = null;
 
+  function isNewhouseUrl(url) {
+    if (!url || typeof url !== "string") return false;
+    try {
+      return new URL(url).hostname === "newhouse.591.com.tw";
+    } catch (e) {
+      return false;
+    }
+  }
+
   function validateUrl(url) {
     if (!url || typeof url !== "string") return false;
     try {
@@ -26,6 +35,16 @@
     } catch (e) {
       return false;
     }
+  }
+
+  function urlValidationMessage(url) {
+    if (isNewhouseUrl(url)) {
+      return "591 預售屋分析已停用，目前只支援中古屋";
+    }
+    if (!validateUrl(url)) {
+      return "不支援的網址，僅接受 591 中古屋詳細頁或 591.to 短網址";
+    }
+    return "";
   }
 
   function commandKey() {
@@ -232,8 +251,9 @@
       var url = urlInput.value.trim();
       var model = modelSelect.value;
 
-      if (!validateUrl(url)) {
-        renderStatus("不支援的網址，僅接受 591 中古屋詳細頁或 591.to 短網址", true);
+      var validationMessage = urlValidationMessage(url);
+      if (validationMessage) {
+        renderStatus(validationMessage, true);
         return;
       }
 
@@ -324,7 +344,9 @@
   }
 
   return {
+    isNewhouseUrl: isNewhouseUrl,
     validateUrl: validateUrl,
+    urlValidationMessage: urlValidationMessage,
     buildCreatePayload: buildCreatePayload,
     modelStatusText: modelStatusText,
     renderModelCatalog: renderModelCatalog,

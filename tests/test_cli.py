@@ -1650,6 +1650,57 @@ def test_model_train_cli_rejects_presale_choice(tmp_path, monkeypatch) -> None:
     assert fake.requests == []
 
 
+def test_read_git_source_version_reports_commit_and_dirty_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    commit = "a" * 40
+    results = iter(
+        [
+            SimpleNamespace(returncode=0, stdout=f"{commit}\n"),
+            SimpleNamespace(returncode=0, stdout=" M README.md\n"),
+        ]
+    )
+    monkeypatch.setattr(cli.subprocess, "run", lambda *args, **kwargs: next(results))
+
+    source = cli._read_git_source_version(tmp_path)
+
+    assert source.commit == commit
+    assert source.dirty is True
+
+
+def test_read_git_source_version_reports_clean_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    commit = "b" * 40
+    results = iter(
+        [
+            SimpleNamespace(returncode=0, stdout=f"{commit}\n"),
+            SimpleNamespace(returncode=0, stdout=""),
+        ]
+    )
+    monkeypatch.setattr(cli.subprocess, "run", lambda *args, **kwargs: next(results))
+
+    source = cli._read_git_source_version(tmp_path)
+
+    assert source.commit == commit
+    assert source.dirty is False
+
+
+def test_read_git_source_version_is_conservative_outside_git(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=128, stdout=""),
+    )
+
+    source = cli._read_git_source_version(tmp_path)
+
+    assert source.commit == "unknown"
+    assert source.dirty is True
+
+
 # --- M4.3 ops CLI tests ---
 
 

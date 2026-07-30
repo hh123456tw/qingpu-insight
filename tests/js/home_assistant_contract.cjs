@@ -77,6 +77,16 @@ assert.equal(ha.truncateConversationTitle("12345678901234567890123456789", 28), 
 
 // --- URL validation ---
 
+assert.equal(ha.isNewhouseUrl("https://newhouse.591.com.tw/456/detail"), true);
+assert.equal(ha.isNewhouseUrl("https://sale.591.com.tw/home/house/detail/2/123.html"), false);
+assert.equal(
+  ha.urlValidationMessage("https://newhouse.591.com.tw/456/detail"),
+  "591 預售屋分析已停用，目前只支援中古屋"
+);
+assert.equal(
+  ha.urlValidationMessage("https://rent.591.com.tw/home/house/detail/123"),
+  "不支援的網址，僅接受 591 中古屋詳細頁或 591.to 短網址"
+);
 assert.equal(ha.validateUrl(null), false);
 assert.equal(ha.validateUrl(""), false);
 assert.equal(ha.validateUrl("not-a-url"), false);
