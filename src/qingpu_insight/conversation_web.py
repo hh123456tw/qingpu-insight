@@ -97,6 +97,8 @@ def _message_to_json(
     msg: Any,
     conversation: Any,
     evidence_pack: Any | None = None,
+    *,
+    include_price_summary: bool = True,
 ) -> dict[str, Any]:
     citation_details = (
         project_citation_details(evidence_pack, msg.citations)
@@ -119,7 +121,7 @@ def _message_to_json(
         "citation_details": citation_details,
         "price_summary": (
             project_price_summary(evidence_pack)
-            if msg.role == "assistant" and evidence_pack is not None
+            if include_price_summary and msg.role == "assistant" and evidence_pack is not None
             else None
         ),
         "created_at": msg.created_at.isoformat(),
@@ -441,12 +443,19 @@ def create_conversation_blueprint(
             )
             for revision in revisions
         }
+        first_assistant_seq = min(
+            (m.sequence_no for m in messages if m.role == "assistant"),
+            default=None,
+        )
         return jsonify({
             "items": [
                 _message_to_json(
                     message,
                     conversation,
                     evidence_by_revision.get(message.evidence_revision),
+                    include_price_summary=(
+                        message.sequence_no == first_assistant_seq
+                    ),
                 )
                 for message in messages
             ],

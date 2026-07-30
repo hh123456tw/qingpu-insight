@@ -25,6 +25,7 @@ from qingpu_insight.jobs import (
     CONVERSATION_REPLY,
     JobService,
 )
+from qingpu_insight.conversation_validation import GroundingValidationError
 from qingpu_insight.ollama_report_provider import ProviderError
 
 logger = logging.getLogger(__name__)
@@ -440,23 +441,29 @@ class ConversationService:
             evidence_facts=facts,
             limitations=tuple(evidence_pack.limitations),
         )
-        execution = self._reply_executor.execute(
-            requested_model=conversation.default_model,
-            question="請根據現有證據，先提供精簡的物件分析。",
-            context=context,
-            available_fact_ids={fact.id for fact in facts},
-            evidence_revision=evidence_revision,
-        )
-        validated = execution.validated
+        rule_provider = self._provider_registry.get("rule")
+        try:
+            draft = rule_provider.reply(
+                model="rule",
+                question="請根據現有證據，先提供精簡的物件分析。",
+                context=context,
+            )
+            validated = self._validator(
+                draft,
+                available_fact_ids={fact.id for fact in facts},
+                evidence_revision=evidence_revision,
+            )
+        except GroundingValidationError:
+            return
         self._repository.append_message(
             conversation_id=conversation_id,
             role="assistant",
             content=validated.answer,
             evidence_revision=evidence_revision,
-            provider=execution.actual_provider,
-            model=execution.actual_model,
+            provider="rule",
+            model="rule",
             citations=list(validated.citations),
-            fallback_reason=execution.fallback_reason,
+            fallback_reason=None,
         )
 
     def _update_rolling_summary(

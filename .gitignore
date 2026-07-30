@@ -23,3 +23,4 @@ outputs/valuations/
 /instance/*.log
 /outputs/m45-admin-acceptance/
 /outputs/automl/
+.gstack/

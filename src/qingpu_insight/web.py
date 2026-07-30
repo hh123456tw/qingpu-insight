@@ -840,6 +840,38 @@ def _conversation_parking(
     return parking_type, area
 
 
+_STATION_WGS84: dict[str, tuple[float, float]] = {
+    "A17": (25.0223, 121.2373),
+    "A18": (25.0137, 121.2143),
+    "A19": (25.0011, 121.2046),
+}
+
+
+def _station_from_coords(
+    longitude: float, latitude: float
+) -> tuple[str, float]:
+    import math
+
+    best_station: str | None = None
+    best_distance = float("inf")
+    for code, (slat, slon) in _STATION_WGS84.items():
+        dlat = math.radians(latitude - slat)
+        dlon = math.radians(longitude - slon)
+        a = (
+            math.sin(dlat / 2) ** 2
+            + math.cos(math.radians(latitude)) * math.cos(math.radians(slat))
+            * math.sin(dlon / 2) ** 2
+        )
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        dist = 6_371_000 * c
+        if dist < best_distance:
+            best_distance = dist
+            best_station = code
+    if best_station is None:
+        raise ValueError("no station within range")
+    return best_station, round(best_distance, 1)
+
+
 def _conversation_valuation(
     data_source: MarketDataSource,
     registry: ModelRegistry,
@@ -848,21 +880,16 @@ def _conversation_valuation(
     transaction_type = "presale" if payload.get("listing_type") == "newhouse" else "resale"
     layout = _CONVERSATION_LAYOUT_RE.search(str(payload.get("layout") or ""))
     floor_match = _CONVERSATION_FLOOR_RE.search(str(payload.get("floor") or ""))
-    comparables = _conversation_market_comparables(data_source, payload)
-    nearest = next(
-        (
-            item
-            for item in comparables
-            if item.get("station_code") in {"A17", "A18", "A19"}
-            and item.get("station_distance_m") is not None
-            and item.get("distance_m") is not None
-        ),
-        None,
-    )
-    if layout is None or floor_match is None or nearest is None:
+    if layout is None or floor_match is None:
         raise ValueError("listing lacks required valuation features")
-    if int(nearest["distance_m"]) > 300:
-        raise ValueError("no nearby transaction for station inference")
+
+    longitude = payload.get("longitude")
+    latitude = payload.get("latitude")
+    if longitude is None or latitude is None:
+        raise ValueError("listing lacks coordinates")
+    station_code, station_distance_m = _station_from_coords(
+        float(longitude), float(latitude)
+    )
 
     total_floors = int(payload["total_floors"])
     floor = int(floor_match.group("floor"))
@@ -887,8 +914,8 @@ def _conversation_valuation(
     )
     valuation_input = ValuationInput(
         transaction_type=transaction_type,
-        station_code=str(nearest["station_code"]),
-        station_distance_m=float(nearest["station_distance_m"]),
+        station_code=station_code,
+        station_distance_m=station_distance_m,
         building_area_ping=area,
         building_type=building_type,
         bedrooms=int(layout.group("bedrooms")),

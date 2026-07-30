@@ -160,17 +160,17 @@ class TestStartImport:
             facts=[],
             limitations=[],
         )
-        deps["reply_executor"].execute.return_value = ReplyExecution(
-            validated=ValidatedChatAnswer(
-                answer="Gemini analysis",
-                citations=[],
-                evidence_revision=3,
-                general_guidance=[],
-                suggested_questions=[],
-            ),
-            actual_provider="gemini",
-            actual_model="gemini-3.5-flash-lite",
-            fallback_reason=None,
+        from qingpu_insight.conversation_providers import ChatAnswerDraft
+        deps["provider_registry"].get.return_value.reply.return_value = ChatAnswerDraft(
+            answer="Rule summary",
+            property_claims=[],
+        )
+        deps["validator"].return_value = ValidatedChatAnswer(
+            answer="Rule summary\n\n【物件證據】",
+            citations=[],
+            evidence_revision=3,
+            general_guidance=[],
+            suggested_questions=[],
         )
 
         service._run_import("run-1", "conv-1", "https://example.com")
@@ -184,20 +184,13 @@ class TestStartImport:
         deps["job_service"].succeed.assert_called_once_with(
             "run-1", "rev3", {}
         )
-        deps["reply_executor"].execute.assert_called_once_with(
-            requested_model="gemini-3.5-flash-lite",
-            question="請根據現有證據，先提供精簡的物件分析。",
-            context=ANY,
-            available_fact_ids=set(),
-            evidence_revision=3,
-        )
         deps["repository"].append_message.assert_called_once_with(
             conversation_id="conv-1",
             role="assistant",
-            content="Gemini analysis",
+            content="Rule summary\n\n【物件證據】",
             evidence_revision=3,
-            provider="gemini",
-            model="gemini-3.5-flash-lite",
+            provider="rule",
+            model="rule",
             citations=[],
             fallback_reason=None,
         )
@@ -277,17 +270,17 @@ class TestStartRefresh:
             facts=[],
             limitations=[],
         )
-        deps["reply_executor"].execute.return_value = ReplyExecution(
-            validated=ValidatedChatAnswer(
-                answer="Refreshed Gemini analysis",
-                citations=[],
-                evidence_revision=2,
-                general_guidance=[],
-                suggested_questions=[],
-            ),
-            actual_provider="gemini",
-            actual_model="gemini-3.5-flash-lite",
-            fallback_reason=None,
+        from qingpu_insight.conversation_providers import ChatAnswerDraft
+        deps["provider_registry"].get.return_value.reply.return_value = ChatAnswerDraft(
+            answer="Rule summary",
+            property_claims=[],
+        )
+        deps["validator"].return_value = ValidatedChatAnswer(
+            answer="Rule summary\n\n【物件證據】",
+            citations=[],
+            evidence_revision=2,
+            general_guidance=[],
+            suggested_questions=[],
         )
 
         service._run_refresh("run-2", "conv-1")
@@ -303,10 +296,10 @@ class TestStartRefresh:
         deps["repository"].append_message.assert_called_once_with(
             conversation_id="conv-1",
             role="assistant",
-            content="Refreshed Gemini analysis",
+            content="Rule summary\n\n【物件證據】",
             evidence_revision=2,
-            provider="gemini",
-            model="gemini-3.5-flash-lite",
+            provider="rule",
+            model="rule",
             citations=[],
             fallback_reason=None,
         )

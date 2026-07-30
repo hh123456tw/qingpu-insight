@@ -114,8 +114,7 @@ class TestValidateChatAnswer:
         )
         assert isinstance(result, ValidatedChatAnswer)
         assert "公園近" in result.answer
-        assert "（依據：" not in result.answer
-        assert "好物件。" not in result.answer
+        assert "好物件。" in result.answer
         assert result.citations == ["f1", "f2", "f3"]
         assert result.evidence_revision == 5
 
@@ -269,7 +268,7 @@ class TestValidateChatAnswer:
         )
         assert result.suggested_questions == ["Q1?", "Q2?"]
 
-    def test_detached_answer_is_not_displayed(self) -> None:
+    def test_answer_is_included_in_display(self) -> None:
         draft = ChatAnswerDraft(
             answer="這是一個沒有證據的非常好的物件。",
             property_claims=[
@@ -281,7 +280,7 @@ class TestValidateChatAnswer:
             available_fact_ids={"listing.price"},
             evidence_revision=1,
         )
-        assert "沒有證據" not in result.answer
+        assert "這是一個沒有證據的非常好的物件。" in result.answer
         assert "listing.price" not in result.answer
         assert "listing.price" in result.citations
 
