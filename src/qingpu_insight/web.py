@@ -889,8 +889,18 @@ def _conversation_valuation(
         asking_total_price_twd=(
             int(payload["total_price_twd"]) if payload.get("total_price_twd") is not None else None
         ),
-        twd97_x=coordinates[0],
+twd97_x=coordinates[0],
         twd97_y=coordinates[1],
+        common_area_ratio=(
+            float(payload["common_area_ratio"])
+            if payload.get("common_area_ratio") is not None
+            else None
+        ),
+        community_id=(
+            str(payload["community_id"])
+            if payload.get("community_id") is not None
+            else None
+        ),
     )
     market = data_source.load(MarketFilters(transaction_type=transaction_type))
     if market.empty:

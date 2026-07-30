@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from qingpu_insight.community_registry import CommunityRegistry
 from qingpu_insight.conversation_evidence import (
     ConversationEvidence,
     ConversationEvidenceBuilder,
@@ -30,6 +31,8 @@ def _make_snapshot(**overrides: Any) -> SnapshotRecord:
         "latitude": 25.033611,
         "longitude": 121.565000,
         "source_updated_text": "2025-06-01 更新",
+        "common_area_ratio": None,
+        "common_area_ratio_source": None,
     }
     payload.update(overrides)
     return SnapshotRecord(
@@ -520,3 +523,191 @@ def test_impossible_floor_and_no_coordinates() -> None:
     assert "樓層資料不一致（20/10），無法進行精確估價" in ev.limitations
     assert "缺少座標資訊，距離相關分析可能不準確" in ev.limitations
     assert ev.valuation is None
+
+
+# ---------------------------------------------------------------------------
+# common area ratio evidence
+# ---------------------------------------------------------------------------
+
+
+def test_common_area_ratio_in_facts() -> None:
+    snapshot = _make_snapshot(common_area_ratio=0.348, common_area_ratio_source="591 DOM 公設比")
+    builder = ConversationEvidenceBuilder()
+    ev = builder.build(snapshot=snapshot)
+    fact_ids = {f.id for f in ev.facts}
+    assert "listing.common_area_ratio" in fact_ids
+    ratio_fact = next(f for f in ev.facts if f.id == "listing.common_area_ratio")
+    assert ratio_fact.value == "34.8%"
+    assert ratio_fact.source == "591 詳細頁"
+
+
+def test_common_area_ratio_absent() -> None:
+    snapshot = _make_snapshot(common_area_ratio=None, common_area_ratio_source=None)
+    builder = ConversationEvidenceBuilder()
+    ev = builder.build(snapshot=snapshot)
+    fact_ids = {f.id for f in ev.facts}
+    assert "listing.common_area_ratio" not in fact_ids
+
+
+# ---------------------------------------------------------------------------
+# community matching
+# ---------------------------------------------------------------------------
+
+
+def _mini_registry() -> CommunityRegistry:
+    """Build a tiny in-memory registry for testing."""
+    import pandas as pd
+
+    data = pd.DataFrame([
+        {
+            "community_id": "comm-qinghe",
+            "canonical_name": "青禾社區",
+            "aliases": "",
+            "station_code": "A18",
+            "address_patterns": "青埔路一段100號",
+            "twd97_x": 121.2,
+            "twd97_y": 25.0,
+            "completion_year": 2020,
+            "source_notes": "test fixture",
+        },
+        {
+            "community_id": "comm-qingcui",
+            "canonical_name": "青翠社區",
+            "aliases": "",
+            "station_code": "A18",
+            "address_patterns": "青埔路二段",
+            "twd97_x": 121.3,
+            "twd97_y": 25.1,
+            "completion_year": 2022,
+            "source_notes": "test fixture",
+        },
+        {
+            "community_id": "comm-qingfeng",
+            "canonical_name": "青峰社區",
+            "aliases": "青峰",
+            "station_code": "A19",
+            "address_patterns": "青峰路",
+            "twd97_x": 121.4,
+            "twd97_y": 25.2,
+            "completion_year": 2019,
+            "source_notes": "test fixture",
+        },
+    ])
+    return CommunityRegistry(data, "test-version")
+
+
+def test_community_match_known_community() -> None:
+    snapshot = _make_snapshot(community_name="青峰社區")
+    builder = ConversationEvidenceBuilder(community_registry=_mini_registry())
+    ev = builder.build(snapshot=snapshot)
+    fact_ids = {f.id for f in ev.facts}
+    assert "listing.community_match_method" in fact_ids
+    assert "listing.community_known" in fact_ids
+    method_fact = next(f for f in ev.facts if f.id == "listing.community_match_method")
+    assert method_fact.value == "canonical"
+    known_fact = next(f for f in ev.facts if f.id == "listing.community_known")
+    assert known_fact.value == "comm-qingfeng"
+
+
+def test_community_match_unknown_name_not_in_registry() -> None:
+    snapshot = _make_snapshot(community_name="不存在的社區")
+    builder = ConversationEvidenceBuilder(community_registry=_mini_registry())
+    ev = builder.build(snapshot=snapshot)
+    fact_ids = {f.id for f in ev.facts}
+    # Matches via coordinates fallback
+    assert "listing.community_match_method" in fact_ids
+    method_fact = next(f for f in ev.facts if f.id == "listing.community_match_method")
+    assert method_fact.value == "coordinate"
+
+
+def test_community_match_no_registry_still_works() -> None:
+    snapshot = _make_snapshot(community_name="青禾社區")
+    builder = ConversationEvidenceBuilder()
+    ev = builder.build(snapshot=snapshot)
+    fact_ids = {f.id for f in ev.facts}
+    assert "listing.community_known" not in fact_ids
+    assert "listing.community" in fact_ids
+
+
+def test_community_match_by_address_fallback() -> None:
+    snapshot = _make_snapshot(
+        community_name=None,
+        address="桃園市中壢區青埔路一段100號",
+    )
+    builder = ConversationEvidenceBuilder(community_registry=_mini_registry())
+    ev = builder.build(snapshot=snapshot)
+    fact_ids = {f.id for f in ev.facts}
+    assert "listing.community_match_method" in fact_ids
+    method_fact = next(f for f in ev.facts if f.id == "listing.community_match_method")
+    assert method_fact.value in ("address",)
+
+
+def test_common_area_ratio_passed_to_valuation_payload() -> None:
+    snapshot = _make_snapshot(common_area_ratio=0.348, common_area_ratio_source="591 DOM 公設比")
+
+    def valuate(payload: dict) -> dict:
+        assert payload.get("common_area_ratio") == 0.348
+        return {
+            "point_estimate_twd": 15000000,
+            "low_estimate_twd": 13500000,
+            "high_estimate_twd": 16500000,
+            "confidence": "medium",
+        }
+
+    builder = ConversationEvidenceBuilder(
+        valuation_service=valuate,
+        community_registry=_mini_registry(),
+    )
+    ev = builder.build(snapshot=snapshot)
+    assert ev.valuation is not None
+
+
+def test_community_id_passed_to_valuation_payload() -> None:
+    snapshot = _make_snapshot(community_name="青禾社區")
+
+    def valuate(payload: dict) -> dict:
+        assert payload.get("community_id") == "comm-qinghe"
+        return {
+            "point_estimate_twd": 15000000,
+            "low_estimate_twd": 13500000,
+            "high_estimate_twd": 16500000,
+            "confidence": "medium",
+        }
+
+    builder = ConversationEvidenceBuilder(
+        valuation_service=valuate,
+        community_registry=_mini_registry(),
+    )
+    ev = builder.build(snapshot=snapshot)
+    assert ev.valuation is not None
+
+
+def test_unknown_community_does_not_block_valuation() -> None:
+    snapshot = _make_snapshot(community_name="不存在的社區")
+
+    def valuate(payload: dict) -> dict:
+        return {
+            "point_estimate_twd": 15000000,
+            "low_estimate_twd": 13500000,
+            "high_estimate_twd": 16500000,
+            "confidence": "medium",
+        }
+
+    builder = ConversationEvidenceBuilder(
+        valuation_service=valuate,
+        community_registry=_mini_registry(),
+    )
+    ev = builder.build(snapshot=snapshot)
+    assert ev.valuation is not None
+
+
+def test_invalid_common_area_ratio_blocks_valuation() -> None:
+    snapshot = _make_snapshot(common_area_ratio=1.5)
+
+    def valuate(payload: dict) -> dict:
+        return {"point_estimate_twd": 1}
+
+    builder = ConversationEvidenceBuilder(valuation_service=valuate)
+    ev = builder.build(snapshot=snapshot)
+    assert ev.valuation is None
+    assert any("超出合理範圍" in msg for msg in ev.limitations)

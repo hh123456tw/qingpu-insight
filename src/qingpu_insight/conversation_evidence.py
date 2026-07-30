@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from qingpu_insight.community_registry import CommunityMatch, CommunityRegistry
 from qingpu_insight.conversation_repository import SnapshotRecord
 from qingpu_insight.presentation import (
     format_total_price_wan,
@@ -42,15 +43,80 @@ class ConversationEvidenceBuilder:
         market_service: MarketService | None = None,
         dataset_version: str = "unknown",
         model_version: str = "unknown",
+        community_registry: CommunityRegistry | None = None,
     ):
         self._valuation_service = valuation_service
         self._market_service = market_service
         self._dataset_version = dataset_version
         self._model_version = model_version
+        self._community_registry = community_registry
 
     def build(self, *, snapshot: SnapshotRecord) -> ConversationEvidence:
-        payload = snapshot.structured_payload
+        payload = dict(snapshot.structured_payload)
         facts = self._build_listing_facts(payload)
+
+        community_match: CommunityMatch | None = None
+        if self._community_registry is not None:
+            lat = payload.get("latitude")
+            lng = payload.get("longitude")
+            try:
+                twd97_x, twd97_y = (
+                    (float(lng), float(lat))
+                    if lat is not None and lng is not None
+                    else (None, None)
+                )
+            except (ValueError, TypeError):
+                twd97_x = twd97_y = None
+            community_match = self._community_registry.match_listing(
+                name=payload.get("community_name"),
+                address=payload.get("address"),
+                twd97_x=twd97_x,
+                twd97_y=twd97_y,
+            )
+
+        if community_match is not None and community_match.community_id is not None:
+            payload["community_id"] = community_match.community_id
+            payload["community_known"] = community_match.community_id
+            payload["community_match_method"] = community_match.method
+            facts.append(
+                EvidenceFact(
+                    id="listing.community_match_method",
+                    label="社區比對方式",
+                    value=community_match.method,
+                    source="591 詳細頁",
+                    observed_at=payload.get("source_updated_text"),
+                )
+            )
+            facts.append(
+                EvidenceFact(
+                    id="listing.community_known",
+                    label="社區識別碼",
+                    value=community_match.community_id,
+                    source="591 詳細頁",
+                    observed_at=payload.get("source_updated_text"),
+                )
+            )
+        else:
+            payload["community_id"] = None
+            payload["community_known"] = "unknown"
+            payload["community_match_method"] = "unknown"
+
+        common_area_ratio = payload.get("common_area_ratio")
+        if common_area_ratio is not None:
+            payload["common_area_ratio"] = float(common_area_ratio)
+            pct = round(float(common_area_ratio) * 100, 1)
+            facts.append(
+                EvidenceFact(
+                    id="listing.common_area_ratio",
+                    label="公設比",
+                    value=f"{pct}%",
+                    source="591 詳細頁",
+                    observed_at=payload.get("source_updated_text"),
+                )
+            )
+        else:
+            payload["common_area_ratio"] = None
+
         valuation: dict | None = None
         comparables: list[dict] = []
         limitations: list[str] = []
@@ -168,6 +234,12 @@ class ConversationEvidenceBuilder:
                     return False, f"樓層資料不一致（{f}/{tf}），無法進行精確估價"
             except (ValueError, TypeError):
                 pass
+        community_known = payload.get("community_known", "unknown")
+        if community_known == "unknown":
+            pass
+        common_area_ratio = payload.get("common_area_ratio")
+        if common_area_ratio is not None and not (0.0 <= common_area_ratio <= 0.70):
+            return False, f"公設比 {common_area_ratio:.2f} 超出合理範圍"
         return True, None
 
     def _build_listing_facts(self, payload: dict) -> list[EvidenceFact]:
@@ -187,6 +259,7 @@ class ConversationEvidenceBuilder:
             ("floor", "listing.floor", "樓層"),
             ("age_years", "listing.age", "屋齡"),
             ("parking_type", "listing.parking", "車位類型"),
+            ("common_area_ratio_source", "listing.common_area_ratio_source", "公設比來源"),
         ]
         for key, fact_id, label in mappings:
             value = payload.get(key)
@@ -255,6 +328,8 @@ class ConversationEvidenceBuilder:
             return f"{value} 坪"
         if key == "age_years":
             return f"{value} 年"
+        if key == "common_area_ratio":
+            return f"{round(float(value) * 100, 1)}%"
         return str(value)
 
     @staticmethod
