@@ -58,7 +58,10 @@ def _make_bundle(market: str, model_version: str = "1.0") -> ValuationBundle:
 
 
 def _setup_candidate(
-    base: Path, market: str, recommended: bool = True
+    base: Path,
+    market: str,
+    recommended: bool = True,
+    source_commit: str = "abc123",
 ) -> tuple[Path, TrainingManifest, MarketTrainingResult]:
     candidate_root = base / f"candidate-{market}"
     candidate_root.mkdir(parents=True)
@@ -93,7 +96,7 @@ def _setup_candidate(
         run_id=uuid4(),
         created_at=datetime.now(UTC),
         markets=[market],
-        source_commit="abc123",
+        source_commit=source_commit,
         source_dirty=False,
         runtime_versions={"python": "3.11"},
         data_snapshot=DataSnapshot(
@@ -288,6 +291,24 @@ class TestModelReleaseService:
         with pytest.raises(ValueError, match="not recommended"):
             service.preview_publish(run_id, "resale")
 
+    @pytest.mark.parametrize("source_commit", ["unknown", "", " UNKNOWN "])
+    def test_preview_publish_rejects_unprovenanced_candidate(
+        self,
+        tmp_path: Path,
+        source_commit: str,
+    ) -> None:
+        service, _, candidate_dir = self._create_service(tmp_path)
+        candidate_root, manifest, _ = _setup_candidate(
+            tmp_path / "src",
+            "resale",
+            source_commit=source_commit,
+        )
+        run_id = str(manifest.run_id)
+        candidate_root.rename(candidate_dir / run_id)
+
+        with pytest.raises(ValueError, match="candidate source commit is unknown"):
+            service.preview_publish(run_id, "resale")
+
     def test_preview_publish_rejects_nonexistent_run(
         self, tmp_path: Path
     ) -> None:
@@ -444,6 +465,30 @@ class TestModelReleaseService:
         current_file = store.current("resale")
         assert current_file is not None
         assert current_file.version_id == result.version_id
+
+    def test_execute_publish_rechecks_source_provenance(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        service, store, candidate_dir = self._create_service(tmp_path)
+        candidate_root, manifest, _ = _setup_candidate(
+            tmp_path / "src",
+            "resale",
+            source_commit="unknown",
+        )
+        run_id = str(manifest.run_id)
+        candidate_root.rename(candidate_dir / run_id)
+        preview = service._preview_service.create_for(
+            "model_publish",
+            {"operation": "publish", "market": "resale", "run_id": run_id},
+            "legacy confirmation",
+        )
+        job_run_id = self._start_job(service)
+
+        with pytest.raises(ValueError, match="candidate source commit is unknown"):
+            service.execute(job_run_id, preview)
+
+        assert store.current("resale") is None
 
     def test_execute_rollback_full_flow(
         self, tmp_path: Path
@@ -611,6 +656,19 @@ class TestOfficialModelStore:
         )
         with pytest.raises(FileNotFoundError, match="manifest.json"):
             store.import_candidate(empty_dir, manifest, "resale")
+
+    def test_import_rejects_unprovenanced_candidate(self, tmp_path: Path) -> None:
+        store = OfficialModelStore(tmp_path / "artifacts")
+        candidate_dir, manifest, _ = _setup_candidate(
+            tmp_path,
+            "resale",
+            source_commit="unknown",
+        )
+
+        with pytest.raises(ValueError, match="candidate source commit is unknown"):
+            store.import_candidate(candidate_dir, manifest, "resale")
+
+        assert not (tmp_path / "artifacts" / "official").exists()
 
     def test_import_rejects_not_recommended(self, tmp_path: Path) -> None:
         store = OfficialModelStore(tmp_path / "artifacts")

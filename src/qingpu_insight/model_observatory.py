@@ -13,7 +13,10 @@ from qingpu_insight.model_artifacts import (
     TrainingManifest,
     sha256_file,
 )
-from qingpu_insight.model_release import OfficialModelStore
+from qingpu_insight.model_release import (
+    OfficialModelStore,
+    source_provenance_blocker,
+)
 from qingpu_insight.model_training_service import ModelTrainingService, build_data_snapshot
 from qingpu_insight.valuation import ValuationBundle
 
@@ -449,6 +452,11 @@ class ModelObservatory:
                     continue
                 blockers: list[str] = []
                 publishable = True
+
+                provenance_blocker = source_provenance_blocker(manifest)
+                if provenance_blocker is not None:
+                    blockers.append(provenance_blocker)
+                    publishable = False
 
                 if not m_result.recommended:
                     blockers.append("not_recommended")

@@ -593,6 +593,23 @@ class TestModelObservatoryStatus:
         assert "release_blockers" in result["markets"]["resale"]
         assert "current_official_version_id" in result["markets"]["resale"]
 
+    def test_get_run_blocks_unknown_source_commit_from_publishability(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        manifest = manifest_fixture(markets=["resale"]).model_copy(
+            update={"source_commit": "unknown"}
+        )
+        observatory = observatory_fixture(tmp_path, candidate_runs=[manifest])
+
+        result = observatory.get_run(str(manifest.run_id))
+
+        assert result is not None
+        assert result["markets"]["resale"]["publishable"] is False
+        assert "source_commit_unknown" in result["markets"]["resale"][
+            "release_blockers"
+        ]
+
     def test_presale_only_candidate_is_hidden_from_status_list_and_detail(
         self,
         tmp_path: Path,

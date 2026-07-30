@@ -471,9 +471,13 @@ def test_training_diagnostics_merge_market_quality_exclusions(tmp_path: Path) ->
     report_path.write_text(
         json.dumps(
             {
+                "input_records": 90_322,
+                "output_by_type": {"resale": 5_280, "presale": 2_811},
                 "exclusion_reasons": {
                     "special_relationship": 446,
                     "non_market_subject": 18,
+                    "missing_completion_date": 3,
+                    "future_completion_transfer": 10_648,
                 }
             }
         ),
@@ -495,6 +499,10 @@ def test_training_diagnostics_merge_market_quality_exclusions(tmp_path: Path) ->
         "special_relationship_excluded": 446,
         "non_market_subject_excluded": 18,
         "ambiguous_registration_note_count": 10_672,
+        "raw_count": 90_322,
+        "usable_count": 5_280,
+        "missing_completion_date": 3,
+        "future_completion_transfer": 10_648,
     }
 
 

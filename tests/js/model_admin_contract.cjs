@@ -96,6 +96,10 @@ var officialReport = admin.buildOfficialReportView({
   test_count: 630,
   diagnostics: {
     data_quality: {
+      raw_count: 90322,
+      usable_count: 5280,
+      missing_completion_date: 3,
+      future_completion_transfer: 10648,
       special_relationship_excluded: 446,
       non_market_subject_excluded: 18,
       ambiguous_registration_note_count: 10672,
@@ -119,7 +123,20 @@ assert.equal(officialReport.residualRows[0].error, "12 萬／坪");
 assert.equal(officialReport.residualRows[0].percentageError, "20.0%");
 assert.equal(
   officialReport.dataQualitySummary,
-  "資料清理：排除特殊關係 446 筆、非市場標的 18 筆；分件登記備註 10,672 筆僅列為觀察，未整批排除。"
+  "資料清理：原始 90,322 筆 → 可用中古屋 5,280 筆；排除完工日缺失 3 筆、完工日晚於交易日 10,648 筆；排除特殊關係 446 筆、非市場標的 18 筆；分件登記備註 10,672 筆僅列為觀察，未整批排除。"
+);
+assert.equal(officialReport.dataQualityAudit.rawCount, 90322);
+assert.equal(officialReport.dataQualityAudit.usableCount, 5280);
+assert.equal(officialReport.dataQualityAudit.missingCompletionDate, 3);
+assert.equal(officialReport.dataQualityAudit.futureCompletionTransfer, 10648);
+
+var snapshotAudit = admin.buildDataQualityAudit({}, {
+  raw_count: 5280,
+  usable_counts: { resale: 5280 },
+});
+assert.equal(
+  snapshotAudit.summary,
+  "資料清理：原始 5,280 筆 → 可用中古屋 5,280 筆。"
 );
 
 // Custom tuning fixtures

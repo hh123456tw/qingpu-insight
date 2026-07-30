@@ -790,13 +790,23 @@
         container.appendChild(list);
       }
 
-      function renderDataDiagnostics(container, diagnostics) {
+      function renderDataDiagnostics(container, diagnostics, snapshot) {
         if (!diagnostics || typeof diagnostics !== "object") return;
         var h = document.createElement("h5");
         h.textContent = "資料診斷";
         container.appendChild(h);
         var wrap = document.createElement("div");
         wrap.className = "ma-diagnostics";
+        var qualityAudit = ma.buildDataQualityAudit(
+          diagnostics.data_quality,
+          snapshot
+        );
+        if (qualityAudit.hasData) {
+          var qualityItem = document.createElement("div");
+          qualityItem.className = "ma-diag-item";
+          qualityItem.textContent = qualityAudit.summary;
+          wrap.appendChild(qualityItem);
+        }
         if (diagnostics.station_counts) {
           var sc = document.createElement("div");
           sc.className = "ma-diag-item";
@@ -999,7 +1009,11 @@
               section.appendChild(link);
             }
           }
-          renderDataDiagnostics(section, result.diagnostics);
+          renderDataDiagnostics(
+            section,
+            result.diagnostics,
+            detail.manifest && detail.manifest.data_snapshot
+          );
           renderComparisonTable(section, ma.profileComparisonRows(result).map(function(row) {
             return {
               name: row.name,

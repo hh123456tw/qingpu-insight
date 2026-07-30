@@ -2052,6 +2052,15 @@ def test_production_admin_composition_requires_database_and_strong_secret(
     monkeypatch.setenv("QINGPU_SECRET_KEY", strong_secret)
 
     app = web.create_app(root=tmp_path, data_source=InMemoryMarketDataSource(market_frame))
+    from qingpu_insight.source_version import GitSourceVersionProvider
+
+    training_service = app.extensions[
+        "qingpu_admin_runtime"
+    ].model_training_service
+    assert isinstance(
+        training_service._source_version_provider,
+        GitSourceVersionProvider,
+    )
     with app.test_client() as client:
         with client.session_transaction() as sess:
             sess["_csrf_token"] = "test-token"

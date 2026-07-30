@@ -113,6 +113,7 @@
     backtest_station_regression: "三期回測有兩期以上的生活圈退步超過 10%",
     candidate_stale: "候選模型資料落後最新官方資料超過 180 天",
     artifact_missing: "模型檔案遺失",
+    source_commit_unknown: "候選模型缺少可驗證的原始碼版本",
     sha256_mismatch: "模型檔案驗證失敗",
     corrupt_artifact: "模型檔案無法讀取",
     market_mismatch: "模型市場類型不符",
@@ -161,6 +162,92 @@
     return (Number.isInteger(wan) ? wan.toFixed(0) : wan.toFixed(1)) + " 萬／坪";
   }
 
+  function buildDataQualityAudit(dataQuality, snapshot) {
+    dataQuality = dataQuality || {};
+    snapshot = snapshot || {};
+
+    function count(value) {
+      if (value == null || value === "" || typeof value === "boolean") return null;
+      var number = Number(value);
+      return Number.isFinite(number) && number >= 0 ? number : null;
+    }
+
+    var rawCount = count(dataQuality.raw_count);
+    if (rawCount == null) rawCount = count(snapshot.raw_count);
+
+    var usableCount = count(dataQuality.usable_count);
+    if (
+      usableCount == null
+      && snapshot.usable_counts
+      && snapshot.usable_counts.resale != null
+    ) {
+      usableCount = count(snapshot.usable_counts.resale);
+    }
+
+    var missingCompletion = count(dataQuality.missing_completion_date);
+    var futureCompletion = count(dataQuality.future_completion_transfer);
+    var specialRelationship = count(dataQuality.special_relationship_excluded);
+    var nonMarketSubject = count(dataQuality.non_market_subject_excluded);
+    var ambiguousRegistration = count(
+      dataQuality.ambiguous_registration_note_count
+    );
+    var parts = [];
+
+    if (rawCount != null || usableCount != null) {
+      parts.push(
+        "原始 " + (rawCount == null ? "—" : rawCount.toLocaleString("zh-TW")) +
+        " 筆 → 可用中古屋 " +
+        (usableCount == null ? "—" : usableCount.toLocaleString("zh-TW")) +
+        " 筆"
+      );
+    }
+    if (missingCompletion != null || futureCompletion != null) {
+      parts.push(
+        "排除完工日缺失 " +
+        (missingCompletion == null
+          ? "—"
+          : missingCompletion.toLocaleString("zh-TW")) +
+        " 筆、完工日晚於交易日 " +
+        (futureCompletion == null
+          ? "—"
+          : futureCompletion.toLocaleString("zh-TW")) +
+        " 筆"
+      );
+    }
+    if (
+      specialRelationship != null
+      || nonMarketSubject != null
+      || ambiguousRegistration != null
+    ) {
+      parts.push(
+        "排除特殊關係 " +
+        (specialRelationship == null
+          ? "—"
+          : specialRelationship.toLocaleString("zh-TW")) +
+        " 筆、非市場標的 " +
+        (nonMarketSubject == null
+          ? "—"
+          : nonMarketSubject.toLocaleString("zh-TW")) +
+        " 筆；分件登記備註 " +
+        (ambiguousRegistration == null
+          ? "—"
+          : ambiguousRegistration.toLocaleString("zh-TW")) +
+        " 筆僅列為觀察，未整批排除"
+      );
+    }
+
+    return {
+      hasData: parts.length > 0,
+      rawCount: rawCount,
+      usableCount: usableCount,
+      missingCompletionDate: missingCompletion,
+      futureCompletionTransfer: futureCompletion,
+      summary: parts.length > 0
+        ? "資料清理：" + parts.join("；") + "。"
+        : "這個模型版本沒有保存資料清理稽核。",
+    };
+  }
+
   function buildOfficialReportView(report) {
     report = report || {};
     var splitLabels = {
@@ -170,6 +257,7 @@
     };
     var diagnostics = report.diagnostics || {};
     var dataQuality = diagnostics.data_quality || {};
+    var dataQualityAudit = buildDataQualityAudit(dataQuality);
     var residuals = Array.isArray(diagnostics.top_residuals)
       ? diagnostics.top_residuals.slice(0, 20)
       : [];
@@ -192,14 +280,8 @@
         };
       }),
       dataQuality: dataQuality,
-      dataQualitySummary:
-        "資料清理：排除特殊關係 " +
-        Number(dataQuality.special_relationship_excluded || 0).toLocaleString("zh-TW") +
-        " 筆、非市場標的 " +
-        Number(dataQuality.non_market_subject_excluded || 0).toLocaleString("zh-TW") +
-        " 筆；分件登記備註 " +
-        Number(dataQuality.ambiguous_registration_note_count || 0).toLocaleString("zh-TW") +
-        " 筆僅列為觀察，未整批排除。",
+      dataQualityAudit: dataQualityAudit,
+      dataQualitySummary: dataQualityAudit.summary,
     };
   }
 
@@ -614,6 +696,7 @@
     marketLabel: marketLabel,
     statusLabel: statusLabel,
     buildOfficialReportView: buildOfficialReportView,
+    buildDataQualityAudit: buildDataQualityAudit,
     buildReleasePreviewPayload: buildReleasePreviewPayload,
     canConfirmDangerousAction: canConfirmDangerousAction,
     submitTraining: submitTraining,

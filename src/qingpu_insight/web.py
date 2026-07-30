@@ -211,8 +211,8 @@ def _create_production_admin_services(
     from qingpu_insight.model_observatory import ModelObservatory
     from qingpu_insight.model_training_service import (
         ModelTrainingService,
-        SourceVersionProvider,
     )
+    from qingpu_insight.source_version import GitSourceVersionProvider
 
     settings = get_settings(root)
     input_path = settings.processed_dir / "market_transactions.parquet"
@@ -223,7 +223,7 @@ def _create_production_admin_services(
         service.job_service,
         candidate_store,
         input_path,
-        SourceVersionProvider("unknown", True),
+        GitSourceVersionProvider(root),
         automl_registry=automl_registry,
         automl_output_store=automl_output_store,
     )

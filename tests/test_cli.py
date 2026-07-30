@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from qingpu_insight import cli, official_data
+from qingpu_insight import cli, official_data, source_version
 from qingpu_insight.cli import main
 from qingpu_insight.downloads import DownloadRecord, record_file
 from qingpu_insight.jobs import JobRun, JobSubmission
@@ -1660,7 +1660,11 @@ def test_read_git_source_version_reports_commit_and_dirty_state(
             SimpleNamespace(returncode=0, stdout=" M README.md\n"),
         ]
     )
-    monkeypatch.setattr(cli.subprocess, "run", lambda *args, **kwargs: next(results))
+    monkeypatch.setattr(
+        source_version.subprocess,
+        "run",
+        lambda *args, **kwargs: next(results),
+    )
 
     source = cli._read_git_source_version(tmp_path)
 
@@ -1678,7 +1682,11 @@ def test_read_git_source_version_reports_clean_checkout(
             SimpleNamespace(returncode=0, stdout=""),
         ]
     )
-    monkeypatch.setattr(cli.subprocess, "run", lambda *args, **kwargs: next(results))
+    monkeypatch.setattr(
+        source_version.subprocess,
+        "run",
+        lambda *args, **kwargs: next(results),
+    )
 
     source = cli._read_git_source_version(tmp_path)
 
@@ -1690,7 +1698,7 @@ def test_read_git_source_version_is_conservative_outside_git(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        cli.subprocess,
+        source_version.subprocess,
         "run",
         lambda *args, **kwargs: SimpleNamespace(returncode=128, stdout=""),
     )
@@ -1699,6 +1707,37 @@ def test_read_git_source_version_is_conservative_outside_git(
 
     assert source.commit == "unknown"
     assert source.dirty is True
+
+
+def test_git_source_version_provider_reads_at_execution_time(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_commit = "c" * 40
+    second_commit = "d" * 40
+    results = iter(
+        [
+            SimpleNamespace(returncode=0, stdout=f"{first_commit}\n"),
+            SimpleNamespace(returncode=0, stdout=""),
+            SimpleNamespace(returncode=0, stdout=f"{second_commit}\n"),
+            SimpleNamespace(returncode=0, stdout=" M src/app.py\n"),
+        ]
+    )
+    monkeypatch.setattr(
+        source_version.subprocess,
+        "run",
+        lambda *args, **kwargs: next(results),
+    )
+    provider = source_version.GitSourceVersionProvider(tmp_path)
+
+    assert provider.read() == source_version.SourceVersionProvider(
+        commit=first_commit,
+        dirty=False,
+    )
+    assert provider.read() == source_version.SourceVersionProvider(
+        commit=second_commit,
+        dirty=True,
+    )
 
 
 # --- M4.3 ops CLI tests ---

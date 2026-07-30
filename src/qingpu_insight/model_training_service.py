@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import sys
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -53,6 +52,7 @@ from qingpu_insight.model_tuning import (
     TrainingPlan,
     parse_tuning_plan,
 )
+from qingpu_insight.source_version import SourceVersionProvider
 from qingpu_insight.valuation import ValuationBundle, train_artifact
 from qingpu_insight.valuation_reporting import (
     compute_interval_summary,
@@ -76,15 +76,6 @@ STABLE_ERRORS = {
     "candidate_write_failed",
     "candidate_validation_failed",
 }
-
-
-@dataclass(frozen=True)
-class SourceVersionProvider:
-    commit: str
-    dirty: bool
-
-    def read(self) -> SourceVersionProvider:
-        return self
 
 
 def runtime_versions() -> dict[str, str]:
@@ -314,10 +305,15 @@ class ModelTrainingService:
         try:
             payload = json.loads(quality_path.read_text(encoding="utf-8"))
             exclusions = payload.get("exclusion_reasons", {})
+            output_by_type = payload.get("output_by_type", {})
         except (OSError, json.JSONDecodeError, AttributeError):
             return diagnostics
         data_quality = diagnostics.get("data_quality")
-        if not isinstance(data_quality, dict) or not isinstance(exclusions, dict):
+        if (
+            not isinstance(data_quality, dict)
+            or not isinstance(exclusions, dict)
+            or not isinstance(output_by_type, dict)
+        ):
             return diagnostics
         data_quality["special_relationship_excluded"] = int(
             exclusions.get("special_relationship", 0)
@@ -325,6 +321,17 @@ class ModelTrainingService:
         data_quality["non_market_subject_excluded"] = int(
             exclusions.get("non_market_subject", 0)
         )
+        count_fields = {
+            "raw_count": payload.get("input_records"),
+            "usable_count": output_by_type.get("resale"),
+            "missing_completion_date": exclusions.get("missing_completion_date"),
+            "future_completion_transfer": exclusions.get(
+                "future_completion_transfer"
+            ),
+        }
+        for name, value in count_fields.items():
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                data_quality[name] = value
         return diagnostics
 
     def _finalize_candidate(

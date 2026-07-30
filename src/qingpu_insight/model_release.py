@@ -28,6 +28,21 @@ from qingpu_insight.operation_previews import (
 )
 from qingpu_insight.valuation import ValuationBundle
 
+SOURCE_PROVENANCE_BLOCKER = "source_commit_unknown"
+SOURCE_PROVENANCE_ERROR = "candidate source commit is unknown"
+
+
+def source_provenance_blocker(training: TrainingManifest) -> str | None:
+    commit = training.source_commit
+    if not isinstance(commit, str) or commit.strip().casefold() in {"", "unknown"}:
+        return SOURCE_PROVENANCE_BLOCKER
+    return None
+
+
+def require_source_provenance(training: TrainingManifest) -> None:
+    if source_provenance_blocker(training) is not None:
+        raise ValueError(SOURCE_PROVENANCE_ERROR)
+
 
 @dataclass(frozen=True)
 class OfficialModelManifest:
@@ -75,6 +90,7 @@ class OfficialModelStore:
         disk_manifest = TrainingManifest.model_validate_json(context)
         if disk_manifest != training:
             raise ValueError("manifest on disk does not match supplied training manifest")
+        require_source_provenance(training)
 
         result = None
         for r in training.results:
@@ -323,6 +339,7 @@ class ModelReleaseService:
         manifest = self._candidate_store.get(run_id)
         if manifest is None:
             raise ValueError(f"candidate run {run_id!r} not found")
+        require_source_provenance(manifest)
 
         result = None
         for r in manifest.results:
@@ -429,6 +446,7 @@ class ModelReleaseService:
         manifest = self._candidate_store.get(source_run_id)
         if manifest is None:
             raise ValueError(f"candidate run {source_run_id!r} not found")
+        require_source_provenance(manifest)
 
         prev_file = self._official_store.current(market)
         self._progress(run_id, "backing_up_pointer")
