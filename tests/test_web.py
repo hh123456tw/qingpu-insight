@@ -1010,7 +1010,9 @@ class TestListingApi:
         response = client.get("/api/listings?listing_type=sale")
         assert response.status_code == 503
 
-    def test_listings_default_to_sale_when_type_is_missing(self, listing_client: FlaskClient) -> None:
+    def test_listings_default_to_sale_when_type_is_missing(
+        self, listing_client: FlaskClient
+    ) -> None:
         response = listing_client.get("/api/listings")
         assert response.status_code == 200
         assert response.get_json()["items"][0]["type"] == "sale"

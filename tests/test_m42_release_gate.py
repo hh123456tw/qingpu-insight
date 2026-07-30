@@ -482,13 +482,13 @@ def test_m42_atomic_release_gate(
                 session["_csrf_token"] = "release-token"
             first = _post(
                 client,
-                {"types": ["sale", "newhouse"], "max_pages": 1},
+                {"types": ["sale"], "max_pages": 1},
             )
             assert first.status_code == 202
             assert started.wait(5), "v2 preparation did not start"
             duplicate = _post(
                 client,
-                {"types": ["sale", "newhouse"], "max_pages": 1},
+                {"types": ["sale"], "max_pages": 1},
             )
             assert duplicate.status_code == 202
             assert duplicate.json["run_id"] == first.json["run_id"]
@@ -499,20 +499,20 @@ def test_m42_atomic_release_gate(
             detail = client.get(f"/api/jobs/{first.json['run_id']}")
             assert detail.status_code == 200
             assert detail.json["status"] == "succeeded"
-            assert detail.json["summary"]["rows"] == 4
+            assert detail.json["summary"]["rows"] == 2
             v2_version = detail.json["output_version"]
     finally:
         release.set()
         app_v2.extensions["qingpu_admin_shutdown"]()
 
     assert database.job_transitions.count(("pending", "running")) == 1
-    assert source_v2.calls == ["sale", "newhouse"]
-    assert source_v2.factory_roots == [tmp_path] * 2
+    assert source_v2.calls == ["sale"]
+    assert source_v2.factory_roots == [tmp_path]
     assert database.pointer["listings"] == v2_version
     assert publisher.current().version == v2_version
-    assert len(database.runtime_current) == 4
-    assert len(database.runtime_events) == 4
-    assert database.versions[("listings", v2_version)]["artifact_row_count"] == 4
+    assert len(database.runtime_current) == 2
+    assert len(database.runtime_events) == 2
+    assert database.versions[("listings", v2_version)]["artifact_row_count"] == 2
 
     v2 = publisher.current()
     assert v2 is not None
@@ -570,7 +570,7 @@ def test_m42_atomic_release_gate(
             response = _post(
                 client,
                 {
-                    "types": ["sale", "newhouse"],
+                    "types": ["sale"],
                     "max_pages": 1,
                     "trigger": "scheduled",
                 },
@@ -609,6 +609,6 @@ def test_m42_atomic_release_gate(
     }
     assert len(job_connection_ids) > 5
     assert len(publisher_connection_ids) > 5
-    assert len(preparation_connection_ids) >= 3
+    assert len(preparation_connection_ids) >= 2
     assert job_connection_ids.isdisjoint(preparation_connection_ids)
     assert publisher_connection_ids.isdisjoint(preparation_connection_ids)

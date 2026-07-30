@@ -6,6 +6,8 @@
 
 > 本工具僅供資料分析、課程展示與購屋研究，不構成正式不動產鑑價、投資建議或未來價格預測。
 
+> **公開產品範圍：只支援中古屋（`resale`）。** 預售屋（`presale`）底層官方資料仍保留作為資料沿革與研究素材，但不進入公開市場指標、估價、模型訓練、候選／正式模型發布或 591 物件入口。既有預售屋 artifact、候選與歷史對話不會被刪除。
+
 ## 專案定位
 
 - **AIPE04 期中專題**：展示資料工程、機器學習、MySQL、Web 與生成式 AI 的整合。
@@ -16,9 +18,9 @@
 
 | 功能 | 使用者看到的結果 |
 |------|------------------|
-| 市場分析 | A17～A19 成交摘要、價格趨勢、交易量、近期成交與互動地圖 |
-| AI 條件估價 | 中古屋／預售屋估計總價、合理區間、可信度、影響因素與相似成交 |
-| 591 物件助理 | 貼入中古屋／新建案詳細頁，擷取物件證據、估價並持續對話 |
+| 市場分析 | A17～A19 中古屋成交摘要、價格趨勢、交易量、近期成交與互動地圖 |
+| AI 條件估價 | 中古屋估計總價、合理區間、可信度、影響因素與相似成交 |
+| 591 物件助理 | 貼入中古屋詳細頁，擷取物件證據、估價並持續對話；新建案網址會明確顯示已停用 |
 | 智慧購屋報告 | 後端保留完整報告產出 API，但首頁不再顯示報告表單 |
 | 管理中心 | 查看模型指標，並在前端操作資料更新、模型訓練、發布、回滾、LLM Benchmark 與診斷 |
 
@@ -67,12 +69,11 @@ flowchart LR
     A["內政部實價登錄"] --> B["下載、清理與門牌定位"]
     C["591 公開售屋刊登"] --> D["擷取、正規化與定位"]
     B --> E["市場資料集"]
+    B --> P["預售屋底層資料<br/>保留但不供公開產品"]
     E --> F["中古屋模型"]
-    E --> G["預售屋模型"]
     D --> H["版本化刊登資料"]
     E --> I["Flask Web"]
     F --> I
-    G --> I
     H --> I
     E --> J["Evidence Pack"]
     H --> J
@@ -81,12 +82,11 @@ flowchart LR
     L["管理中心"] --> B
     L --> D
     L --> F
-    L --> G
 ```
 
 核心設計：
 
-- 中古屋與預售屋分開清理、評估及建模。
+- 底層資料處理保留中古屋與預售屋分類；公開查詢、估價、訓練與發布只使用中古屋。
 - 591 刊登價不會混入官方成交價，也不會成為模型訓練標籤。
 - 模型負責數值估價；LLM 只整理已驗證的 Evidence Pack。
 - 訓練只建立候選模型，不會自動覆蓋正式模型。
@@ -169,7 +169,7 @@ python -m venv .venv
 官方實價登錄 + 桃園門牌
         │
         ▼
-下載 → 清理／定位 → 市場資料集 → 中古屋／預售屋估價模型
+下載 → 清理／定位 → 市場資料集 → 中古屋估價模型
                               │
 591 公開刊登 → 正規化／定位 ──┼→ MySQL 版本發布 → Flask Web
                               │
@@ -178,7 +178,7 @@ python -m venv .venv
 
 重要設計：
 
-- 中古屋（`resale`）與預售屋（`presale`）始終分開分析與建模。
+- 預售屋（`presale`）底層資料保留，但公開市場查詢、估價、訓練、發布與 591 入口只接受中古屋（`resale`）。
 - 刊登價不會冒充成交價；租屋資料不會混入買賣實價比較。
 - 估價由已評估的模型負責；LLM 只負責依 Evidence Pack 整理說明。
 - 報告中的數字必須引用現有 fact ID；無效報告不會被 benchmark/smoke 判為成功。
@@ -188,8 +188,8 @@ python -m venv .venv
 
 ### 快速開始
 
-1. 打開首頁；可先由 A17～A19 的「591 中古屋」或「591 新建案」連結挑選
-   物件，再將單一物件的詳細頁網址貼入「貼上 591 物件，開始分析」
+1. 打開首頁；可先由 A17～A19 的「591 中古屋」連結挑選物件，再將單一中古屋
+   詳細頁網址貼入「貼上 591 物件，開始分析」
 2. 從固定清單選擇回答模型：Google Gemini 3.5 Flash-Lite、Google Gemma 4
    31B、本機 Ollama Gemma 4 或 Rule
 3. 點擊「分析這個物件」
@@ -209,8 +209,8 @@ python -m venv .venv
 - **Ollama**：預設連線 `http://127.0.0.1:11434`，可用
   `QINGPU_OLLAMA_BASE_URL` 覆寫；模型目錄、Benchmark 與首頁對話共用此設定
 - **Rule 模式**：完全離線，使用證據資料產生固定摘要與建議
-- **詳細頁擷取**：中古屋支援目前 591 DOM（即使沒有 JSON-LD），新建案會保留
-  單價與坪數區間；若 591 顯示驗證頁，系統會要求人工處理，不繞過驗證
+- **詳細頁擷取**：中古屋支援目前 591 DOM（即使沒有 JSON-LD）；新建案網址會
+  顯示此產品已停用該入口。若 591 顯示驗證頁，系統會要求人工處理，不繞過驗證
 - **Gemini 回覆**：只採用正式文字 part，略過 API 回傳中的思考 part，再執行
   schema 與 fact ID 驗證
 
@@ -339,9 +339,9 @@ Remove-Item Env:MYSQL_PWD
 - `market-build` 讀取 `data/processed/transactions.parquet`，產出新的 `market_transactions.parquet`。
 - 若 MySQL 已載入資料，`qingpu-web` 會自動使用 MySQL 資料源；否則回退到 Parquet。
 
-### 中古屋（resale）與預售屋（presale）分離
+### 中古屋公開產品與預售屋底層資料
 
-中古屋與預售屋因價格形成機制、單價計算方式與市場行為不同，在本專案中**始終分開分析**，不會合併為單一價格指標。
+`market-build` 仍保留中古屋與預售屋分類，讓來源資料與歷史品質統計可追溯；公開產品只回傳中古屋。預售屋不會合併進中古屋價格指標，也不會進入估價、訓練、候選／正式模型發布或 591 公開入口。
 
 ## M2 AI 估價工作流程
 
@@ -351,20 +351,20 @@ Remove-Item Env:MYSQL_PWD
 # 建立已驗證的 M1 特徵來源
 .\.venv\Scripts\qingpu-data market-build
 
-# 訓練並產出中古屋與預售屋各自獨立的 artifact
-.\.venv\Scripts\qingpu-data model-train
+# 建立 immutable 中古屋候選；不會自動發布
+.\.venv\Scripts\qingpu-data model-train --markets resale
 ```
 
 輸出成果：
 
 | 檔案 | 階段 | 說明 |
 |------|------|------|
-| `artifacts/resale.joblib` | model-train | 中古屋估價 artifact（不提交 Git） |
-| `artifacts/presale.joblib` | model-train | 預售屋估價 artifact（不提交 Git） |
-| `outputs/reports/resale-evaluation.json` | model-train | 中古屋候選模型評估報告 |
-| `outputs/reports/presale-evaluation.json` | model-train | 預售屋候選模型評估報告 |
-| `outputs/reports/resale-model-card.md` | model-train | 中古屋模型卡 |
-| `outputs/reports/presale-model-card.md` | model-train | 預售屋模型卡 |
+| `candidates/<run_id>/resale.joblib` | model-train | immutable 中古屋候選 artifact |
+| `candidates/<run_id>/manifest.json` | model-train | 資料快照、來源版本、模型指標與發布建議 |
+| `candidates/<run_id>/reports/resale-evaluation.json` | model-train | 中古屋候選模型評估報告 |
+| `candidates/<run_id>/reports/resale-model-card.md` | model-train | 中古屋模型卡 |
+
+候選訓練需要可用的 `QINGPU_DATABASE_URL` 記錄管理工作狀態。既有預售屋 artifact、候選與報告只作為歷史資料保留，不會被新的訓練流程覆寫或發布。
 
 Web 操作頁支援三組固定調參設定（快速／平衡／精細）及選用自訂設定，
 自動在校準集比較各 profile 結果、鎖定最佳候選，並在測試集隔離驗證。
@@ -404,7 +404,7 @@ AutoML 模式與引導調參為互斥選擇。AutoML 不自動發布任何模型
 .\.venv\Scripts\qingpu-web
 ```
 
-首頁新增「AI 條件估價」面板，支援中古屋與預售屋估價。估價結果包含合理區間、可信度、影響因素、相似成交與開價評估。
+首頁「AI 條件估價」面板只支援中古屋。估價結果包含合理區間、可信度、影響因素、相似成交與開價評估。
 
 - 成交地圖依目前篩選條件涵蓋全部有效座標資料，並依縮放層級聚合為最多
   500 個群組；地圖狀態會揭露總筆數、有座標筆數與未定位筆數。
@@ -419,7 +419,7 @@ AutoML 模式與引導調參為互斥選擇。AutoML 不自動發布任何模型
 中古屋（resale）估價模型在訓練與發布時，會額外執行完整的證據檢查，確保模型符合最低品質門檻。
 
 **資料狀態**
-- 資料範圍：訓練資料的時間區間（min_date～max_date）、各站點（A17/A18/A19）與類型（resale/presale）的可用交易筆數
+- 資料範圍：訓練資料的時間區間（min_date～max_date）、各站點（A17/A18/A19）與中古屋可用交易筆數；manifest 仍記錄底層資料快照中的預售屋筆數，但不使用它訓練
 - 日期語義：`data_max_date` 是訓練資料最後一筆交易的日期，也是模型「知道」的最後日期
 
 **候選模型家族**
@@ -433,7 +433,7 @@ AutoML 模式與引導調參為互斥選擇。AutoML 不自動發布任何模型
 - `area_band`：坪數分群（small ≤ 20、standard > 20 且 ≤ 50、large > 50 坪）
 - `floor_band`：樓層比三分群（low、middle、high）
 
-中古屋訓練使用所選 profile 的**近期交易半衰期權重**（內建預設為 48 個月），愈近期的交易權重愈高，權重下限為 0.10；預售屋維持原本不加權流程。
+中古屋訓練使用所選 profile 的**近期交易半衰期權重**（內建預設為 48 個月），愈近期的交易權重愈高，權重下限為 0.10。
 
 **嚴格時間切割**
 所有評估使用嚴格的時間順序切割：
@@ -475,7 +475,7 @@ AutoML 模式與引導調參為互斥選擇。AutoML 不自動發布任何模型
 
 # 2. 建立市場資料集並訓練中古屋模型
 .\.venv\Scripts\qingpu-data.exe market-build
-.\.venv\Scripts\qingpu-data.exe model-train
+.\.venv\Scripts\qingpu-data.exe model-train --markets resale
 .\.venv\Scripts\qingpu-web.exe
 ```
 
@@ -489,8 +489,8 @@ AutoML 模式與引導調參為互斥選擇。AutoML 不自動發布任何模型
 |------|------|
 | 總覽 | 系統狀態、可用功能、待處理事項 |
 | 資料 | 指定季度範圍，一鍵更新官方資料 |
-| 刊登 | 依序更新 591 中古屋與預售屋 |
-| 模型 | 調參訓練、候選比較、發布預覽、發布與回滾 |
+| 刊登 | 更新與發布 591 中古屋 |
+| 模型 | 中古屋調參訓練、候選比較、發布預覽、發布與回滾 |
 | LLM | Gemini Key、模型清單與固定案例 benchmark |
 | 工作 | 背景工作進度、歷史、輸出與安全錯誤摘要 |
 | 診斷 | 目前環境、資料及服務狀態 |
@@ -520,9 +520,8 @@ $env:QINGPU_DEBUG = "0"
 Web 主流程只處理：
 
 1. `sale`：中古屋／成屋出售
-2. `newhouse`：預售屋／新成屋出售
 
-租屋資料不屬於本專題的市場估價與前端維運主線。舊版相容程式可能仍保留 rental 的底層契約，但管理介面不會抓取、發布或展示租屋流程。
+`newhouse`（預售屋／新成屋）網址會顯示產品入口已停用，不進行分析。租屋資料也不屬於本專題的市場估價與前端維運主線。舊版相容程式可能仍保留 newhouse／rental 的底層契約與本機歷史資料，但管理介面不會抓取、發布或展示這些流程。
 
 系統使用可見 Chrome，不繞過驗證，也不刻意收集帳號、密碼、Cookie 或聯絡欄位。結構化 schema 沒有專用聯絡欄位；但標題等 free text 與本機 raw HTML 仍可能含無法完全辨識的 contact-shaped text，因此發布前會執行偵測／清理 gate，原始 HTML 只保留在本機忽略路徑。
 
@@ -634,8 +633,8 @@ M4.4 報告以已發布的 MySQL 刊登與市場資料建立 Evidence Pack，目
 candidate listing ID。這是刻意的產品限制，用來避免多物件的事實與數字交叉引用。
 
 ```powershell
-# 更新刊登資料（最少 1 頁）
-.\.venv\Scripts\qingpu-data.exe listing-update --types sale newhouse --max-pages 1
+# 更新中古屋刊登資料（最少 1 頁）
+.\.venv\Scripts\qingpu-data.exe listing-update --types sale --max-pages 1
 
 # 執行健康檢查
 .\.venv\Scripts\qingpu-data.exe health-run
@@ -716,7 +715,7 @@ CLI 的實際參數以程式內說明為準：
 
 ## 面試時值得說明的設計決策
 
-1. 為什麼中古屋與預售屋必須分開建模。
+1. 為什麼保留預售屋底層資料，但把公開產品、估價、訓練與發布限定為中古屋。
 2. 為什麼模型評估必須使用時間切割。
 3. 為什麼訓練與發布是兩個獨立步驟。
 4. 為什麼 LLM 只能引用 Evidence Pack 的 fact ID。
