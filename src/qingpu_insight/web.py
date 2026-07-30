@@ -85,10 +85,17 @@ def _parse_mysql_url_to_config() -> SimpleNamespace:
 
 
 class ApiInputError(Exception):
-    def __init__(self, message: str, fields: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        fields: dict[str, str] | None = None,
+        *,
+        code: str = "invalid_request",
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.fields = fields or {}
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -378,9 +385,9 @@ def _create_admin_dashboard_service(
 
 
 def parse_filters(args: MultiDict[str, str]) -> MarketFilters:
-    transaction_type = args.get("transaction_type", "")
-    if not transaction_type:
-        raise ApiInputError("請選擇中古屋或預售屋。", {"transaction_type": "required"})
+    transaction_type = args.get("transaction_type", "resale")
+    if transaction_type == "presale":
+        raise ApiInputError("目前僅支援中古屋市場。", {"transaction_type": "resale_only"})
     stations = tuple(args.getlist("station")) or ("A17", "A18", "A19")
     try:
         date_from = (
@@ -413,8 +420,8 @@ def parse_filters(args: MultiDict[str, str]) -> MarketFilters:
         )
     except ValueError:
         fields: dict[str, str] = {}
-        if transaction_type not in {"resale", "presale"}:
-            fields["transaction_type"] = "resale_or_presale"
+        if transaction_type != "resale":
+            fields["transaction_type"] = "resale_only"
         if not stations or not set(stations) <= {"A17", "A18", "A19"}:
             fields["station"] = "A17_A18_or_A19"
         if area_ping_min is not None and area_ping_min < 0:
@@ -472,7 +479,6 @@ def _json_default(obj: Any) -> Any:
 
 def parse_valuation_payload(payload: dict[str, Any]) -> ValuationInput:
     required = (
-        "transaction_type",
         "station_code",
         "building_area_ping",
         "station_distance_m",
@@ -486,6 +492,13 @@ def parse_valuation_payload(payload: dict[str, Any]) -> ValuationInput:
     missing = {name: "required" for name in required if payload.get(name) in (None, "")}
     if missing:
         raise ApiInputError("請完整填寫估價條件。", missing)
+    transaction_type = str(payload.get("transaction_type", "resale"))
+    if transaction_type == "presale":
+        raise ApiInputError(
+            "目前已停止預售屋估價。",
+            {"transaction_type": "resale_only"},
+            code="presale_valuation_disabled",
+        )
     parking_type = payload.get("parking_type", "")
     parking_area = float(payload.get("parking_area_ping", 0))
     if not parking_type:
@@ -497,7 +510,7 @@ def parse_valuation_payload(payload: dict[str, Any]) -> ValuationInput:
         )
     try:
         return ValuationInput(
-            transaction_type=str(payload["transaction_type"]),
+            transaction_type=transaction_type,
             station_code=str(payload["station_code"]),
             building_area_ping=float(payload["building_area_ping"]),
             station_distance_m=float(payload["station_distance_m"]),
@@ -1238,7 +1251,7 @@ def create_app(
         return jsonify(
             {
                 "error": {
-                    "code": "invalid_request",
+                    "code": error.code,
                     "message": error.message,
                     "fields": error.fields,
                 }
@@ -1366,7 +1379,7 @@ def create_app(
             return jsonify(
                 {
                     "error": {
-                        "code": "invalid_request",
+                        "code": error.code,
                         "message": error.message,
                         "fields": error.fields,
                     }

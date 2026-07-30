@@ -1,5 +1,4 @@
 document.addEventListener("DOMContentLoaded", async function () {
-  const typeSelect = document.getElementById("transaction-type");
   const stationFilter = document.getElementById("station-filter");
   const controls = document.querySelector(".controls");
   const dateFrom = document.getElementById("date-from");
@@ -49,7 +48,7 @@ document.addEventListener("DOMContentLoaded", async function () {
   var mapMoveHandlerRegistered = false;
   function buildParams() {
     var params = new URLSearchParams();
-    params.set("transaction_type", typeSelect.value);
+    params.set("transaction_type", "resale");
     var checks = stationFilter.querySelectorAll(
       'input[type="checkbox"]:checked'
     );
@@ -179,7 +178,7 @@ document.addEventListener("DOMContentLoaded", async function () {
   function updateFilterChips() {
     if (!marketResults) return;
     var state = {
-      transactionTypeLabel: typeSelect.options[typeSelect.selectedIndex].text,
+      transactionTypeLabel: "中古屋",
       stations: Array.from(stationFilter.querySelectorAll('input[type="checkbox"]:checked')).map(function (cb) { return cb.value; }).sort(),
       areaMin: areaPingMin.value,
       areaMax: areaPingMax.value,
@@ -198,7 +197,7 @@ document.addEventListener("DOMContentLoaded", async function () {
     btn.textContent = "修改篩選";
     btn.addEventListener("click", function () {
       document.querySelector(".controls").scrollIntoView({ behavior: "smooth" });
-      document.getElementById("transaction-type").focus();
+      stationFilter.querySelector('input[type="checkbox"]').focus();
     });
     children.push(btn);
     container.replaceChildren.apply(container, children);
@@ -358,24 +357,8 @@ document.addEventListener("DOMContentLoaded", async function () {
 
 (function () {
   const form = document.getElementById("valuation-form");
-  const typeSelect = document.getElementById("valuation-type");
-  const ageInput = document.getElementById("valuation-age");
-  const ageLabel = document.getElementById("valuation-age-label");
   const resultSection = document.getElementById("valuation-result");
   const statusEl = document.getElementById("valuation-status");
-
-  function toggleAge() {
-    if (typeSelect.value === "presale") {
-      ageInput.disabled = true;
-      ageInput.value = "";
-      ageLabel.style.opacity = "0.4";
-    } else {
-      ageInput.disabled = false;
-      ageLabel.style.opacity = "1";
-    }
-  }
-  typeSelect.addEventListener("change", toggleAge);
-  toggleAge();
 
   var display = typeof QingpuDisplayFormat !== "undefined" ? QingpuDisplayFormat : null;
 
@@ -614,7 +597,7 @@ document.addEventListener("DOMContentLoaded", async function () {
     resultSection.hidden = true;
 
     var payload = {
-      transaction_type: document.getElementById("valuation-type").value,
+      transaction_type: "resale",
       station_code: document.getElementById("valuation-station").value,
       building_area_ping: parseFloat(document.getElementById("valuation-area").value),
       station_distance_m: parseFloat(document.getElementById("valuation-distance").value),
@@ -667,7 +650,6 @@ document.addEventListener("DOMContentLoaded", async function () {
             parking_area_ping: "valuation-parking-area",
             building_age_years: "valuation-age",
             parking_type: "valuation-parking-type",
-            transaction_type: "valuation-type",
             station_code: "valuation-station",
             asking_total_price_twd: "asking-price",
           };

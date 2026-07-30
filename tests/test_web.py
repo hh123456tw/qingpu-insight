@@ -593,7 +593,8 @@ def test_homepage_contains_market_dashboard_contract(client) -> None:
     response = client.get("/")
     html = response.get_data(as_text=True)
     assert response.status_code == 200
-    assert 'id="transaction-type"' in html
+    assert "市場：中古屋" in html
+    assert 'id="transaction-type"' not in html
     assert 'id="station-filter"' in html
     assert 'id="date-from"' in html
     assert 'id="date-to"' in html
@@ -620,16 +621,10 @@ def test_frontend_assets_keep_units_and_map_size_consistent(client) -> None:
 
 
 class TestMarketApi:
-    def test_summary_requires_transaction_type(self, client: FlaskClient) -> None:
+    def test_summary_defaults_to_resale(self, client: FlaskClient) -> None:
         response = client.get("/api/market/summary")
-        assert response.status_code == 400
-        assert response.get_json() == {
-            "error": {
-                "code": "invalid_request",
-                "message": "請選擇中古屋或預售屋。",
-                "fields": {"transaction_type": "required"},
-            }
-        }
+        assert response.status_code == 200
+        assert response.get_json()["transaction_type"] == "resale"
 
     def test_summary_keeps_transaction_type_isolated(self, client: FlaskClient) -> None:
         response = client.get("/api/market/summary?transaction_type=resale&station=A18")
@@ -641,7 +636,7 @@ class TestMarketApi:
         [
             (
                 "transaction_type=secret-unsupported-type",
-                {"transaction_type": "resale_or_presale"},
+                {"transaction_type": "resale_only"},
             ),
             (
                 "transaction_type=resale&station=secret-station",
@@ -688,12 +683,27 @@ class TestMarketApi:
         assert "secret-unsupported-type" not in serialized
         assert "secret-station" not in serialized
 
+    def test_market_endpoints_reject_presale(self, client: FlaskClient) -> None:
+        for path in (
+            "/api/market/summary",
+            "/api/market/trends",
+            "/api/market/map-points",
+            "/api/transactions",
+        ):
+            response = client.get(f"{path}?transaction_type=presale")
+            assert response.status_code == 400
+            assert response.get_json()["error"] == {
+                "code": "invalid_request",
+                "message": "目前僅支援中古屋市場。",
+                "fields": {"transaction_type": "resale_only"},
+            }
+
     def test_trends_and_transactions_share_filters(self, client: FlaskClient) -> None:
-        query = "transaction_type=presale&station=A17&date_from=2026-01-01"
+        query = "transaction_type=resale&station=A17&date_from=2026-01-01"
         assert client.get(f"/api/market/trends?{query}").status_code == 200
         payload = client.get(f"/api/transactions?{query}&limit=10").get_json()
         assert all(row["station_code"] == "A17" for row in payload["items"])
-        assert all(row["transaction_type"] == "presale" for row in payload["items"])
+        assert all(row["transaction_type"] == "resale" for row in payload["items"])
 
     def test_unhandled_exception_uses_safe_error_shape(self, failing_source: FlaskClient) -> None:
         response = failing_source.get("/api/market/summary?transaction_type=resale")
@@ -702,7 +712,7 @@ class TestMarketApi:
         assert "Traceback" not in response.get_data(as_text=True)
 
     def test_transactions_handles_nullable_numeric_fields(self, client: FlaskClient) -> None:
-        response = client.get("/api/transactions?transaction_type=presale&limit=1")
+        response = client.get("/api/transactions?transaction_type=resale&limit=1")
         assert response.status_code == 200
         payload = response.get_json()
         assert payload is not None
@@ -1244,6 +1254,25 @@ def test_post_valuation_reports_field_errors(valuation_client):
     assert "building_area_ping" in response.get_json()["error"]["fields"]
 
 
+def test_post_valuation_defaults_to_resale_when_market_is_omitted(valuation_client):
+    payload = dict(VALID_RESALE_PAYLOAD)
+    payload.pop("transaction_type")
+    response = valuation_client.post("/api/valuations", json=payload)
+    assert response.status_code == 201
+    assert response.get_json()["transaction_type"] == "resale"
+
+
+def test_post_valuation_rejects_presale_with_stable_error_code(valuation_client):
+    payload = dict(VALID_RESALE_PAYLOAD, transaction_type="presale")
+    response = valuation_client.post("/api/valuations", json=payload)
+    assert response.status_code == 400
+    assert response.get_json()["error"] == {
+        "code": "presale_valuation_disabled",
+        "message": "目前已停止預售屋估價。",
+        "fields": {"transaction_type": "resale_only"},
+    }
+
+
 @pytest.fixture
 def valid_payload():
     return dict(VALID_RESALE_PAYLOAD)
@@ -1280,6 +1309,19 @@ def test_get_valuation_returns_saved_record(valuation_client):
     assert response.get_json()["valuation_id"] == vid
 
 
+def test_get_valuation_keeps_historic_presale_record_readable(valuation_client, tmp_path):
+    from qingpu_insight.valuation_store import FileValuationStore
+
+    valuation_id = "dd4f37cd-d21e-47f3-9a6e-9a5c84479f22"
+    FileValuationStore(tmp_path / "vals").save_with_id(
+        valuation_id,
+        {"valuation_id": valuation_id, "transaction_type": "presale"},
+    )
+    response = valuation_client.get(f"/api/valuations/{valuation_id}")
+    assert response.status_code == 200
+    assert response.get_json()["transaction_type"] == "presale"
+
+
 def test_get_nonexistent_valuation_returns_404(valuation_client):
     response = valuation_client.get("/api/valuations/nonexistent")
     assert response.status_code == 404
@@ -1289,7 +1331,6 @@ def test_homepage_contains_complete_valuation_contract(client):
     html = client.get("/").get_data(as_text=True)
     for element_id in (
         "valuation-form",
-        "valuation-type",
         "valuation-station",
         "valuation-area",
         "valuation-distance",
@@ -1302,6 +1343,7 @@ def test_homepage_contains_complete_valuation_contract(client):
         "valuation-result",
     ):
         assert f'id="{element_id}"' in html
+    assert 'id="valuation-type"' not in html
 
 
 def test_frontend_renders_evidence_before_summary(client):

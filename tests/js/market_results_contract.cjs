@@ -1,7 +1,9 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const ui = require("../../src/qingpu_insight/static/market_results.js");
+const appScript = fs.readFileSync("src/qingpu_insight/static/app.js", "utf8");
 const rows = Array.from({ length: 100 }, (_, index) => ({ id: index }));
 
 assert.equal(ui.visibleRecent(rows, false).length, 8);
@@ -17,6 +19,9 @@ assert.deepEqual(
   }),
   ["中古屋", "A17～A19", "全部坪數"]
 );
+assert.match(appScript, /params\.set\("transaction_type", "resale"\)/);
+assert.match(appScript, /transaction_type: "resale"/);
+assert.doesNotMatch(appScript, /transaction-type|valuation-type|toggleAge/);
 
 async function testIndependentSections() {
   var successes = [];
