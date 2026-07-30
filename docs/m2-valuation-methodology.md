@@ -214,9 +214,52 @@ AI 回答中的 property claim 必須引用至少一個事實 fact ID，且 fact
 
 ## 限制與不適用情境
 
+## 新增共享特徵（Research Feature）
+
+### 公設比（common_area_ratio）
+
+來自內政部實價登錄的原始面積組成：主建物面積、附屬建物面積、建物移轉總面積、車位面積。公式為：
+
+```
+usable_area = main_building_area_sqm + auxiliary_building_area_sqm
+non_parking_total = building_area_sqm - parking_area_sqm
+common_area_ratio = 1 - usable_area / non_parking_total
+```
+
+有效範圍 0–70%，超出範圍或資料不足時為 NaN。此特徵為選填，不影響無資料時的估價。
+
+### 社區統計（Community Features）
+
+經人工驗證的青埔社區名錄（27 個社區），透過確定性規則（社區名、別名、地址、座標）比對成交記錄。每個交易僅使用**嚴格先前 24 個月**的同社區成交計算統計量，避免資料洩漏：
+
+- `community_prior_count_24m`：先前 24 個月同社區成交筆數
+- `community_prior_median_twd_per_ping_24m`：先前 24 個月同社區中位數單價
+- `community_premium_vs_station_24m`：社區溢價（社區中位數 vs 同站點同類型中位數）
+
+社區筆數少於 5 筆時中位數與溢價為 NaN。社區名本身不作為模型特徵。
+
+### 特徵家族實驗
+
+在 calibration 資料上比較五個特徵家族，以 MAE → MAPE → 較少特徵依序選擇，鎖定一個家族後才在 final test 上評估：
+
+1. baseline_v3（現有 20 個特徵）
+2. common_area（baseline + 公設比）
+3. community（baseline + 4 社區統計）
+4. common_area_community（baseline + 公設比 + 社區統計）
+5. common_area_community_management（全部，僅供報告，不可鎖定）
+
+管理組織（has_management）特徵始終僅供報告，不參與選擇。
+
+### 手動估價與 591 分析
+
+手動估價表單接受選填的公設比百分比與社區 ID。591 頁面分析自動擷取公設比與社區名稱，比對名錄後帶入估價。未知社區或無效公設比不阻擋估價，僅附加說明。
+
+## 限制與不適用情境
+
 - 僅使用官方成交資料，無法反映社區生活機能、學區、景觀等軟性因素
 - 僅涵蓋 A17–A19 三站 2 公里範圍
 - 無法可靠辨識社區或建案 ID（路段代理變數僅供洩漏檢測，不是特徵）
+- 社區名錄為人工維護，覆蓋率取決於驗證進度
 - 不含開價資料（開價僅用於與估值比較）
 - 不預測未來漲跌
 - 不構成專業不動產估價或投資建議
