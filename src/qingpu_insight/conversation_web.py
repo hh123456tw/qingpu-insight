@@ -324,7 +324,12 @@ def create_conversation_blueprint(
             }), 400
         try:
             req = ListingImportRequest(**data)
-            parse_initial_591_url(req.url)
+            initial_url = parse_initial_591_url(req.url)
+            if (
+                initial_url.kind == "direct"
+                and urlsplit(initial_url.request_url).hostname == "newhouse.591.com.tw"
+            ):
+                raise Unsupported591Url("only sale listings are supported")
             idempotency_key = _command_idempotency_key(
                 "import", conversation_id
             )

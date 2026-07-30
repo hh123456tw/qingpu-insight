@@ -10,7 +10,7 @@
     "overview", "data", "listings", "models",
     "llm", "jobs", "diagnostics",
   ];
-  var DEFAULT_LISTING_TYPES = ["sale", "newhouse"];
+  var DEFAULT_LISTING_TYPES = ["sale"];
   var mutationReady = false;
 
   function normalizeSection(hash) {

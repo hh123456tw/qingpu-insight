@@ -566,7 +566,7 @@ def _parse_listing_update_request() -> ListingUpdateRequest:
         raise ApiInputError("Request body must be a JSON object.", {"body": "object"})
 
     fields: dict[str, str] = {}
-    types = payload.get("types", ["sale", "newhouse"])
+    types = payload.get("types", ["sale"])
     if not isinstance(types, list):
         fields["types"] = "array"
     elif not types:
@@ -575,7 +575,7 @@ def _parse_listing_update_request() -> ListingUpdateRequest:
         fields["types"] = "string_items"
     elif len(set(types)) != len(types):
         fields["types"] = "unique"
-    elif any(item not in {"sale", "newhouse"} for item in types):
+    elif any(item != "sale" for item in types):
         fields["types"] = "supported_values"
 
     max_pages = payload.get("max_pages", 10)
@@ -1319,9 +1319,9 @@ def create_app(
     # ------------------------------------------------------------------
 
     def _listing_filters_from_args() -> ListingFilters:
-        listing_type = request.args.get("listing_type", "")
-        if not listing_type:
-            raise ApiInputError("請選擇刊登類型。", {"listing_type": "required"})
+        listing_type = request.args.get("listing_type", "sale")
+        if listing_type != "sale":
+            raise ApiInputError("僅支援中古屋刊登資料。", {"listing_type": "supported_value"})
         stations = tuple(request.args.getlist("station")) or ("A17", "A18", "A19")
         try:
             limit = min(max(int(request.args.get("limit", "100")), 1), 100)

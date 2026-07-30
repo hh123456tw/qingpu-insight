@@ -345,6 +345,19 @@ class TestImportListing:
         )
         assert response.status_code == 400
 
+    def test_import_listing_rejects_direct_newhouse_before_enqueue(
+        self, csrf_client, service
+    ):
+        response = csrf_client.post(
+            "/api/conversations/conv-1/listing",
+            json={"url": "https://newhouse.591.com.tw/456/detail"},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+
+        assert response.status_code == 400
+        assert response.get_json()["error"]["code"] == "unsupported_591_url"
+        service.start_import.assert_not_called()
+
     def test_import_listing_503_no_service(self, conversation_app_no_service):
         resp = conversation_app_no_service.post(
             "/api/conversations/conv-1/listing", json={"url": "http://example.com"}

@@ -55,7 +55,7 @@ assert.deepEqual(admin.buildReleasePreviewPayload("rollback", "presale", "v1"), 
 assert.equal(admin.canConfirmDangerousAction("abc", "abc"), true);
 assert.equal(admin.canConfirmDangerousAction("abc", "def"), false);
 
-assert.deepEqual(admin.DEFAULT_LISTING_TYPES, ["sale", "newhouse"]);
+assert.deepEqual(admin.DEFAULT_LISTING_TYPES, ["sale"]);
 
 assert.deepEqual(
   admin.buildBenchmarkPayload("ollama:gemma4:e2b"),
@@ -95,16 +95,14 @@ async function testListingSequenceUsesOnlyWebListingTypes() {
       return { run_id: "run-" + type, created: true };
     },
     waitForTerminal: async function (runId) {
-      return runId === "run-newhouse"
-        ? { status: "failed", error_code: "schema_error" }
-        : { status: "succeeded", output_version: "v-" + runId };
+      return { status: "succeeded", output_version: "v-" + runId };
     },
     onTypeStart: function () {},
     onTypeDone: function () {},
   });
-  assert.deepEqual(submitted, ["sale", "newhouse"]);
+  assert.deepEqual(submitted, ["sale"]);
   assert.equal(result.sale.status, "succeeded");
-  assert.equal(result.newhouse.status, "failed");
+  assert.equal(Object.hasOwn(result, "newhouse"), false);
   assert.equal(Object.hasOwn(result, "rental"), false);
 }
 

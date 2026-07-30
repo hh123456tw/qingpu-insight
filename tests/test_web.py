@@ -571,6 +571,8 @@ def test_homepage_has_h1_before_assistant_starter_and_valuation_fieldsets(client
     home = BeautifulSoup(client.get("/").get_data(as_text=True), "html.parser")
     assert home.find(["h1", "h2"]).name == "h1"
     assert home.select_one("#assistant-starter") is not None
+    assert "591 中古屋" in home.get_text()
+    assert "newhouse.591.com.tw" not in str(home)
     assert home.select_one("#report-form") is None
     assert home.select_one("#report-result") is None
     assert home.select_one("#valuation-form fieldset.basic-valuation-fields") is not None
@@ -937,9 +939,10 @@ class TestListingApi:
         for field in ("raw_html", "payload", "phone", "contact_name", "full_address"):
             assert field not in raw
 
-    def test_summary_requires_listing_type(self, listing_client: FlaskClient) -> None:
+    def test_summary_defaults_to_sale(self, listing_client: FlaskClient) -> None:
         response = listing_client.get("/api/listings/summary")
-        assert response.status_code == 400
+        assert response.status_code == 200
+        assert response.get_json()["listing_type"] == "sale"
 
     def test_summary_keeps_type_isolated(self, listing_client: FlaskClient) -> None:
         response = listing_client.get("/api/listings/summary?listing_type=sale&station=A18")
@@ -978,21 +981,17 @@ class TestListingApi:
         }
         assert set(row.keys()) == expected
 
-    def test_listings_omits_location_ineligible_and_preserves_missing_total_price(
-        self, listing_client: FlaskClient
+    @pytest.mark.parametrize(
+        "path",
+        ["/api/listings", "/api/listings/summary", "/api/listing-events"],
+    )
+    def test_public_listing_apis_reject_explicit_newhouse(
+        self, listing_client: FlaskClient, path: str
     ) -> None:
-        response = listing_client.get("/api/listings?listing_type=newhouse&station=A18")
+        response = listing_client.get(f"{path}?listing_type=newhouse&station=A18")
 
-        assert response.status_code == 200
-        items = response.get_json()["items"]
-        assert [item["listing_id"] for item in items] == ["N001"]
-        assert items[0]["price"] is None
-        assert items[0]["unit_price_range_twd_per_ping"] == {
-            "low": 500_000,
-            "high": 560_000,
-        }
-        assert items[0]["area_range_ping"] == {"low": 19.0, "high": 30.0}
-        assert "NaN" not in response.get_data(as_text=True)
+        assert response.status_code == 400
+        assert response.get_json()["error"]["fields"]["listing_type"] == "supported_value"
 
     def test_listing_events_returns_filtered(self, listing_client: FlaskClient) -> None:
         response = listing_client.get("/api/listing-events?listing_type=sale")
@@ -1011,9 +1010,10 @@ class TestListingApi:
         response = client.get("/api/listings?listing_type=sale")
         assert response.status_code == 503
 
-    def test_listings_with_missing_type_returns_400(self, listing_client: FlaskClient) -> None:
+    def test_listings_default_to_sale_when_type_is_missing(self, listing_client: FlaskClient) -> None:
         response = listing_client.get("/api/listings")
-        assert response.status_code == 400
+        assert response.status_code == 200
+        assert response.get_json()["items"][0]["type"] == "sale"
 
     @pytest.mark.parametrize("missing_column", ["location_eligible", "active"])
     def test_summary_and_listings_fail_closed_without_visibility_contract(
@@ -1580,7 +1580,7 @@ def test_listing_update_returns_202_without_waiting(
     _, _, service, executor = admin_app
     response = admin_client.post(
         "/api/admin/listing-updates",
-        json={"types": ["sale", "newhouse"], "max_pages": 1},
+        json={"types": ["sale"], "max_pages": 1},
         headers={"X-Qingpu-CSRF": "test-token"},
     )
     assert response.status_code == 202
@@ -1596,7 +1596,7 @@ def test_exact_active_duplicate_returns_existing_run_without_second_handoff(
 ) -> None:
     _, _, service, executor = admin_app
     request = {
-        "json": {"types": ["sale", "newhouse"], "max_pages": 1},
+        "json": {"types": ["sale"], "max_pages": 1},
         "headers": {"X-Qingpu-CSRF": "test-token"},
     }
     first = admin_client.post("/api/admin/listing-updates", **request)
@@ -1609,7 +1609,7 @@ def test_exact_active_duplicate_returns_existing_run_without_second_handoff(
     assert executor.submitted == [first.json["run_id"]]
 
 
-def test_listing_update_defaults_to_sale_and_newhouse(
+def test_listing_update_defaults_to_sale(
     admin_app,
     admin_client: FlaskClient,
 ) -> None:
@@ -1620,7 +1620,7 @@ def test_listing_update_defaults_to_sale_and_newhouse(
         headers={"X-Qingpu-CSRF": "test-token"},
     )
     assert response.status_code == 202
-    assert service.requests[-1].types == ("sale", "newhouse")
+    assert service.requests[-1].types == ("sale",)
 
 
 def test_listing_update_rejects_rental_before_job_creation(
@@ -1631,6 +1631,23 @@ def test_listing_update_rejects_rental_before_job_creation(
     response = admin_client.post(
         "/api/admin/listing-updates",
         json={"types": ["rental"], "max_pages": 1},
+        headers={"X-Qingpu-CSRF": "test-token"},
+    )
+    assert response.status_code == 400
+    assert response.get_json()["error"]["fields"]["types"] == "supported_values"
+    assert service.requests == []
+    assert executor.submitted == []
+    assert repo.list_recent(limit=10) == []
+
+
+def test_listing_update_rejects_newhouse_before_job_creation(
+    admin_app,
+    admin_client: FlaskClient,
+) -> None:
+    _, repo, service, executor = admin_app
+    response = admin_client.post(
+        "/api/admin/listing-updates",
+        json={"types": ["newhouse"], "max_pages": 1},
         headers={"X-Qingpu-CSRF": "test-token"},
     )
     assert response.status_code == 400
@@ -2499,14 +2516,14 @@ def test_real_executor_web_flow_starts_once_and_shuts_down(
                 sess["_csrf_token"] = "test-token"
             first = client.post(
                 "/api/admin/listing-updates",
-                json={"types": ["sale", "newhouse"], "max_pages": 1},
+                json={"types": ["sale"], "max_pages": 1},
                 headers={"X-Qingpu-CSRF": "test-token"},
             )
             assert first.status_code == 202
             assert started.wait(5), "executor did not enter preparation"
             duplicate = client.post(
                 "/api/admin/listing-updates",
-                json={"types": ["sale", "newhouse"], "max_pages": 1},
+                json={"types": ["sale"], "max_pages": 1},
                 headers={"X-Qingpu-CSRF": "test-token"},
             )
             assert duplicate.json["run_id"] == first.json["run_id"]
@@ -2518,8 +2535,8 @@ def test_real_executor_web_flow_starts_once_and_shuts_down(
             assert detail.status_code == 200
             assert detail.json["status"] == "succeeded"
             assert detail.json["output_version"]
-            assert detail.json["summary"]["rows"] == 2
-            assert preparation.calls == ["sale", "newhouse"]
+            assert detail.json["summary"]["rows"] == 1
+            assert preparation.calls == ["sale"]
     finally:
         release.set()
         app.extensions["qingpu_admin_shutdown"]()
@@ -3201,9 +3218,9 @@ def test_admin_listing_controls_exclude_rental(
     html = model_admin_client.get("/admin").get_data(as_text=True)
     page = BeautifulSoup(html, "html.parser")
     types = [item.get("data-type") for item in page.select(".listing-status-item")]
-    assert types == ["sale", "newhouse"]
+    assert types == ["sale"]
     assert page.select_one("#ls-status-rental") is None
-    assert page.select_one("#ls-run-all-btn").get_text(strip=True) == "更新出售與新建案"
+    assert page.select_one("#ls-run-all-btn").get_text(strip=True) == "更新中古屋"
 
 
 def test_admin_page_has_seven_classified_sections(model_admin_client):

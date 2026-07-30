@@ -82,7 +82,7 @@ assert.equal(ha.validateUrl(""), false);
 assert.equal(ha.validateUrl("not-a-url"), false);
 assert.equal(ha.validateUrl("https://rent.591.com.tw/home/house/detail/123"), false);
 assert.equal(ha.validateUrl("https://sale.591.com.tw/home/house/detail/2/123.html"), true);
-assert.equal(ha.validateUrl("https://newhouse.591.com.tw/456/detail"), true);
+assert.equal(ha.validateUrl("https://newhouse.591.com.tw/456/detail"), false);
 assert.equal(ha.validateUrl("https://591.to/abc123"), true);
 assert.equal(
   ha.validateUrl("https://sale.591.com.tw/home/house/detail/abc?from=search"),

@@ -18,7 +18,7 @@ from qingpu_insight.conversation_repository import (
     ConversationAlreadyHasListing,
     MySQLConversationRepository,
 )
-from qingpu_insight.conversation_urls import parse_initial_591_url
+from qingpu_insight.conversation_urls import Unsupported591Url, parse_initial_591_url
 
 ImportStage = Literal[
     "validating_url", "opening_browser", "capturing_listing",
@@ -97,6 +97,8 @@ class ConversationImportService:
             captured = self._browser.capture(initial)
 
             notify("capturing_listing")
+            if captured.detail.listing_type != "sale":
+                raise Unsupported591Url("only sale listings are supported")
             try:
                 listing = self._repository.add_initial_listing(
                     conversation_id=conversation_id,

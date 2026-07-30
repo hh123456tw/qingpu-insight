@@ -443,6 +443,32 @@ class TestInitialImport:
                 raw_url="https://evil.com/phish",
             )
 
+    def test_short_url_resolving_to_newhouse_is_rejected_before_mutation(
+        self,
+        repo: FakeRepository,
+    ) -> None:
+        repo.add_conversation(conversation_id="conv-1")
+        captured = CapturedListing(
+            final_url="https://newhouse.591.com.tw/456/detail",
+            detail=_sample_detail(listing_type="newhouse"),
+        )
+        browser = FakeBrowser(result=captured)
+        service = ConversationImportService(
+            repository=repo,  # type: ignore[arg-type]
+            browser=browser,  # type: ignore[arg-type]
+        )
+
+        with pytest.raises(Unsupported591Url, match="only sale listings"):
+            service.import_initial_listing(
+                conversation_id="conv-1",
+                raw_url="https://591.to/abc123",
+            )
+
+        assert len(browser.captures) == 1
+        assert repo.listings == {}
+        assert repo.snapshots == {}
+        assert repo.evidence_packs == {}
+
     def test_verification_needs_attention(
         self,
         repo: FakeRepository,

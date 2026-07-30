@@ -22,9 +22,6 @@
       if (parsed.hostname === "sale.591.com.tw") {
         return /^\/home\/house\/detail\/[1-9][0-9]*\/[1-9][0-9]*\.html$/.test(parsed.pathname);
       }
-      if (parsed.hostname === "newhouse.591.com.tw") {
-        return /^\/[1-9][0-9]*(?:\/detail)?\/?$/.test(parsed.pathname);
-      }
       return false;
     } catch (e) {
       return false;
@@ -236,7 +233,7 @@
       var model = modelSelect.value;
 
       if (!validateUrl(url)) {
-        renderStatus("不支援的網址，僅接受 591 售屋、新建案詳細頁或 591.to 短網址", true);
+        renderStatus("不支援的網址，僅接受 591 中古屋詳細頁或 591.to 短網址", true);
         return;
       }
 
