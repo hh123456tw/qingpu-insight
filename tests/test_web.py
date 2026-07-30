@@ -1176,33 +1176,7 @@ def trained_registry(tmp_path) -> ModelRegistry:
 
 
 @pytest.fixture
-def community_registry():
-    from qingpu_insight.community_registry import CommunityRegistry
-
-    data = pd.DataFrame([
-        {"community_id": "verified-stable-id", "canonical_name": "青埔A18社區",
-         "aliases": "", "station_code": "A18", "address_patterns": "",
-         "twd97_x": float("nan"), "twd97_y": float("nan"),
-         "completion_year": float("nan"), "source_notes": "test"},
-        {"community_id": "a17-community", "canonical_name": "青埔A17社區",
-         "aliases": "", "station_code": "A17", "address_patterns": "",
-         "twd97_x": float("nan"), "twd97_y": float("nan"),
-         "completion_year": float("nan"), "source_notes": "test"},
-        {"community_id": "a19-community", "canonical_name": "青埔A19社區",
-         "aliases": "", "station_code": "A19", "address_patterns": "",
-         "twd97_x": float("nan"), "twd97_y": float("nan"),
-         "completion_year": float("nan"), "source_notes": "test"},
-    ])
-    return CommunityRegistry(_data=data, _version="test-v1")
-
-
-@pytest.fixture
-def valuation_client(
-    market_frame: pd.DataFrame,
-    trained_registry,
-    tmp_path,
-    community_registry,
-) -> FlaskClient:
+def valuation_client(market_frame: pd.DataFrame, trained_registry, tmp_path) -> FlaskClient:
     from qingpu_insight.valuation_store import FileValuationStore
     from qingpu_insight.web import create_app
 
@@ -1213,12 +1187,7 @@ def valuation_client(
     mf["parking_area_sqm"] = 0
     ds = InMemoryMarketDataSource(mf)
     store = FileValuationStore(tmp_path / "vals")
-    app = create_app(
-        data_source=ds,
-        valuation_store=store,
-        model_registry=trained_registry,
-        community_registry=community_registry,
-    )
+    app = create_app(data_source=ds, valuation_store=store, model_registry=trained_registry)
     with app.test_client() as client:
         yield client
 
@@ -1341,108 +1310,6 @@ def test_frontend_renders_evidence_before_summary(client):
     assert "confidence_reasons" in script
     assert "comparables" in script
     assert "innerHTML =" not in script
-
-
-# ------------------------------------------------------------------
-# Community Catalog API tests (Task 8)
-# ------------------------------------------------------------------
-
-
-class TestCommunityCatalogApi:
-    def test_list_all(self, valuation_client):
-        response = valuation_client.get("/api/communities")
-        assert response.status_code == 200
-        data = response.get_json()
-        assert len(data) >= 3
-        for entry in data:
-            assert set(entry.keys()) == {"community_id", "canonical_name", "station_code"}
-
-    def test_filter_by_station(self, valuation_client):
-        response = valuation_client.get("/api/communities?station_code=A18")
-        assert response.status_code == 200
-        data = response.get_json()
-        assert all(item["station_code"] == "A18" for item in data)
-        ids = {item["community_id"] for item in data}
-        assert "verified-stable-id" in ids
-        assert "a17-community" not in ids
-
-    def test_invalid_station_returns_400(self, valuation_client):
-        response = valuation_client.get("/api/communities?station_code=invalid")
-        assert response.status_code == 400
-        assert response.get_json()["error"]["fields"]["station_code"] == "A17_A18_or_A19"
-
-    def test_does_not_expose_internal_fields(self, valuation_client):
-        raw = valuation_client.get("/api/communities").get_data(as_text=True)
-        for field in ("aliases", "address_patterns", "twd97_x", "twd97_y", "source_notes"):
-            assert field not in raw
-
-    def test_returns_empty_list_without_registry(self, client):
-        response = client.get("/api/communities")
-        assert response.status_code == 200
-        assert response.get_json() == []
-
-
-# ------------------------------------------------------------------
-# Valuation payload extension tests (Task 8)
-# ------------------------------------------------------------------
-
-
-def test_valuation_accepts_common_area_ratio_percent(valuation_client, valid_payload):
-    valid_payload["common_area_ratio_percent"] = 34.8
-    response = valuation_client.post("/api/valuations", json=valid_payload)
-    assert response.status_code == 201
-
-
-def test_valuation_accepts_community_id(valuation_client, valid_payload):
-    valid_payload["community_id"] = "verified-stable-id"
-    response = valuation_client.post("/api/valuations", json=valid_payload)
-    assert response.status_code == 201
-
-
-def test_valuation_rejects_nonexistent_community(valuation_client, valid_payload):
-    valid_payload["community_id"] = "nonexistent-id"
-    response = valuation_client.post("/api/valuations", json=valid_payload)
-    assert response.status_code == 400
-    assert response.get_json()["error"]["fields"]["community_id"] == "not_found"
-
-
-def test_valuation_accepts_missing_optional_fields(valuation_client, valid_payload):
-    valid_payload.pop("common_area_ratio_percent", None)
-    valid_payload.pop("community_id", None)
-    response = valuation_client.post("/api/valuations", json=valid_payload)
-    assert response.status_code == 201
-
-
-def test_valuation_rejects_out_of_range_common_area_ratio(valuation_client, valid_payload):
-    valid_payload["common_area_ratio_percent"] = 150
-    response = valuation_client.post("/api/valuations", json=valid_payload)
-    assert response.status_code == 400
-    assert response.get_json()["error"]["fields"]["common_area_ratio"] == "range_0_to_70"
-
-
-def test_valuation_common_area_ratio_converts_pct(
-    monkeypatch, valuation_client, valid_payload,
-):
-    from qingpu_insight import web as _web
-
-    captured = {}
-
-    def fake_valuate(input_, registry, frame, latest_data_date):
-        captured["input"] = input_
-        return {
-            "estimated_total_price_twd": 10000000,
-            "interval_total_price_twd": (8000000, 12000000),
-            "confidence": "low",
-            "confidence_reasons": [],
-            "data_date": "2026-06-01",
-            "model": {"name": "test", "version": "v1"},
-            "valuation_id": "test",
-        }
-
-    monkeypatch.setattr(_web, "valuate", fake_valuate)
-    valid_payload["common_area_ratio_percent"] = 34.8
-    valuation_client.post("/api/valuations", json=valid_payload)
-    assert captured["input"].common_area_ratio == 0.348
 
 
 # ------------------------------------------------------------------

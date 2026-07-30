@@ -1,12 +1,9 @@
 import math
-from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
 import pandas as pd
-
-from qingpu_insight.community_features import CommunityFeatureValues
 
 PARKING_FEATURE_COLUMNS = ("parking_type", "parking_area_ping")
 
@@ -36,29 +33,6 @@ DERIVED_FEATURE_COLUMNS = (
     "location_known",
 )
 FEATURE_COLUMNS = BASE_FEATURE_COLUMNS + DERIVED_FEATURE_COLUMNS
-COMMON_AREA_FEATURE_COLUMNS = ("common_area_ratio",)
-MANAGEMENT_FEATURE_COLUMNS = ("has_management",)
-COMMUNITY_FEATURE_COLUMNS = (
-    "community_known",
-    "community_prior_count_24m",
-    "community_prior_median_twd_per_ping_24m",
-    "community_premium_vs_station_24m",
-)
-
-RESALE_FEATURE_SETS = {
-    "baseline_v3": FEATURE_COLUMNS,
-    "common_area": FEATURE_COLUMNS + COMMON_AREA_FEATURE_COLUMNS,
-    "community": FEATURE_COLUMNS + COMMUNITY_FEATURE_COLUMNS,
-    "common_area_community": (
-        FEATURE_COLUMNS + COMMON_AREA_FEATURE_COLUMNS + COMMUNITY_FEATURE_COLUMNS
-    ),
-    "common_area_community_management": (
-        FEATURE_COLUMNS
-        + COMMON_AREA_FEATURE_COLUMNS
-        + COMMUNITY_FEATURE_COLUMNS
-        + MANAGEMENT_FEATURE_COLUMNS
-    ),
-}
 
 _CHINESE_DIGITS = {
     "一": 1,
@@ -223,8 +197,6 @@ class ValuationInput:
     asking_total_price_twd: int | None = None
     twd97_x: float | None = None
     twd97_y: float | None = None
-    common_area_ratio: float | None = None
-    community_id: str | None = None
 
     def __post_init__(self):
         if not self.parking_type:
@@ -277,11 +249,6 @@ class ValuationInput:
             raise ValueError("building_age_years must be between 0 and 100")
         if self.asking_total_price_twd is not None and self.asking_total_price_twd <= 0:
             raise ValueError("asking_total_price_twd must be > 0")
-        if self.common_area_ratio is not None:
-            if not math.isfinite(self.common_area_ratio):
-                raise ValueError("common_area_ratio must be finite")
-            if not (0 <= self.common_area_ratio <= 0.70):
-                raise ValueError("common_area_ratio must be between 0 and 0.70")
         if (self.twd97_x is None) != (self.twd97_y is None):
             raise ValueError("twd97_x and twd97_y must be provided together")
         if self.twd97_x is not None and not all(
@@ -290,13 +257,7 @@ class ValuationInput:
             raise ValueError("coordinates must be finite")
 
 
-def input_frame(
-    value: ValuationInput,
-    data_date: pd.Timestamp,
-    *,
-    feature_columns: Sequence[str] = FEATURE_COLUMNS,
-    community_snapshot: dict[str, CommunityFeatureValues] | None = None,
-) -> pd.DataFrame:
+def input_frame(value: ValuationInput, data_date: pd.Timestamp) -> pd.DataFrame:
     data = {
         "station_code": [value.station_code],
         "station_distance_m": [value.station_distance_m],
@@ -316,29 +277,4 @@ def input_frame(
         "twd97_x": [value.twd97_x],
         "twd97_y": [value.twd97_y],
     }
-    result = add_derived_features(pd.DataFrame(data))
-
-    if "common_area_ratio" in feature_columns:
-        result["common_area_ratio"] = value.common_area_ratio
-
-    _cv = None
-    if community_snapshot is not None and value.community_id is not None:
-        _cv = community_snapshot.get(value.community_id)
-
-    if "community_known" in feature_columns:
-        result["community_known"] = _cv.known if _cv is not None else "unknown"
-    if "community_prior_count_24m" in feature_columns:
-        result["community_prior_count_24m"] = _cv.prior_count_24m if _cv is not None else 0
-    if "community_prior_median_twd_per_ping_24m" in feature_columns:
-        result["community_prior_median_twd_per_ping_24m"] = (
-            _cv.prior_median_twd_per_ping_24m if _cv is not None else None
-        )
-    if "community_premium_vs_station_24m" in feature_columns:
-        result["community_premium_vs_station_24m"] = (
-            _cv.premium_vs_station_24m if _cv is not None else None
-        )
-
-    if "has_management" in feature_columns:
-        result["has_management"] = None
-
-    return result.loc[:, list(feature_columns)]
+    return add_derived_features(pd.DataFrame(data)).loc[:, list(FEATURE_COLUMNS)]

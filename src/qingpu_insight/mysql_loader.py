@@ -28,10 +28,6 @@ INSERT_COLUMNS: tuple[str, ...] = (
     "parking_type",
     "parking_area_sqm",
     "parking_price_twd",
-    "main_building_area_sqm",
-    "auxiliary_building_area_sqm",
-    "common_area_ratio",
-    "has_management",
     "analysis_eligible",
 )
 
@@ -73,9 +69,6 @@ def _insert_market_rows(connection: Any, frame: pd.DataFrame, batch_size: int = 
 
 
 def load_market_rows(connection: Any, frame: pd.DataFrame, batch_size: int = 1000) -> int:
-    for column in INSERT_COLUMNS:
-        if column not in frame:
-            frame[column] = None
     try:
         total = _insert_market_rows(connection, frame, batch_size)
         connection.commit()

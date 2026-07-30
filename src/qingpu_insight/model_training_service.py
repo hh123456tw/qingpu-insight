@@ -14,11 +14,6 @@ import pandas as pd
 from qingpu_insight.automl_control import AutoMLControlRegistry
 from qingpu_insight.automl_outputs import AutoMLRunOutputStore
 from qingpu_insight.automl_search import run_automl_search
-from qingpu_insight.community_features import (
-    add_historical_community_features,
-    build_community_feature_snapshot,
-)
-from qingpu_insight.community_registry import CommunityRegistry
 from qingpu_insight.job_executor import LocalJobExecutor
 from qingpu_insight.jobs import JobService, JobSubmission
 from qingpu_insight.model_analysis import (
@@ -27,7 +22,6 @@ from qingpu_insight.model_analysis import (
     release_reason_codes,
     run_annual_backtests,
     run_feature_experiments,
-    run_shared_feature_experiments,
 )
 from qingpu_insight.model_artifacts import (
     AutoMLMarketSearchSnapshot,
@@ -43,8 +37,6 @@ from qingpu_insight.model_artifacts import (
 )
 from qingpu_insight.model_features import (
     BASE_FEATURE_COLUMNS,
-    COMMUNITY_FEATURE_COLUMNS,
-    FEATURE_COLUMNS,
     build_model_frame,
 )
 from qingpu_insight.model_training import (
@@ -330,74 +322,6 @@ class ModelTrainingService:
         )
         return diagnostics
 
-    def _evaluate_shared_feature_release_gate(
-        self,
-        candidate_metrics: dict[str, object],
-        baseline_metrics: dict[str, object],
-        backtests: list[dict[str, object]],
-        has_shared_features: bool,
-        test_coverage: float | None = None,
-        validation_evidence: dict[str, object] | None = None,
-        registry_version: str | None = None,
-    ) -> dict[str, bool]:
-        checks: dict[str, bool] = {}
-        if not has_shared_features:
-            checks["shared_feature_gate_passed"] = True
-            return checks
-
-        overall_mae_improved_2pct = (
-            candidate_metrics.get("overall", {}).get("mae", float("inf"))
-            <= baseline_metrics.get("overall", {}).get("mae", float("inf")) * 0.98
-        )
-        mape_not_worsened = (
-            candidate_metrics.get("overall", {}).get("mape", float("inf"))
-            <= baseline_metrics.get("overall", {}).get("mape", float("inf"))
-        )
-        stations_ok = all(
-            candidate_metrics.get(f"station:{s}", {}).get("mape", float("inf"))
-            <= baseline_metrics.get(f"station:{s}", {}).get("mape", float("inf")) + 1.0
-            for s in ("A17", "A18", "A19")
-        )
-        backtests_ok = len(backtests) >= 2 and sum(
-            1 for bt in backtests if bt.get("passed")
-        ) >= 2
-
-        pi_coverage_ok = test_coverage is None or test_coverage >= 0.90
-
-        validation_ok = True
-        if validation_evidence is not None:
-            labeled_pages = validation_evidence.get("labeled_pages", 0)
-            validation_ok = labeled_pages >= 20
-            parsing_success = validation_evidence.get("public_area_parsing_success", 0.0)
-            validation_ok = validation_ok and parsing_success >= 0.70
-            community_recognition = validation_evidence.get("known_community_recognition", 0.0)
-            validation_ok = validation_ok and community_recognition >= 0.80
-            if registry_version is not None:
-                evidence_digest = validation_evidence.get("registry_digest")
-                if (evidence_digest is not None and registry_version is not None
-                        and evidence_digest != registry_version):
-                    validation_ok = False
-        else:
-            validation_ok = False
-
-        passed = all((
-            overall_mae_improved_2pct,
-            mape_not_worsened,
-            stations_ok,
-            backtests_ok,
-            pi_coverage_ok,
-            validation_ok,
-        ))
-
-        checks["shared_mae_improved_2pct"] = overall_mae_improved_2pct
-        checks["shared_mape_not_worsened"] = mape_not_worsened
-        checks["shared_stations_within_limit"] = stations_ok
-        checks["shared_backtests_passed"] = backtests_ok
-        checks["shared_pi_coverage_ok"] = pi_coverage_ok
-        checks["shared_validation_ok"] = validation_ok
-        checks["shared_feature_gate_passed"] = passed
-        return checks
-
     def _finalize_candidate(
         self,
         run_id: str,
@@ -419,8 +343,6 @@ class ModelTrainingService:
         automl_info: dict[str, object] | None = None,
         fit_spec: ModelFitSpec | None = None,
         feature_contract_version: int = 0,
-        fallback_profiles: tuple | None = None,
-        validation_evidence: dict[str, object] | None = None,
     ) -> MarketTrainingResult:
         diagnostics = diagnostics or {}
         analysis_experiments = analysis_experiments or []
@@ -441,17 +363,6 @@ class ModelTrainingService:
                 reporting_diagnostics=diagnostics if is_resale else None,
             )
             bundle: ValuationBundle = joblib.load(artifact_path)
-            bundle.community_registry_version = seed_bundle.community_registry_version
-            bundle.community_registry_rows = seed_bundle.community_registry_rows
-            bundle.community_feature_snapshot = seed_bundle.community_feature_snapshot
-            shared_exp = None
-            if analysis_experiments:
-                for exp in analysis_experiments:
-                    if isinstance(exp, dict) and exp.get("name") == "shared_feature_experiment":
-                        shared_exp = exp
-                        break
-            bundle.shared_feature_experiment = shared_exp
-            joblib.dump(bundle, artifact_path)
             parking_policy_dict = None
             if bundle.parking_price_policy is not None:
                 pp = bundle.parking_price_policy
@@ -476,13 +387,6 @@ class ModelTrainingService:
                 }
         except Exception as exc:
             raise ModelTrainingError("candidate_write_failed", str(exc)) from exc
-
-        interval_summary = compute_interval_summary(
-            bundle,
-            experiment.final_test_results[model_name],
-            split,
-        )
-        test_coverage = interval_summary["test_coverage"]
 
         serialized_backtests: list[dict[str, object]] = []
         release_checks: dict[str, bool] = {}
@@ -522,134 +426,6 @@ class ModelTrainingService:
                     data_max_ts,
                     latest_official_ts,
                 )
-                has_shared = bool(
-                    any(col in enhanced_features for col in COMMUNITY_FEATURE_COLUMNS)
-                )
-                shared_checks = self._evaluate_shared_feature_release_gate(
-                    candidate_metrics,
-                    baseline_metrics,
-                    serialized_backtests,
-                    has_shared,
-                    test_coverage=test_coverage,
-                    validation_evidence=validation_evidence,
-                    registry_version=seed_bundle.community_registry_version,
-                )
-                release_checks.update(shared_checks)
-
-                shared_gate_passed = shared_checks.get("shared_feature_gate_passed", True)
-                if (is_resale and has_shared and not shared_gate_passed
-                        and fallback_profiles is not None):
-                    from qingpu_insight.model_training import run_tuned_model_experiment
-
-                    fallback_exp = run_tuned_model_experiment(
-                        split,
-                        profiles=fallback_profiles,
-                        feature_columns=FEATURE_COLUMNS,
-                        use_recency_weights=True,
-                        baseline_months=12,
-                    )
-
-                    model_name = fallback_exp.selected_model
-                    locked_eval = fallback_exp.selected_evaluation
-                    enhanced_features = FEATURE_COLUMNS
-                    feature_contract_version = 3
-                    release_checks["shared_feature_fallback"] = True
-                    release_checks["shared_feature_fallback_reason"] = (
-                        "shared_feature_gate_failed_fallback_to_baseline_v3"
-                    )
-
-                    fallback_bundle = ValuationBundle(
-                        transaction_type=market,
-                        model_name="",
-                        model_version="",
-                        pipeline=None,
-                        interval_abs_residual_twd_per_ping=0,
-                        feature_ranges={},
-                        feature_hard_ranges={},
-                        feature_medians={},
-                        global_importance=[],
-                        reference_rows=pd.DataFrame(),
-                        data_min_date=str(split.train["transaction_date"].min().date()),
-                        data_max_date=str(split.train["transaction_date"].max().date()),
-                        metrics={},
-                        feature_columns=enhanced_features,
-                        community_registry_version=seed_bundle.community_registry_version,
-                        community_registry_rows=seed_bundle.community_registry_rows,
-                        community_feature_snapshot=seed_bundle.community_feature_snapshot,
-                    )
-
-                    reporting_metrics = (
-                        fallback_exp.final_test_results[model_name].metrics.to_dict(orient="index")
-                    )
-                    new_artifact_path = train_artifact(
-                        market,
-                        locked_eval,
-                        split,
-                        fallback_bundle,
-                        stage,
-                        feature_columns=enhanced_features,
-                        training_frame=model_frame,
-                        use_recency_weights=True,
-                        recency_half_life_months=recency_half_life_months,
-                        reporting_metrics=reporting_metrics,
-                        reporting_diagnostics=diagnostics,
-                    )
-                    bundle = joblib.load(new_artifact_path)
-                    bundle.community_registry_version = seed_bundle.community_registry_version
-                    bundle.community_registry_rows = seed_bundle.community_registry_rows
-                    bundle.community_feature_snapshot = seed_bundle.community_feature_snapshot
-                    shared_exp = None
-                    if analysis_experiments:
-                        for exp in analysis_experiments:
-                            if (
-                                isinstance(exp, dict)
-                                and exp.get("name") == "shared_feature_experiment"
-                            ):
-                                shared_exp = exp
-                                break
-                    bundle.shared_feature_experiment = shared_exp
-                    joblib.dump(bundle, new_artifact_path)
-
-                    raw_backtests = run_annual_backtests(
-                        model_frame,
-                        model_name,
-                        enhanced_features,
-                        fit_spec=fit_spec,
-                    )
-                    serialized_backtests = []
-                    for bt in raw_backtests:
-                        bt_copy = dict(bt)
-                        for key in (
-                            "cutoff_date",
-                            "train_max_date",
-                            "test_min_date",
-                            "source_max_date",
-                        ):
-                            if key in bt_copy and isinstance(bt_copy[key], pd.Timestamp):
-                                bt_copy[key] = str(bt_copy[key].date())
-                        serialized_backtests.append(bt_copy)
-
-                    baseline_metrics = (
-                        fallback_exp.final_test_results["baseline"].metrics.to_dict(orient="index")
-                    )
-                    candidate_metrics = (
-                        fallback_exp.final_test_results[model_name].metrics.to_dict(orient="index")
-                    )
-                    release_checks = evaluate_release_checks(
-                        candidate_metrics,
-                        baseline_metrics,
-                        serialized_backtests,
-                        data_max_ts,
-                        latest_official_ts,
-                    )
-                    artifact_path = new_artifact_path
-                    experiment = fallback_exp
-                    interval_summary = compute_interval_summary(
-                        bundle,
-                        experiment.final_test_results[model_name],
-                        split,
-                    )
-                    test_coverage = interval_summary["test_coverage"]
             except Exception as exc:
                 raise ModelTrainingError("candidate_write_failed", str(exc)) from exc
 
@@ -662,11 +438,8 @@ class ModelTrainingService:
             and parking_policy.market_fallback.price_twd > 0
         )
         release_checks["parking_price_consistency"] = parking_consistent
-        shared_gate = release_checks.get("shared_feature_gate_passed", True)
         release_checks["recommended"] = bool(
-            release_checks.get("recommended", experiment.recommended)
-            and parking_consistent
-            and shared_gate
+            release_checks.get("recommended", experiment.recommended) and parking_consistent
         )
 
         self._jobs.progress(
@@ -749,14 +522,6 @@ class ModelTrainingService:
     ) -> MarketTrainingResult:
         is_resale = market == "resale"
         model_frame = build_model_frame(frame, market)
-
-        registry: CommunityRegistry | None = None
-        if is_resale:
-            registry_path = Path("data/reference/qingpu_communities.csv")
-            if registry_path.exists():
-                registry = CommunityRegistry.from_csv(registry_path)
-                model_frame = add_historical_community_features(model_frame, registry)
-
         split = split_by_time(model_frame)
 
         diagnostics: dict[str, object] = {}
@@ -777,24 +542,8 @@ class ModelTrainingService:
                     }
                     for fe in exp_list
                 ]
-
-                shared_result = run_shared_feature_experiments(split)
-                locked_features = shared_result.locked_feature_columns
-                has_shared_features = any(
-                    col in locked_features for col in COMMUNITY_FEATURE_COLUMNS
-                )
-                enhanced_features = locked_features
-                analysis_experiments.append({
-                    "name": "shared_feature_experiment",
-                    "locked_feature_set_name": shared_result.locked_feature_set_name,
-                    "locked_feature_columns": list(locked_features),
-                    "selection_reason": shared_result.selection_reason,
-                    "calibration_experiments": [
-                        {"name": e.name, "selected_model": e.selected_model}
-                        for e in shared_result.calibration_experiments
-                    ],
-                })
-                feature_contract_ver = 4 if has_shared_features else 3
+                enhanced_features = exp_list[1].feature_columns
+                feature_contract_ver = 3
 
             experiment = run_tuned_model_experiment(
                 split,
@@ -851,23 +600,6 @@ class ModelTrainingService:
             for pe in experiment.profile_results
         ]
 
-        registry_version: str | None = None
-        registry_rows: tuple[dict[str, object], ...] = ()
-        if is_resale and registry is not None:
-            registry_version = registry.version
-            registry_rows = tuple(registry._data.to_dict(orient="records"))
-
-        data_max_date = str(
-            (model_frame if is_resale else split.train)["transaction_date"].max().date()
-        )
-        community_snapshot = (
-            build_community_feature_snapshot(
-                model_frame, cutoff=pd.Timestamp(data_max_date)
-            )
-            if is_resale and registry is not None
-            else None
-        )
-
         seed_bundle = ValuationBundle(
             transaction_type=market,
             model_name="",
@@ -880,12 +612,11 @@ class ModelTrainingService:
             global_importance=[],
             reference_rows=pd.DataFrame(),
             data_min_date="",
-            data_max_date=data_max_date,
+            data_max_date=str(
+                (model_frame if is_resale else split.train)["transaction_date"].max().date()
+            ),
             metrics={},
             feature_columns=enhanced_features,
-            community_registry_version=registry_version,
-            community_registry_rows=registry_rows,
-            community_feature_snapshot=community_snapshot,
         )
 
         return self._finalize_candidate(
@@ -906,7 +637,6 @@ class ModelTrainingService:
             selected_profile=selected_profile_obj,
             profile_results=profile_results,
             feature_contract_version=feature_contract_ver,
-            fallback_profiles=plan.profiles if is_resale and has_shared_features else None,
         )
 
     def _execute_automl_market(
@@ -919,14 +649,6 @@ class ModelTrainingService:
     ) -> tuple[MarketTrainingResult | None, AutoMLMarketSearchSnapshot]:
         is_resale = market == "resale"
         model_frame = build_model_frame(frame, market)
-
-        registry: CommunityRegistry | None = None
-        if is_resale:
-            registry_path = Path("data/reference/qingpu_communities.csv")
-            if registry_path.exists():
-                registry = CommunityRegistry.from_csv(registry_path)
-                model_frame = add_historical_community_features(model_frame, registry)
-
         split = split_by_time(model_frame)
         diagnostics: dict[str, object] = {}
         analysis_experiments: list[dict[str, object]] = []
@@ -943,19 +665,7 @@ class ModelTrainingService:
                 }
                 for fe in exp_list
             ]
-            shared_result = run_shared_feature_experiments(split)
-            locked_features = shared_result.locked_feature_columns
-            enhanced_features = locked_features
-            analysis_experiments.append({
-                "name": "shared_feature_experiment",
-                "locked_feature_set_name": shared_result.locked_feature_set_name,
-                "locked_feature_columns": list(locked_features),
-                "selection_reason": shared_result.selection_reason,
-                "calibration_experiments": [
-                    {"name": e.name, "selected_model": e.selected_model}
-                    for e in shared_result.calibration_experiments
-                ],
-            })
+            enhanced_features = exp_list[1].feature_columns
         feature_columns = list(enhanced_features) if is_resale else list(BASE_FEATURE_COLUMNS)
         self._jobs.progress(
             run_id,
@@ -1059,23 +769,6 @@ class ModelTrainingService:
                     source_frame=frame,
                 )
                 diagnostics = self._merge_market_quality_diagnostics(diagnostics)
-            registry_version: str | None = None
-            registry_rows: tuple[dict[str, object], ...] = ()
-            if is_resale and registry is not None:
-                registry_version = registry.version
-                registry_rows = tuple(registry._data.to_dict(orient="records"))
-
-            data_max_date = str(
-                (model_frame if is_resale else split.train)["transaction_date"].max().date()
-            )
-            community_snapshot = (
-                build_community_feature_snapshot(
-                    model_frame, cutoff=pd.Timestamp(data_max_date)
-                )
-                if is_resale and registry is not None
-                else None
-            )
-
             seed_bundle = ValuationBundle(
                 transaction_type=market,
                 model_name="",
@@ -1088,18 +781,13 @@ class ModelTrainingService:
                 global_importance=[],
                 reference_rows=pd.DataFrame(),
                 data_min_date="",
-                data_max_date=data_max_date,
+                data_max_date=str(
+                    (model_frame if is_resale else split.train)["transaction_date"].max().date()
+                ),
                 metrics={},
                 feature_columns=tuple(feature_columns),
-                community_registry_version=registry_version,
-                community_registry_rows=registry_rows,
-                community_feature_snapshot=community_snapshot,
             )
             recency_half_life = trial.fit_spec.recency_half_life_months or 48
-            has_shared = is_resale and any(
-                col in enhanced_features for col in COMMUNITY_FEATURE_COLUMNS
-            )
-            fcv = 4 if has_shared else (3 if is_resale else 0)
             result = self._finalize_candidate(
                 run_id=run_id,
                 market=market,
@@ -1125,7 +813,7 @@ class ModelTrainingService:
                     "release_blockers": [],
                 },
                 fit_spec=trial.fit_spec,
-                feature_contract_version=fcv,
+                feature_contract_version=3 if is_resale else 0,
             )
             if not result.recommended:
                 release_blockers.extend(result.reason_codes)

@@ -538,44 +538,6 @@ def test_experiment_final_gate_returns_recommended_false_when_candidate_fails():
     assert "final_gate_failed" in result.reason_codes
 
 
-def test_numeric_features_include_community_columns():
-    required = {
-        "common_area_ratio",
-        "community_prior_count_24m",
-        "community_prior_median_twd_per_ping_24m",
-        "community_premium_vs_station_24m",
-    }
-    assert required <= set(model_training.NUMERIC_FEATURES)
-
-
-def test_categorical_features_include_community_columns():
-    required = {"community_known", "has_management"}
-    assert required <= set(model_training.CATEGORICAL_FEATURES)
-
-
-def test_preprocessor_builds_for_all_resale_feature_sets(model_frame):
-    from qingpu_insight.model_features import RESALE_FEATURE_SETS
-
-    frame = model_frame.copy()
-    n = len(frame)
-    frame["common_area_ratio"] = np.random.uniform(0, 1, n)
-    frame["community_known"] = np.random.choice(["known", "unknown"], n)
-    frame["community_prior_count_24m"] = np.random.randint(0, 100, n).astype(float)
-    frame["community_prior_median_twd_per_ping_24m"] = np.random.uniform(
-        200_000, 800_000, n
-    )
-    frame["community_premium_vs_station_24m"] = np.random.uniform(-0.5, 0.5, n)
-    frame["has_management"] = np.random.choice(["yes", "no"], n)
-
-    for _name, columns in RESALE_FEATURE_SETS.items():
-        preprocessor = make_preprocessor(columns)
-        X = frame[list(columns)]
-        preprocessor.fit(X)
-        transformed = preprocessor.transform(X)
-        assert transformed.shape[0] == n
-        assert transformed.shape[1] > 0
-
-
 def test_experiment_no_candidate_beats_baseline_returns_baseline_selected(model_frame):
     from sklearn.dummy import DummyRegressor
 

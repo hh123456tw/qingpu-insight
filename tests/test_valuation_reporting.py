@@ -158,32 +158,6 @@ def test_model_card_discloses_required_evidence(tmp_path, trained_bundle, experi
     assert "1,500,000" in text
 
 
-def test_write_evaluation_includes_shared_feature_experiment(tmp_path, trained_bundle, experiment):
-    import json
-    from dataclasses import replace
-
-    split = _build_experiment_frame(300, 100, 200, seed=99)
-    exp = run_model_experiment(split)
-    exp = replace(exp, recommended=True, reason_codes=())
-
-    shared_fe = {
-        "locked_feature_set_name": "community",
-        "locked_feature_columns": ["community_known"],
-        "selection_reason": "locked community (MAE=12345.6, MAPE=8.50, features=18)",
-        "calibration_experiments": [
-            {"name": "baseline_v3", "selected_model": "ridge"},
-            {"name": "community", "selected_model": "ridge"},
-        ],
-    }
-    path = write_evaluation(
-        trained_bundle, exp, split, tmp_path, shared_feature_experiment=shared_fe
-    )
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    assert "shared_feature_experiment" in payload
-    assert payload["shared_feature_experiment"]["locked_feature_set_name"] == "community"
-    assert payload["shared_feature_experiment"]["selection_reason"].startswith("locked community")
-
-
 def test_write_evaluation_creates_json(tmp_path, trained_bundle, experiment):
     import json
     from dataclasses import replace
@@ -284,32 +258,6 @@ def test_model_card_with_profile_uses_exact_half_life(
     )
     text = path.read_text(encoding="utf-8")
     assert "24 個月" not in text
-
-
-def test_model_card_with_shared_feature_experiment(tmp_path, trained_bundle, experiment, leakage):
-    from dataclasses import replace
-
-    split = _build_experiment_frame(300, 100, 200, seed=99)
-    exp = run_model_experiment(split)
-    exp = replace(exp, recommended=True, reason_codes=())
-
-    shared_fe = {
-        "locked_feature_set_name": "community",
-        "locked_feature_columns": ["community_known"],
-        "selection_reason": "locked community (MAE=12345.6, MAPE=8.50, features=18)",
-        "calibration_experiments": [
-            {"name": "baseline_v3", "selected_model": "ridge"},
-            {"name": "community", "selected_model": "ridge"},
-        ],
-    }
-    path = write_model_card(
-        trained_bundle, exp, leakage, tmp_path,
-        shared_feature_experiment=shared_fe,
-    )
-    text = path.read_text(encoding="utf-8")
-    assert "新增特徵研究" in text
-    assert "社區特徵" in text or "community" in text
-    assert "locked community" in text
 
 
 def test_model_card_explains_log_target_candidate(

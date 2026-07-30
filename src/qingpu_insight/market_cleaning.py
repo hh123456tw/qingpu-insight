@@ -31,17 +31,6 @@ REQUIRED_COLUMNS = frozenset(
 )
 
 
-def add_shared_property_features(frame: pd.DataFrame) -> pd.DataFrame:
-    result = frame.copy()
-    usable = result["main_building_area_sqm"] + result["auxiliary_building_area_sqm"]
-    non_parking_total = result["building_area_sqm"] - result["parking_area_sqm"].fillna(0)
-    ratio = 1 - usable / non_parking_total
-    valid = non_parking_total.gt(0) & ratio.between(0, 0.70, inclusive="both")
-    result["common_area_ratio"] = ratio.where(valid)
-    result["common_area_ratio_valid"] = valid
-    return result
-
-
 @dataclass(frozen=True)
 class MarketQuality:
     input_records: int
@@ -121,7 +110,6 @@ def build_market_dataset(frame: pd.DataFrame) -> tuple[pd.DataFrame, MarketQuali
     }
     reasons = {name: count for name, count in reasons.items() if count}
     clean = output.loc[output["analysis_eligible"]].drop_duplicates("transaction_key").copy()
-    clean = add_shared_property_features(clean)
     quality = MarketQuality(
         input_records=len(output),
         output_records=len(clean),

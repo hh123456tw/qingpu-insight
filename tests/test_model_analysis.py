@@ -7,17 +7,14 @@ import pytest
 
 from qingpu_insight.model_analysis import (
     ABLATIONS,
-    SharedFeatureExperimentResult,
     build_resale_diagnostics,
     evaluate_release_checks,
     run_annual_backtests,
     run_feature_experiments,
-    run_shared_feature_experiments,
 )
 from qingpu_insight.model_features import (
     BASE_FEATURE_COLUMNS,
     FEATURE_COLUMNS,
-    RESALE_FEATURE_SETS,
     add_derived_features,
 )
 from qingpu_insight.model_training import run_model_experiment, split_by_time
@@ -344,75 +341,3 @@ def test_release_checks_require_all_three_backtests():
     assert checks["backtests_passed"] is False
     assert checks["backtest_stations_within_limit"] is False
     assert checks["recommended"] is False
-
-
-def _add_community_columns(frame: pd.DataFrame) -> pd.DataFrame:
-    n = len(frame)
-    result = frame.copy()
-    result["common_area_ratio"] = np.random.uniform(0, 1, n)
-    result["community_known"] = np.random.choice(["known", "unknown"], n)
-    result["community_prior_count_24m"] = np.random.randint(0, 100, n).astype(float)
-    result["community_prior_median_twd_per_ping_24m"] = np.random.uniform(
-        200_000, 800_000, n
-    )
-    result["community_premium_vs_station_24m"] = np.random.uniform(-0.5, 0.5, n)
-    result["has_management"] = np.random.choice(["yes", "no"], n)
-    return result
-
-
-def test_shared_feature_experiment_result_dataclass():
-    result = SharedFeatureExperimentResult(
-        calibration_experiments=(),
-        locked_feature_set_name="baseline_v3",
-        locked_feature_columns=("a", "b"),
-        selection_reason="best mae",
-    )
-    assert result.locked_feature_set_name == "baseline_v3"
-
-
-def test_shared_feature_experiments_returns_exact_matrix(model_frame):
-    frame = _add_community_columns(model_frame)
-    split = split_by_time(frame)
-    result = run_shared_feature_experiments(split)
-
-    assert isinstance(result, SharedFeatureExperimentResult)
-    experiment_names = [e.name for e in result.calibration_experiments]
-    assert experiment_names == list(RESALE_FEATURE_SETS.keys())
-    assert result.locked_feature_set_name in {
-        "baseline_v3",
-        "common_area",
-        "community",
-        "common_area_community",
-    }
-
-
-def test_management_is_always_report_only(model_frame):
-    frame = _add_community_columns(model_frame)
-    split = split_by_time(frame)
-    result = run_shared_feature_experiments(split)
-    assert result.locked_feature_set_name != "common_area_community_management"
-
-
-def test_shared_feature_tie_breaking(model_frame):
-    frame = _add_community_columns(model_frame)
-    split = split_by_time(frame)
-    result = run_shared_feature_experiments(split)
-    assert "MAE" in result.selection_reason
-
-
-def test_final_test_isolation(monkeypatch, model_frame):
-    import qingpu_insight.model_training as mt
-
-    frame = _add_community_columns(model_frame)
-    split = split_by_time(frame)
-
-    original = mt.evaluate_fitted_candidate
-    observed_ids = set()
-
-    def guard(name, estimator, evaluation_frame, **kwargs):
-        observed_ids.add(id(evaluation_frame))
-        return original(name, estimator, evaluation_frame, **kwargs)
-
-    monkeypatch.setattr(mt, "evaluate_fitted_candidate", guard)
-    run_shared_feature_experiments(split)
-    assert id(split.test) not in observed_ids

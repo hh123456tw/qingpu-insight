@@ -464,30 +464,6 @@
     });
   }
 
-  function sharedFeatureResearchView(result, marketInfo) {
-    var fr = marketInfo && marketInfo.feature_research;
-    if (!fr || !fr.available) {
-      return { available: false, verdict: fr ? fr.verdict : "未提供此版本證據" };
-    }
-    var calibration = (fr.calibration || []).map(function (c) {
-      return {
-        name: c.name,
-        model: c.selected_model || "—",
-        mae: c.mae != null ? (c.mae / 10000).toFixed(1) + " 萬" : "—",
-        mape: c.mape != null ? c.mape.toFixed(2) + "%" : "—",
-      };
-    });
-    return {
-      available: true,
-      verdict: fr.verdict,
-      lockedSetName: fr.locked_set_name,
-      selectionReason: fr.selection_reason,
-      calibration: calibration,
-      hasCommunityFeatures: fr.has_community_features === true,
-      hasCommonAreaFeatures: fr.has_common_area_features === true,
-    };
-  }
-
   function releaseCheckRows(result) {
     var checks = (result && result.release_checks) || {};
     var names = Object.keys(checks);
@@ -667,7 +643,6 @@
     ablationRows: ablationRows,
     backtestRows: backtestRows,
     releaseCheckRows: releaseCheckRows,
-    sharedFeatureResearchView: sharedFeatureResearchView,
     candidateDecisionSummary: candidateDecisionSummary,
     parkingPolicySummary: parkingPolicySummary,
     BUILD_LABELS: BUILD_LABELS,

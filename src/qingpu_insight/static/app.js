@@ -379,47 +379,6 @@ document.addEventListener("DOMContentLoaded", async function () {
 
   var display = typeof QingpuDisplayFormat !== "undefined" ? QingpuDisplayFormat : null;
 
-  // Community dropdown
-  var allCommunities = [];
-  var communitySelect = document.getElementById("valuation-community");
-  var stationSelect = document.getElementById("valuation-station");
-
-  function populateCommunityDropdown(communities) {
-    var currentValue = communitySelect.value;
-    while (communitySelect.firstChild) { communitySelect.removeChild(communitySelect.firstChild); }
-    var placeholderOpt = document.createElement("option");
-    placeholderOpt.value = "";
-    placeholderOpt.textContent = "不確定／不提供";
-    communitySelect.appendChild(placeholderOpt);
-    communities.forEach(function(c) {
-      var opt = document.createElement("option");
-      opt.value = c.community_id;
-      opt.textContent = c.canonical_name;
-      communitySelect.appendChild(opt);
-    });
-    if (currentValue && communities.some(function(c) { return c.community_id === currentValue; })) {
-      communitySelect.value = currentValue;
-    }
-  }
-
-  function updateCommunityDropdown() {
-    var station = stationSelect.value;
-    var filtered = QingpuValuationForm.communitiesForStation(allCommunities, station);
-    populateCommunityDropdown(filtered);
-  }
-
-  fetch("/api/communities")
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      allCommunities = data;
-      updateCommunityDropdown();
-    });
-
-  stationSelect.addEventListener("change", function() {
-    communitySelect.value = "";
-    updateCommunityDropdown();
-  });
-
   // Parking type/area interaction
   var parkingTypeSelect = document.getElementById("valuation-parking-type");
   var parkingAreaInput = document.getElementById("valuation-parking-area");
@@ -677,12 +636,6 @@ document.addEventListener("DOMContentLoaded", async function () {
     var askingVal = document.getElementById("asking-price").value;
     if (askingVal) payload.asking_total_price_twd = parseInt(askingVal);
 
-    var communityVal = document.getElementById("valuation-community").value;
-    if (communityVal) payload.community_id = communityVal;
-
-    var commonAreaVal = document.getElementById("valuation-common-area-ratio").value;
-    if (commonAreaVal) payload.common_area_ratio_percent = parseFloat(commonAreaVal);
-
     fetch("/api/valuations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -717,8 +670,6 @@ document.addEventListener("DOMContentLoaded", async function () {
             transaction_type: "valuation-type",
             station_code: "valuation-station",
             asking_total_price_twd: "asking-price",
-            community_id: "valuation-community",
-            common_area_ratio: "valuation-common-area-ratio",
           };
           var controlId = QingpuValuationForm.firstErrorControlId(err.error.fields, fieldMap);
           if (controlId) {

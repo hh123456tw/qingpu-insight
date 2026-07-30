@@ -21,10 +21,7 @@ from qingpu_insight.model_artifacts import (
     TrainingProfileSnapshot,
     sha256_file,
 )
-from qingpu_insight.model_observatory import (
-    ModelObservatory,
-    _feature_research_report,
-)
+from qingpu_insight.model_observatory import ModelObservatory
 from qingpu_insight.model_release import OfficialModelStore
 from qingpu_insight.parking_valuation import ParkingPricePolicy, ParkingPriceStat
 from qingpu_insight.valuation import ValuationBundle
@@ -486,72 +483,6 @@ class TestModelObservatoryStatus:
         assert result["markets"]["resale"]["is_current_official"] is True
         assert result["manifest"]["markets"] == manifest.markets
 
-    def test_get_run_extracts_shared_feature_experiment_when_artifact_has_it(
-        self,
-        tmp_path: Path,
-    ) -> None:
-        manifest = manifest_fixture(markets=["resale"])
-        bundle = bundle_fixture()
-        bundle.shared_feature_experiment = {
-            "locked_feature_set_name": "community",
-            "locked_feature_columns": ["community_known"],
-            "selection_reason": "locked community (MAE=12345.6, MAPE=8.50, features=18)",
-            "calibration_experiments": [
-                {"name": "baseline_v3", "selected_model": "ridge"},
-                {"name": "community", "selected_model": "ridge"},
-            ],
-        }
-        artifact_dir = tmp_path / "artifacts"
-        artifact_dir.mkdir()
-        candidate_dir = tmp_path / "candidates"
-        candidate_dir.mkdir()
-        run_dir = candidate_dir / str(manifest.run_id)
-        run_dir.mkdir()
-        (run_dir / "manifest.json").write_text(
-            manifest.model_dump_json(indent=2), encoding="utf-8"
-        )
-        result_entry = manifest.results[0]
-        src_artifact = run_dir / result_entry.artifact_file
-        joblib.dump(bundle, src_artifact)
-        actual_hash = sha256_file(src_artifact)
-        result_entry.artifact_sha256 = actual_hash
-        (run_dir / "manifest.json").write_text(
-            manifest.model_dump_json(indent=2), encoding="utf-8"
-        )
-
-        store = OfficialModelStore(artifact_dir)
-        cs = CandidateArtifactStore(candidate_dir)
-        now = datetime.now(UTC)
-
-        class FakeJob(JobService):
-            def __init__(self):
-                self._runs = {str(manifest.run_id): JobRun(
-                    run_id=str(manifest.run_id), job_type="model_training",
-                    trigger="manual", idempotency_key="", status="succeeded",
-                    started_at=now, finished_at=now, attempt=1,
-                    input_version=None, output_version=str(manifest.run_id),
-                    summary={}, error_code=None, error_message=None,
-                )}
-            def list_recent(self, limit=20, job_type=None):
-                return list(self._runs.values())[:limit]
-            def get(self, run_id):
-                return self._runs.get(run_id)
-
-        dummy = type("Fake", (), {})()
-        obs = ModelObservatory(
-            artifact_dir=artifact_dir, candidate_store=cs,
-            model_training_service=dummy, job_service=FakeJob(),
-            official_store=store,
-        )
-        detail = obs.get_run(str(manifest.run_id))
-        assert detail is not None
-        market_info = detail["markets"]["resale"]
-        assert "feature_research" in market_info
-        fr = market_info["feature_research"]
-        assert fr["available"] is True
-        assert fr["verdict"] == "有改善"
-        assert fr["locked_set_name"] == "community"
-
     def test_get_run_returns_none_for_missing(self, tmp_path: Path) -> None:
         observatory = observatory_fixture(tmp_path)
         assert observatory.get_run("nonexistent-run-id") is None
@@ -744,79 +675,3 @@ def test_schema_v1_run_detail_has_safe_empty_analysis(tmp_path: Path) -> None:
     assert result["feature_experiments"] == []
     assert result["backtests"] == []
     assert result["release_checks"] == {}
-
-
-class TestFeatureResearchReport:
-    def test_returns_safe_defaults_when_no_shared_experiment(self) -> None:
-        result = _feature_research_report([], None)
-        assert result["available"] is False
-        assert result["verdict"] == "未提供此版本證據"
-
-    def test_verdict_improved_when_not_baseline_v3(self) -> None:
-        shared_fe = {
-            "locked_feature_set_name": "community",
-            "locked_feature_columns": ["community_known"],
-            "selection_reason": "locked community (MAE=12345.6, MAPE=8.50, features=18)",
-        }
-        fe_list = [
-            {
-                "name": "baseline_v3",
-                "selected_model": "ridge",
-                "metrics": {"overall": {"mae": 50000.0, "mape": 10.0}},
-            },
-            {
-                "name": "community",
-                "selected_model": "ridge",
-                "metrics": {"overall": {"mae": 45000.0, "mape": 9.0}},
-            },
-        ]
-        result = _feature_research_report(fe_list, shared_fe)
-        assert result["available"] is True
-        assert result["verdict"] == "有改善"
-        assert result["locked_set_name"] == "community"
-        assert len(result["calibration"]) == 2
-
-    def test_verdict_not_improved_when_baseline_v3_locked(self) -> None:
-        shared_fe = {
-            "locked_feature_set_name": "baseline_v3",
-            "locked_feature_columns": [],
-            "selection_reason": "locked baseline_v3 (MAE=50000.0, MAPE=10.00, features=12)",
-        }
-        result = _feature_research_report([], shared_fe)
-        assert result["verdict"] == "未證明改善"
-
-    def test_calibration_filters_known_sets(self) -> None:
-        shared_fe = {
-            "locked_feature_set_name": "common_area_community",
-            "locked_feature_columns": ["community_known", "common_area_ratio"],
-            "selection_reason": "locked common_area_community",
-        }
-        fe_list = [
-            {"name": "baseline_v3", "selected_model": "ridge",
-             "metrics": {"overall": {"mae": 50000.0}}},
-            {"name": "common_area", "selected_model": "ridge",
-             "metrics": {"overall": {"mae": 48000.0}}},
-            {"name": "community", "selected_model": "ridge",
-             "metrics": {"overall": {"mae": 46000.0}}},
-            {"name": "common_area_community", "selected_model": "ridge",
-             "metrics": {"overall": {"mae": 44000.0}}},
-            {"name": "common_area_community_management", "selected_model": "ridge",
-             "metrics": {"overall": {"mae": 43000.0}}},
-            {"name": "enhanced", "selected_model": "ridge",
-             "metrics": {"overall": {"mae": 42000.0}}},
-        ]
-        result = _feature_research_report(fe_list, shared_fe)
-        assert result["has_community_features"] is True
-        assert result["has_common_area_features"] is True
-        assert len(result["calibration"]) == 5
-
-    def test_empty_metrics_produces_safe_null_values(self) -> None:
-        result = _feature_research_report(
-            [{"name": "baseline_v3", "selected_model": "ridge",
-              "metrics": {}}],
-            {"locked_feature_set_name": "baseline_v3",
-             "locked_feature_columns": [], "selection_reason": ""},
-        )
-        assert len(result["calibration"]) == 1
-        assert result["calibration"][0]["mae"] is None
-        assert result["calibration"][0]["mape"] is None

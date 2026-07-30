@@ -27,65 +27,6 @@ def _project_result(r: Any) -> dict[str, Any]:
     return data
 
 
-_FEATURE_SET_CAL_NAMES = frozenset({
-    "baseline_v3", "common_area", "community",
-    "common_area_community", "common_area_community_management",
-})
-
-_FEATURE_SET_CHINESE = {
-    "baseline_v3": "基準 V3",
-    "common_area": "公設比 E1",
-    "community": "社區特徵 E2",
-    "common_area_community": "公設+社區 E3",
-    "common_area_community_management": "公設+社區+管理 E4",
-}
-
-_COMMUNITY_COLUMNS = frozenset({
-    "community_known", "community_prior_count_24m",
-    "community_prior_median_twd_per_ping_24m", "community_premium_vs_station_24m",
-})
-
-
-def _feature_research_report(
-    feature_experiments: list[dict[str, Any]],
-    shared_fe: dict[str, Any] | None,
-) -> dict[str, Any]:
-    if shared_fe is None:
-        return {"available": False, "verdict": "未提供此版本證據"}
-
-    calibration = []
-    for fe in feature_experiments:
-        name = fe.get("name")
-        if name in _FEATURE_SET_CAL_NAMES:
-            metrics = fe.get("metrics", {})
-            if not isinstance(metrics, dict):
-                metrics = {}
-            overall = metrics.get("overall", {})
-            if not isinstance(overall, dict):
-                overall = {}
-            calibration.append({
-                "name": _FEATURE_SET_CHINESE.get(name, name),
-                "selected_model": fe.get("selected_model"),
-                "mae": _public_number(overall.get("mae")),
-                "mape": _public_number(overall.get("mape")),
-            })
-
-    locked_name = shared_fe.get("locked_feature_set_name")
-    locked_cols = shared_fe.get("locked_feature_columns", [])
-    has_community = any(col in _COMMUNITY_COLUMNS for col in locked_cols)
-    has_common_area = "common_area_ratio" in locked_cols
-
-    return {
-        "available": True,
-        "verdict": "有改善" if locked_name and locked_name != "baseline_v3" else "未證明改善",
-        "locked_set_name": locked_name,
-        "selection_reason": shared_fe.get("selection_reason"),
-        "calibration": calibration,
-        "has_community_features": has_community,
-        "has_common_area_features": has_common_area,
-    }
-
-
 def _public_number(value: Any, *, integer: bool = False) -> int | float | None:
     if value is None:
         return None
@@ -386,13 +327,11 @@ class ModelObservatory:
 
                 candidate_dir = self._candidate_store._root / str(manifest.run_id)
                 artifact_path = candidate_dir / m_result.artifact_file
-                _shared_fe_data = (None, None)
                 if not artifact_path.exists():
                     blockers.append("artifact_missing")
                     publishable = False
                 else:
                     actual_hash = sha256_file(artifact_path)
-                    _loaded_bundle: ValuationBundle | None = None
                     if actual_hash != m_result.artifact_sha256:
                         blockers.append("sha256_mismatch")
                         publishable = False
@@ -405,17 +344,9 @@ class ModelObservatory:
                             elif bundle.transaction_type != m:
                                 blockers.append("market_mismatch")
                                 publishable = False
-                            else:
-                                _loaded_bundle = bundle
                         except Exception:
                             blockers.append("corrupt_artifact")
                             publishable = False
-
-                    _shared_fe_data = (
-                        (getattr(_loaded_bundle, "shared_feature_experiment", None),
-                         getattr(_loaded_bundle, "community_registry_version", None))
-                        if _loaded_bundle is not None else (None, None)
-                    )
 
                 current_version_id: str | None = None
                 is_current_official = False
@@ -431,16 +362,6 @@ class ModelObservatory:
                     "current_official_version_id": current_version_id,
                     "is_current_official": is_current_official,
                 }
-
-                _shared_fe, _crv = _shared_fe_data
-                if isinstance(_shared_fe, dict):
-                    markets_info[m]["shared_feature_experiment"] = _shared_fe
-                if _crv is not None:
-                    markets_info[m]["community_registry_version"] = _crv
-                markets_info[m]["feature_research"] = _feature_research_report(
-                    m_result.feature_experiments,
-                    _shared_fe if isinstance(_shared_fe, dict) else None,
-                )
 
             result["markets"] = markets_info
 

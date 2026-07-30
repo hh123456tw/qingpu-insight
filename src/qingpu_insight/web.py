@@ -24,7 +24,6 @@ from werkzeug.exceptions import HTTPException
 from qingpu_insight.admin_dashboard import AdminDashboardService, ReadinessItem
 from qingpu_insight.admin_web import ADMIN_JOB_TYPES, AdminRuntime, create_admin_blueprint
 from qingpu_insight.backup_repository import MySQLBackupRepository
-from qingpu_insight.community_registry import CommunityRegistry
 from qingpu_insight.config import get_settings
 from qingpu_insight.evidence import UnknownCandidateError
 from qingpu_insight.geo import wgs84_to_twd97
@@ -496,21 +495,6 @@ def parse_valuation_payload(payload: dict[str, Any]) -> ValuationInput:
             "有車位時請填寫大於 0 的車位面積。",
             {"parking_area_ping": "positive_when_parking_selected"},
         )
-    common_area_ratio = None
-    raw_ratio = payload.get("common_area_ratio_percent")
-    if raw_ratio is not None and raw_ratio != "":
-        try:
-            common_area_ratio = float(raw_ratio) / 100
-        except (TypeError, ValueError):
-            raise ApiInputError(
-                "公設比格式不正確。", {"common_area_ratio": "invalid"}
-            ) from None
-        if not (0 <= common_area_ratio <= 0.70):
-            raise ApiInputError(
-                "公設比必須在 0% 到 70% 之間。",
-                {"common_area_ratio": "range_0_to_70"},
-            )
-    community_id = payload.get("community_id") or None
     try:
         return ValuationInput(
             transaction_type=str(payload["transaction_type"]),
@@ -531,8 +515,6 @@ def parse_valuation_payload(payload: dict[str, Any]) -> ValuationInput:
             asking_total_price_twd=int(payload["asking_total_price_twd"])
             if payload.get("asking_total_price_twd")
             else None,
-            common_area_ratio=common_area_ratio,
-            community_id=community_id,
         )
     except (KeyError, TypeError, ValueError):
         raise ApiInputError("估價條件格式不正確。", {"valuation": "invalid"}) from None
@@ -909,16 +891,6 @@ def _conversation_valuation(
         ),
         twd97_x=coordinates[0],
         twd97_y=coordinates[1],
-        common_area_ratio=(
-            float(payload["common_area_ratio"])
-            if payload.get("common_area_ratio") is not None
-            else None
-        ),
-        community_id=(
-            str(payload["community_id"])
-            if payload.get("community_id") is not None
-            else None
-        ),
     )
     market = data_source.load(MarketFilters(transaction_type=transaction_type))
     if market.empty:
@@ -1002,7 +974,6 @@ def create_app(
     report_repository: object | None = None,
     conversation_service: object | None = None,
     conversation_repository: object | None = None,
-    community_registry: CommunityRegistry | None = None,
 ) -> Flask:
     app = Flask(__name__)
     app.json.default = _json_default
@@ -1019,14 +990,6 @@ def create_app(
     ds = data_source
     store = valuation_store or FileValuationStore(Path.cwd() / "outputs" / "valuations")
     registry = model_registry or ModelRegistry(Path.cwd() / "artifacts")
-    _community_registry = community_registry
-    if _community_registry is None and root is not None:
-        csv_path = root / "data" / "community_registry.csv"
-        if csv_path.exists():
-            try:
-                _community_registry = CommunityRegistry.from_csv(csv_path)
-            except Exception:
-                app.logger.warning("community registry composition failed")
     lr = listing_repo
     injected_legacy = (job_service, listing_update_service, job_executor)
     if admin_services is None and any(item is not None for item in injected_legacy):
@@ -1338,15 +1301,6 @@ def create_app(
             }
         )
 
-    @app.get("/api/communities")
-    def communities_api():
-        station = request.args.get("station_code")
-        if station is not None and station not in {"A17", "A18", "A19"}:
-            return _invalid_request({"station_code": "A17_A18_or_A19"})
-        if _community_registry is None:
-            return jsonify([])
-        return jsonify(_community_registry.public_catalog(station_code=station))
-
     # ------------------------------------------------------------------
     # Listing intelligence (M3)
     # ------------------------------------------------------------------
@@ -1418,20 +1372,6 @@ def create_app(
                     }
                 }
             ), 400
-
-        if input_.community_id is not None and _community_registry is not None:
-            catalog = _community_registry.public_catalog()
-            valid_ids = {entry["community_id"] for entry in catalog}
-            if input_.community_id not in valid_ids:
-                return jsonify(
-                    {
-                        "error": {
-                            "code": "invalid_request",
-                            "message": "指定的社區不存在。",
-                            "fields": {"community_id": "not_found"},
-                        }
-                    }
-                ), 400
 
         market = ds.load(MarketFilters(transaction_type=input_.transaction_type))
         latest_data_date = (

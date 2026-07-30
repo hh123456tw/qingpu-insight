@@ -9,13 +9,7 @@ import pandas as pd
 import pytest
 from sklearn.dummy import DummyRegressor
 
-from qingpu_insight.community_features import CommunityFeatureValues
-from qingpu_insight.model_features import (
-    COMMON_AREA_FEATURE_COLUMNS,
-    COMMUNITY_FEATURE_COLUMNS,
-    FEATURE_COLUMNS,
-    ValuationInput,
-)
+from qingpu_insight.model_features import FEATURE_COLUMNS, ValuationInput
 from qingpu_insight.parking_valuation import ParkingPricePolicy, ParkingPriceStat
 from qingpu_insight.valuation import (
     ModelRegistry,
@@ -598,33 +592,6 @@ def test_train_artifact_persists_parking_policy(tmp_path):
 def test_old_bundle_pickle_gets_no_parking_policy(bundle):
     del bundle.__dict__["parking_price_policy"]
     assert bundle.parking_price_policy is None
-
-
-def test_old_bundle_pickle_gets_safe_defaults_for_community_fields():
-    dummy = DummyRegressor()
-    dummy.fit(np.zeros((5, 5)), np.ones(5))
-    bundle = ValuationBundle(
-        transaction_type="resale",
-        model_name="test",
-        model_version="v1",
-        pipeline=dummy,
-        interval_abs_residual_twd_per_ping=50000,
-        feature_ranges={},
-        feature_hard_ranges={},
-        feature_medians={},
-        global_importance=[],
-        reference_rows=pd.DataFrame(),
-        data_min_date="2024-01-01",
-        data_max_date="2024-12-31",
-        metrics={},
-    )
-    for attr in ("community_registry_version", "community_registry_rows",
-                 "community_feature_snapshot", "shared_feature_experiment"):
-        bundle.__dict__.pop(attr, None)
-    assert bundle.community_registry_version is None
-    assert bundle.community_registry_rows == ()
-    assert bundle.community_feature_snapshot is None
-    assert bundle.shared_feature_experiment is None
 
 
 # --- Task 2 helpers ---
@@ -1254,38 +1221,3 @@ class TestModelRegistryOfficialPreference:
         )
         assert result["model"]["version"] == "official-v2"
         assert result["model"]["version"] != "fallback"
-
-
-# --- Task 6: Shared features ---
-
-
-class TestValuationSharedFeatures:
-    def test_common_area_ratio(self, bundle, market, valid_resale_input):
-        bundle.feature_columns = FEATURE_COLUMNS + COMMON_AREA_FEATURE_COLUMNS
-        input_ = replace(valid_resale_input, common_area_ratio=0.35)
-        result = valuate(input_, FakeRegistry(bundle), market)
-        assert result["degraded"] is False
-        assert "estimated_unit_price_per_ping_twd" in result
-
-    def test_known_community(self, bundle, market, valid_resale_input):
-        bundle.feature_columns = FEATURE_COLUMNS + COMMUNITY_FEATURE_COLUMNS
-        bundle.community_feature_snapshot = {
-            "comm1": CommunityFeatureValues(
-                known="comm1",
-                prior_count_24m=10,
-                prior_median_twd_per_ping_24m=500_000.0,
-                premium_vs_station_24m=50_000.0,
-            )
-        }
-        input_ = replace(valid_resale_input, community_id="comm1")
-        result = valuate(input_, FakeRegistry(bundle), market)
-        assert result["degraded"] is False
-        assert "estimated_unit_price_per_ping_twd" in result
-
-    def test_unknown_community(self, bundle, market, valid_resale_input):
-        bundle.feature_columns = FEATURE_COLUMNS + COMMUNITY_FEATURE_COLUMNS
-        bundle.community_feature_snapshot = {}
-        input_ = replace(valid_resale_input, community_id="nonexistent")
-        result = valuate(input_, FakeRegistry(bundle), market)
-        assert result["degraded"] is False
-        assert "estimated_unit_price_per_ping_twd" in result

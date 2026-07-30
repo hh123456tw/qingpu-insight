@@ -71,8 +71,6 @@ class ParsedListingDetail:
     unit_price_high_twd_per_ping: int | None = None
     area_low_ping: Decimal | None = None
     area_high_ping: Decimal | None = None
-    common_area_ratio: float | None = None
-    common_area_ratio_source: str | None = None
 
 
 _PING_RE = re.compile(r"(-?[\d,.]+)\s*坪")
@@ -90,9 +88,6 @@ _NEWHOUSE_META_LAYOUT_RE = re.compile(
     r"格局規劃(.+?)(?:、坪數規劃|[，。])"
 )
 _NEWHOUSE_META_NAME_RE = re.compile(r"「(.+?)」")
-
-
-_COMMON_AREA_RE = re.compile(r"(?<![-\d])(\d+(?:\.\d+)?)\s*%")
 
 
 def _extract_ping(text: str) -> Decimal | None:
@@ -241,77 +236,6 @@ def _extract_age_years(text: str | None) -> Decimal | None:
     if month_match:
         return Decimal(month_match.group(1)) / Decimal("12")
     return None
-
-
-def _extract_common_area_ratio(
-    soup: BeautifulSoup,
-    meta_description: str | None = None,
-) -> tuple[float | None, str | None]:
-    """Extract 公設比 (common-area ratio) from the page.
-
-    Returns (ratio as decimal, source_description).
-    Accepts only 0 <= ratio <= 0.70.
-    Prefers JSON-LD over meta description over DOM text.
-    """
-    # 1. Try JSON-LD description (most structured)
-    for script in soup.select('script[type="application/ld+json"]'):
-        try:
-            data = json.loads(script.get_text())
-        except json.JSONDecodeError:
-            continue
-        desc = None
-        if isinstance(data, dict):
-            desc = data.get("description", "")
-        elif isinstance(data, list):
-            for item in data:
-                if isinstance(item, dict):
-                    desc = item.get("description", "")
-                    if desc:
-                        break
-        if isinstance(desc, str):
-            m = re.search(r"公設比(\d+(?:\.\d+)?%)", desc)
-            if m:
-                inner = _COMMON_AREA_RE.search(m.group(1))
-                if inner:
-                    value = float(inner.group(1)) / 100.0
-                    if 0.0 <= value <= 0.70:
-                        return value, "591 JSON-LD"
-
-    # 2. Try meta description
-    if meta_description:
-        m = re.search(r"公設比(\d+(?:\.\d+)?%)", meta_description)
-        if m:
-            pct_str = m.group(1)
-            inner = _COMMON_AREA_RE.search(pct_str)
-            if inner:
-                value = float(inner.group(1)) / 100.0
-                if 0.0 <= value <= 0.70:
-                    return value, "591 meta description"
-
-    # 3. Try structured/labeled DOM rows last
-    raw = _labeled_value(
-        soup,
-        row_selector=".info-addr-content",
-        label_selector=".info-addr-key",
-        value_selector=".info-addr-value-text",
-        label="公設比",
-    )
-    if raw is None:
-        raw = _labeled_value(
-            soup,
-            row_selector=".detail-house-item",
-            label_selector=".detail-house-key",
-            value_selector=".detail-house-value",
-            label="公設比",
-        )
-    if raw is not None:
-        m = _COMMON_AREA_RE.search(raw)
-        if m:
-            value = float(m.group(1)) / 100.0
-            if 0.0 <= value <= 0.70:
-                return value, "591 DOM 公設比"
-
-    return None, None
 
 
 def _extract_map_coordinates(
@@ -664,10 +588,6 @@ def parse_listing_detail(
         soup, ".update-package", ".info-updated", "[class*='update']"
     )
 
-    common_area_ratio, common_area_ratio_source = _extract_common_area_ratio(
-        soup, meta_description=meta_description
-    )
-
     total_price_twd = _validate_positive_int(total_price_twd, "total_price_twd")
     unit_price_twd_per_ping = _validate_positive_int(
         unit_price_twd_per_ping, "unit_price_twd_per_ping"
@@ -757,6 +677,4 @@ def parse_listing_detail(
         unit_price_high_twd_per_ping=unit_price_high_twd_per_ping,
         area_low_ping=area_low_ping,
         area_high_ping=area_high_ping,
-        common_area_ratio=common_area_ratio,
-        common_area_ratio_source=common_area_ratio_source,
     )
