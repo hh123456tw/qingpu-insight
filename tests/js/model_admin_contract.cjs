@@ -549,6 +549,50 @@ assert.equal(admin.automlLeaderboardRows(automlFixture)[2].calibrationPassed, fa
 assert.equal(admin.automlLeaderboardRows(null).length, 0);
 assert.equal(admin.automlLeaderboardRows({ manifest: {} }).length, 0);
 
+// sharedFeatureResearchView contract tests
+var sfrEmpty = admin.sharedFeatureResearchView({}, {});
+assert.equal(sfrEmpty.available, false);
+assert.equal(sfrEmpty.verdict, "未提供此版本證據");
+
+var sfrWithData = admin.sharedFeatureResearchView(
+  {},
+  {
+    feature_research: {
+      available: true,
+      verdict: "有改善",
+      locked_set_name: "community",
+      selection_reason: "locked community (MAE=12345.6, MAPE=8.50, features=18)",
+      calibration: [
+        { name: "基準 V3", model: "ridge", mae: 50000.0, mape: 10.0 },
+        { name: "社區特徵 E2", model: "ridge", mae: 45000.0, mape: 9.0 },
+      ],
+      has_community_features: true,
+      has_common_area_features: false,
+    },
+  },
+);
+assert.equal(sfrWithData.available, true);
+assert.equal(sfrWithData.verdict, "有改善");
+assert.equal(sfrWithData.lockedSetName, "community");
+assert.equal(sfrWithData.calibration.length, 2);
+assert.equal(sfrWithData.calibration[0].mae, "5.0 萬");
+assert.equal(sfrWithData.calibration[1].mape, "9.00%");
+assert.equal(sfrWithData.hasCommunityFeatures, true);
+
+var sfrNotImproved = admin.sharedFeatureResearchView(
+  {},
+  {
+    feature_research: {
+      available: true,
+      verdict: "未證明改善",
+      locked_set_name: "baseline_v3",
+      selection_reason: "locked baseline_v3",
+      calibration: [],
+    },
+  },
+);
+assert.equal(sfrNotImproved.verdict, "未證明改善");
+
 // canStopAutoML tests
 assert.equal(admin.canStopAutoML({
   status: "running",

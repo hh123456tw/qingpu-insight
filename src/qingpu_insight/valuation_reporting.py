@@ -51,6 +51,7 @@ def write_evaluation(
     release_checks: dict[str, bool] | None = None,
     reason_codes: list[str] | None = None,
     automl_info: dict[str, object] | None = None,
+    shared_feature_experiment: dict[str, object] | None = None,
 ) -> Path:
     leakage = leakage_audit(split)
     selected_name = getattr(
@@ -149,6 +150,8 @@ def write_evaluation(
         report["backtests"] = backtests
     if release_checks is not None:
         report["release_checks"] = release_checks
+    if shared_feature_experiment is not None:
+        report["shared_feature_experiment"] = shared_feature_experiment
 
     if selected_profile is not None:
         report["selected_profile"] = selected_profile.name
@@ -200,6 +203,7 @@ def write_model_card(
     release_checks: dict[str, bool] | None = None,
     reason_codes: list[str] | None = None,
     automl_info: dict[str, object] | None = None,
+    shared_feature_experiment: dict[str, object] | None = None,
 ) -> Path:
     lines = [
         f"# {bundle.transaction_type} 估價模型卡",
@@ -332,6 +336,22 @@ def write_model_card(
             "",
         ]
     )
+
+    if shared_feature_experiment is not None:
+        locked_name = shared_feature_experiment.get("locked_feature_set_name")
+        cal_exps = shared_feature_experiment.get("calibration_experiments", [])
+        selection_reason = shared_feature_experiment.get("selection_reason", "")
+        lines.extend([
+            "",
+            "## 新增特徵研究",
+            f"- 鎖定特徵集：{locked_name or '未提供'}",
+            f"- 選取理由：{selection_reason}",
+        ])
+        for cal in cal_exps:
+            cal_name = cal.get("name", "unknown")
+            cal_model = cal.get("selected_model") or "無"
+            lines.append(f"- {cal_name}：{cal_model}")
+        lines.append("")
 
     if (
         bundle.transaction_type == "resale"

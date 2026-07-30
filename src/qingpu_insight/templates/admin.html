@@ -773,6 +773,79 @@
         container.appendChild(wrap);
       }
 
+      function renderSharedFeatureResearch(container, result, marketInfo) {
+        var view = ma.sharedFeatureResearchView(result, marketInfo);
+        if (!view.available) {
+          if (view.verdict) {
+            var emptyEl = document.createElement("p");
+            emptyEl.className = "ma-empty";
+            emptyEl.textContent = view.verdict;
+            container.appendChild(emptyEl);
+          }
+          return;
+        }
+        var heading = document.createElement("h5");
+        heading.textContent = "新增特徵研究";
+        container.appendChild(heading);
+
+        var verdict = document.createElement("div");
+        verdict.className = view.verdict === "有改善" ? "ma-gate-pass" : "ma-gate-fail";
+        verdict.textContent = "判定：" + view.verdict;
+        container.appendChild(verdict);
+
+        var reason = document.createElement("p");
+        reason.className = "ma-reason";
+        reason.textContent = "鎖定：" + (view.lockedSetName || "—") + "｜理由：" + (view.selectionReason || "—");
+        container.appendChild(reason);
+
+        var featureFlags = [];
+        if (view.hasCommunityFeatures) featureFlags.push("✓ 社區特徵啟用");
+        if (view.hasCommonAreaFeatures) featureFlags.push("✓ 公設比特徵啟用");
+        if (featureFlags.length > 0) {
+          var flagP = document.createElement("p");
+          flagP.className = "ma-flow";
+          flagP.textContent = featureFlags.join("｜");
+          container.appendChild(flagP);
+        }
+
+        // Calibration table
+        var wrap = document.createElement("div");
+        wrap.className = "ma-table-wrap ma-compact";
+        var table = document.createElement("table");
+        table.className = "ma-table";
+        var thead = document.createElement("thead");
+        var hr = document.createElement("tr");
+        ["實驗", "模型", "MAE", "MAPE"].forEach(function(t) {
+          var th = document.createElement("th"); th.textContent = t; hr.appendChild(th);
+        });
+        thead.appendChild(hr);
+        table.appendChild(thead);
+        var tbody = document.createElement("tbody");
+        view.calibration.forEach(function(c) {
+          var tr = document.createElement("tr");
+          [c.name, c.model, c.mae, c.mape].forEach(function(v) {
+            var td = document.createElement("td"); td.textContent = v; tr.appendChild(td);
+          });
+          tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        wrap.appendChild(table);
+        container.appendChild(wrap);
+
+        // Collapsible technical evidence
+        if (view.selectionReason) {
+          var details = document.createElement("details");
+          details.className = "ma-technical-details";
+          var detSummary = document.createElement("summary");
+          detSummary.textContent = "特徵研究技術證據";
+          details.appendChild(detSummary);
+          var techP = document.createElement("p");
+          techP.textContent = "選取理由：" + view.selectionReason;
+          details.appendChild(techP);
+          container.appendChild(details);
+        }
+      }
+
       function renderReleaseChecks(container, checks) {
         if (!checks || checks.length === 0) return;
         var h = document.createElement("h5");
@@ -1017,6 +1090,7 @@
           renderAblationTable(section, ma.ablationRows(result));
           renderBacktestTable(section, ma.backtestRows(result));
           renderReleaseChecks(section, ma.releaseCheckRows(result));
+          renderSharedFeatureResearch(section, result, detail.markets && detail.markets[result.market]);
 
           detailsWrapper.appendChild(section);
         }
