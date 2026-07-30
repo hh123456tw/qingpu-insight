@@ -79,6 +79,15 @@ def test_build_model_frame_isolates_type_and_adjusts_parking(fixture_frame):
     )
 
 
+def test_build_model_frame_excludes_resale_rows_without_a_nonnegative_age(fixture_frame):
+    fixture_frame.loc[fixture_frame["record_id"].eq("R2"), "building_age_years"] = pd.NA
+    fixture_frame.loc[fixture_frame["record_id"].eq("R3"), "building_age_years"] = -0.1
+
+    resale = build_model_frame(fixture_frame, "resale")
+
+    assert resale["record_id"].tolist() == ["R1"]
+
+
 def test_build_model_frame_parses_chinese_total_floors(fixture_frame):
     fixture_frame["total_floors"] = fixture_frame["total_floors"].astype(object)
     fixture_frame.loc[fixture_frame["transaction_type"].eq("resale"), "total_floors"] = "二十一層"

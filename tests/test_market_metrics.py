@@ -30,8 +30,18 @@ def test_summary_returns_station_kpis_and_data_date(market_frame: pd.DataFrame) 
 
 
 def test_trends_group_by_calendar_month(market_frame: pd.DataFrame) -> None:
-    result = market_trends(market_frame, MarketFilters(transaction_type="resale"))
-    assert [item["month"] for item in result] == ["2026-01", "2026-02"]
+    nine_records = pd.concat([market_frame.iloc[[0]]] * 9, ignore_index=True)
+    nine_records["transaction_date"] = pd.Timestamp("2026-01-15")
+    ten_records = pd.concat([market_frame.iloc[[6]]] * 10, ignore_index=True)
+    ten_records["transaction_date"] = pd.Timestamp("2026-02-15")
+
+    result = market_trends(
+        pd.concat([nine_records, ten_records], ignore_index=True),
+        MarketFilters(transaction_type="resale"),
+    )
+
+    assert [item["month"] for item in result] == ["2026-02"]
+    assert result[0]["record_count"] == 10
     assert all("median_unit_price_per_ping_twd" in item for item in result)
 
 

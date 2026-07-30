@@ -91,8 +91,18 @@ def build_market_dataset(frame: pd.DataFrame) -> tuple[pd.DataFrame, MarketQuali
         SPECIAL_RELATIONSHIP_PATTERN
     )
     base_eligible = residential & in_circle & valid_price & valid_area & valid_date
-    output["analysis_eligible"] = (
-        base_eligible & market_subject & ~special_relationship
+    eligible_before_completion = base_eligible & market_subject & ~special_relationship
+    resale = output["transaction_type"].eq("resale")
+    missing_completion_date = (
+        resale & eligible_before_completion & output["completion_date"].isna()
+    )
+    future_completion_transfer = (
+        resale
+        & eligible_before_completion
+        & output["completion_date"].gt(output["transaction_date"])
+    )
+    output["analysis_eligible"] = eligible_before_completion & ~(
+        missing_completion_date | future_completion_transfer
     )
 
     reasons = {
@@ -107,6 +117,8 @@ def build_market_dataset(frame: pd.DataFrame) -> tuple[pd.DataFrame, MarketQuali
         "special_relationship": int(
             (base_eligible & market_subject & special_relationship).sum()
         ),
+        "missing_completion_date": int(missing_completion_date.sum()),
+        "future_completion_transfer": int(future_completion_transfer.sum()),
     }
     reasons = {name: count for name, count in reasons.items() if count}
     clean = output.loc[output["analysis_eligible"]].drop_duplicates("transaction_key").copy()

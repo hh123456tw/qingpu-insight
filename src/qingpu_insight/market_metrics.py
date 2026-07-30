@@ -103,6 +103,7 @@ def market_trends(frame: pd.DataFrame, filters: MarketFilters) -> list[dict[str,
         )
         .reset_index()
     )
+    grouped = grouped.loc[grouped["record_count"].ge(10)]
     return grouped.to_dict(orient="records")
 
 

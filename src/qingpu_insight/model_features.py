@@ -165,6 +165,9 @@ def build_model_frame(frame: pd.DataFrame, transaction_type: str) -> pd.DataFram
     result = frame.loc[
         frame["analysis_eligible"].fillna(False) & frame["transaction_type"].eq(transaction_type)
     ].copy()
+    if transaction_type == "resale":
+        building_age = pd.to_numeric(result["building_age_years"], errors="coerce")
+        result = result.loc[building_age.notna() & building_age.ge(0)].copy()
     result["floor"] = result["floor"].map(parse_floor)
     result["total_floors"] = result["total_floors"].map(parse_floor)
     result.loc[result["total_floors"].le(0), "total_floors"] = pd.NA

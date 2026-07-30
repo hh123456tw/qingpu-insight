@@ -93,3 +93,34 @@ def test_build_market_dataset_excludes_confirmed_non_market_transactions() -> No
         "non_market_subject": 1,
         "special_relationship": 1,
     }
+
+
+def test_build_market_dataset_applies_completion_checks_to_resale_only() -> None:
+    normal = sample_rows().iloc[[0]].copy()
+    rows = pd.concat([normal] * 6, ignore_index=True)
+    rows["record_id"] = [
+        "equal_completion",
+        "future_completion",
+        "missing_completion",
+        "presale_missing_completion",
+        "presale_future_completion",
+        "ineligible_missing_completion",
+    ]
+    rows.loc[[3, 4], "transaction_type"] = "presale"
+    rows.loc[5, "main_use"] = "店鋪"
+    rows["completion_date"] = pd.to_datetime(
+        ["2026-01-10", "2026-01-11", None, None, "2026-01-11", None]
+    )
+
+    clean, quality = build_market_dataset(rows)
+
+    assert clean["record_id"].tolist() == [
+        "equal_completion",
+        "presale_missing_completion",
+        "presale_future_completion",
+    ]
+    assert quality.exclusion_reasons == {
+        "non_residential": 1,
+        "missing_completion_date": 1,
+        "future_completion_transfer": 1,
+    }
