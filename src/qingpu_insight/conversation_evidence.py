@@ -55,6 +55,8 @@ class ConversationEvidenceBuilder:
         payload = dict(snapshot.structured_payload)
         facts = self._build_listing_facts(payload)
 
+        limitations: list[str] = []
+
         community_match: CommunityMatch | None = None
         if self._community_registry is not None:
             lat = payload.get("latitude")
@@ -100,6 +102,7 @@ class ConversationEvidenceBuilder:
             payload["community_id"] = None
             payload["community_known"] = "unknown"
             payload["community_match_method"] = "unknown"
+            limitations.append("社區未識別，估價僅依賴區位/座標資訊")
 
         common_area_ratio = payload.get("common_area_ratio")
         if common_area_ratio is not None:
@@ -119,7 +122,6 @@ class ConversationEvidenceBuilder:
 
         valuation: dict | None = None
         comparables: list[dict] = []
-        limitations: list[str] = []
 
         if payload.get("latitude") is None or payload.get("longitude") is None:
             limitations.append("缺少座標資訊，距離相關分析可能不準確")
@@ -127,6 +129,8 @@ class ConversationEvidenceBuilder:
         if self._valuation_service is not None:
             can_valuate, reason = self._can_valuate(payload)
             if can_valuate:
+                if reason is not None:
+                    limitations.append(reason)
                 try:
                     raw = self._valuation_service(payload)
                     raw_comparables = raw.get("comparables")
@@ -234,12 +238,9 @@ class ConversationEvidenceBuilder:
                     return False, f"樓層資料不一致（{f}/{tf}），無法進行精確估價"
             except (ValueError, TypeError):
                 pass
-        community_known = payload.get("community_known", "unknown")
-        if community_known == "unknown":
-            pass
         common_area_ratio = payload.get("common_area_ratio")
         if common_area_ratio is not None and not (0.0 <= common_area_ratio <= 0.70):
-            return False, f"公設比 {common_area_ratio:.2f} 超出合理範圍"
+            return True, f"公設比 {common_area_ratio:.2f} 超出合理範圍"
         return True, None
 
     def _build_listing_facts(self, payload: dict) -> list[EvidenceFact]:
@@ -328,8 +329,6 @@ class ConversationEvidenceBuilder:
             return f"{value} 坪"
         if key == "age_years":
             return f"{value} 年"
-        if key == "common_area_ratio":
-            return f"{round(float(value) * 100, 1)}%"
         return str(value)
 
     @staticmethod

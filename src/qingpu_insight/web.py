@@ -889,7 +889,7 @@ def _conversation_valuation(
         asking_total_price_twd=(
             int(payload["total_price_twd"]) if payload.get("total_price_twd") is not None else None
         ),
-twd97_x=coordinates[0],
+        twd97_x=coordinates[0],
         twd97_y=coordinates[1],
         common_area_ratio=(
             float(payload["common_area_ratio"])

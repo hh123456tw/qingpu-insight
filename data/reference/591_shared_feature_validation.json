@@ -4,8 +4,8 @@
   "known_community_success_rate": 0.938,
   "full_sample_community_coverage": 0.864,
   "community_registry_version": "test-version",
-  "checked_at": "2026-07-30T04:00:00Z",
-  "corpus_sha256": "abc123corpusdigest",
+  "checked_at": "2026-07-30T12:00:00Z",
+  "corpus_sha256": "f5137c7e61bbb502843e398c4fbeaf97d9079d036ce2d36c048e97b4a5712909",
   "samples": [
     {"url_type": "sale", "expected_ratio": 0.348, "expected_community_id": "comm-qinghe", "parser_ratio_ok": true, "parser_community_ok": true},
     {"url_type": "sale", "expected_ratio": 0.285, "expected_community_id": "comm-qinghe", "parser_ratio_ok": true, "parser_community_ok": true},

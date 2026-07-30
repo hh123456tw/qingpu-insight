@@ -701,7 +701,7 @@ def test_unknown_community_does_not_block_valuation() -> None:
     assert ev.valuation is not None
 
 
-def test_invalid_common_area_ratio_blocks_valuation() -> None:
+def test_invalid_common_area_ratio_warns_but_does_not_block() -> None:
     snapshot = _make_snapshot(common_area_ratio=1.5)
 
     def valuate(payload: dict) -> dict:
@@ -709,5 +709,5 @@ def test_invalid_common_area_ratio_blocks_valuation() -> None:
 
     builder = ConversationEvidenceBuilder(valuation_service=valuate)
     ev = builder.build(snapshot=snapshot)
-    assert ev.valuation is None
+    assert ev.valuation is not None
     assert any("超出合理範圍" in msg for msg in ev.limitations)
