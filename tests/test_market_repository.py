@@ -125,7 +125,10 @@ def test_mysql_source_generates_parameterized_sql() -> None:
     assert len(df) == 1
     assert df.iloc[0]["transaction_key"] == "k1"
     assert pd.api.types.is_datetime64_any_dtype(df["transaction_date"])
-    assert market_trends(df, filters)[0]["month"] == "2026-01"
+    trend_rows = pd.concat([df] * 10, ignore_index=True)
+    trends = market_trends(trend_rows, filters)
+    assert trends[0]["month"] == "2026-01"
+    assert trends[0]["record_count"] == 10
     assert len(build_model_frame(df, "resale")) == 1
 
 
