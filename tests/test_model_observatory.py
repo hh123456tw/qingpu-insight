@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -24,6 +25,7 @@ from qingpu_insight.model_artifacts import (
 )
 from qingpu_insight.model_observatory import ModelObservatory
 from qingpu_insight.model_release import OfficialModelStore
+from qingpu_insight.model_training_service import public_training_summary
 from qingpu_insight.parking_valuation import ParkingPricePolicy, ParkingPriceStat
 from qingpu_insight.valuation import ValuationBundle
 
@@ -452,7 +454,13 @@ class TestModelObservatoryStatus:
     def test_get_run_returns_detailed_info(self, tmp_path: Path) -> None:
         manifest = manifest_fixture()
         observatory = observatory_fixture(tmp_path, candidate_runs=[manifest])
-        result = observatory.get_run(str(manifest.run_id))
+        run_id = str(manifest.run_id)
+        existing = observatory._job_service._runs[run_id]
+        observatory._job_service._runs[run_id] = replace(
+            existing,
+            summary=public_training_summary(manifest),
+        )
+        result = observatory.get_run(run_id)
         assert result is not None
         assert result["run_id"] == str(manifest.run_id)
         assert "manifest" in result
@@ -463,6 +471,76 @@ class TestModelObservatoryStatus:
         assert result["manifest"]["data_snapshot"]["usable_counts"] == {
             "resale": 500
         }
+        assert result["manifest"]["data_snapshot"]["excluded_counts"] == {
+            "resale": 100
+        }
+        assert result["manifest"]["data_snapshot"]["raw_count"] == 600
+        for unsafe_key in ("station_counts", "min_date", "max_date"):
+            assert unsafe_key not in result["manifest"]["data_snapshot"]
+            assert unsafe_key not in result["summary"]["data_snapshot"]
+        assert result["summary"]["data_snapshot"]["excluded_counts"] == {
+            "resale": 100
+        }
+        assert result["summary"]["data_snapshot"]["raw_count"] == 600
+
+    def test_manifestless_run_requires_positive_resale_evidence(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        observatory = observatory_fixture(tmp_path)
+        run_id = "11111111-1111-4111-8111-111111111111"
+        observatory._job_service._runs[run_id] = JobRun(
+            run_id=run_id,
+            job_type="model_training",
+            trigger="web",
+            idempotency_key="model_training:active",
+            status="pending",
+            started_at=None,
+            finished_at=None,
+            attempt=1,
+            input_version=None,
+            output_version=None,
+            summary={},
+            error_code=None,
+            error_message=None,
+        )
+
+        assert observatory.list_runs() == []
+        assert observatory.get_run(run_id) is None
+
+        evidenced = observatory._job_service._runs[run_id]
+        observatory._job_service._runs[run_id] = replace(
+            evidenced,
+            summary={"markets": ["resale"]},
+        )
+
+        assert observatory.list_runs()[0]["run_id"] == run_id
+        assert observatory.get_run(run_id)["summary"]["markets"] == ["resale"]
+
+    def test_observatory_rejects_non_training_job_even_with_resale_evidence(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        observatory = observatory_fixture(tmp_path)
+        run_id = "22222222-2222-4222-8222-222222222222"
+        observatory._job_service._runs[run_id] = JobRun(
+            run_id=run_id,
+            job_type="listing_update",
+            trigger="web",
+            idempotency_key="listing_update:active",
+            status="pending",
+            started_at=None,
+            finished_at=None,
+            attempt=1,
+            input_version=None,
+            output_version=None,
+            summary={"markets": ["resale"]},
+            error_code=None,
+            error_message=None,
+        )
+
+        assert observatory.list_runs() == []
+        assert observatory.get_run(run_id) is None
 
     def test_get_run_marks_candidate_that_is_current_official(
         self,

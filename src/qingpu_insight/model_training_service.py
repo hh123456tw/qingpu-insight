@@ -927,6 +927,7 @@ class ModelTrainingService:
             job_type="model_training",
             idempotency_key="model_training:active",
             trigger=request.trigger,
+            summary={"markets": ["resale"]},
         )
 
     def handoff(

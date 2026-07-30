@@ -113,6 +113,7 @@ class JobService:
     def create(
         self, job_type: str, idempotency_key: str, trigger: str,
         input_version: str | None = None,
+        summary: dict[str, object] | None = None,
     ) -> JobSubmission:
         run = JobRun(
             run_id=str(uuid.uuid4()),
@@ -125,7 +126,7 @@ class JobService:
             attempt=1,
             input_version=input_version,
             output_version=None,
-            summary={},
+            summary=dict(summary or {}),
             error_code=None,
             error_message=None,
         )

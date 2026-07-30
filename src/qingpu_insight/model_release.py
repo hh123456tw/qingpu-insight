@@ -373,9 +373,11 @@ class ModelReleaseService:
         )
 
     def submit(self, preview_id: str, confirmation_text: str) -> object:
-
+        stored_preview = self._preview_service.get(preview_id)
+        market = self._require_resale_market(
+            stored_preview.payload.get("market")
+        )
         preview = self._preview_service.consume(preview_id, confirmation_text)
-        market = self._require_resale_market(preview.payload.get("market"))
         idempotency_key = f"model_release:{market}:active"
         submission = self._job_service.create(
             job_type="model_release",

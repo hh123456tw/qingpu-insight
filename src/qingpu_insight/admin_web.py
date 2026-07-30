@@ -516,24 +516,32 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
             }
             return jsonify({"error": err}), 400
 
+        scan_limit = max(100, limit)
+        resale_runs = []
         try:
-            runs = rt.job_service.list_recent(100, job_type="model_release")
+            while len(resale_runs) < limit:
+                runs = rt.job_service.list_recent(
+                    scan_limit,
+                    job_type="model_release",
+                )
+                resale_runs = [
+                    run
+                    for run in runs
+                    if isinstance(run.summary, dict)
+                    and run.summary.get("market") == market
+                ]
+                if len(runs) < scan_limit:
+                    break
+                scan_limit *= 2
         except Exception:
             err = {"code": "admin_unavailable", "message": "工作歷史暫時無法取得。"}
             return jsonify({"error": err}), 503
 
         items = []
-        for run in runs:
+        for run in resale_runs[:limit]:
             item = _admin_public_job(run)
             item["info_url"] = f"/api/jobs/{run.run_id}"
             items.append(item)
-
-        items = [
-            item
-            for item in items
-            if isinstance(item.get("summary"), dict)
-            and item["summary"].get("market") == market
-        ][:limit]
 
         return jsonify({"items": items, "limit": limit})
 

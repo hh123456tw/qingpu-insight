@@ -220,6 +220,15 @@ def test_submit_returns_the_existing_active_model_job(tmp_path: Path) -> None:
     assert jobs.get(first.run.run_id).idempotency_key == "model_training:active"
 
 
+def test_submit_persists_pending_resale_market_evidence(tmp_path: Path) -> None:
+    service, jobs = service_fixture(tmp_path)
+
+    submission = service.submit(ModelTrainingRequest(("resale",)))
+
+    assert submission.run.summary == {"markets": ["resale"]}
+    assert jobs.get(submission.run.run_id).summary == {"markets": ["resale"]}
+
+
 def test_execute_writes_traceable_candidate_without_touching_official_models(
     tmp_path: Path,
     market_parquet: Path,

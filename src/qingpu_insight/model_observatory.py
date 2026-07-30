@@ -110,6 +110,8 @@ def _project_snapshot(snapshot: Any) -> dict[str, Any]:
     data["raw_count"] = resale_usable + resale_excluded
     data["usable_counts"] = {_PUBLIC_MARKET: resale_usable}
     data["excluded_counts"] = {_PUBLIC_MARKET: resale_excluded}
+    for unsafe_key in ("station_counts", "min_date", "max_date"):
+        data.pop(unsafe_key, None)
     return data
 
 
@@ -132,10 +134,27 @@ def _project_summary(summary: dict[str, object]) -> dict[str, object]:
     if isinstance(data_snapshot, dict):
         public_snapshot = dict(data_snapshot)
         usable_counts = public_snapshot.get("usable_counts", {})
+        excluded_counts = public_snapshot.get("excluded_counts", {})
         if isinstance(usable_counts, dict):
             resale_usable = int(usable_counts.get(_PUBLIC_MARKET, 0))
             public_snapshot["usable_counts"] = {_PUBLIC_MARKET: resale_usable}
-            public_snapshot["raw_count"] = resale_usable
+        else:
+            resale_usable = None
+            public_snapshot.pop("usable_counts", None)
+        if isinstance(excluded_counts, dict):
+            resale_excluded = int(excluded_counts.get(_PUBLIC_MARKET, 0))
+            public_snapshot["excluded_counts"] = {
+                _PUBLIC_MARKET: resale_excluded
+            }
+        else:
+            resale_excluded = None
+            public_snapshot.pop("excluded_counts", None)
+        if resale_usable is not None and resale_excluded is not None:
+            public_snapshot["raw_count"] = resale_usable + resale_excluded
+        else:
+            public_snapshot.pop("raw_count", None)
+        for unsafe_key in ("station_counts", "min_date", "max_date"):
+            public_snapshot.pop(unsafe_key, None)
         projected["data_snapshot"] = public_snapshot
     stage = projected.get("stage")
     if isinstance(stage, str) and "presale" in stage:
@@ -349,6 +368,8 @@ class ModelObservatory:
             if manifest is not None:
                 entry["markets"] = [_PUBLIC_MARKET]
                 entry["created_at"] = manifest.created_at.isoformat()
+            else:
+                entry["markets"] = [_PUBLIC_MARKET]
             results.append(entry)
 
         return results[:limit]
@@ -358,6 +379,8 @@ class ModelObservatory:
         run: Any,
         manifest: TrainingManifest | None,
     ) -> bool:
+        if run.job_type != "model_training":
+            return False
         if manifest is not None:
             return _PUBLIC_MARKET in manifest.markets
         for key in ("markets", "completed_markets"):
@@ -372,11 +395,11 @@ class ModelObservatory:
                 return True
             if self._automl_output_store.get(run.run_id, "presale") is not None:
                 return False
-        return True
+        return False
 
     def get_run(self, run_id: str) -> dict[str, Any] | None:
         run = self._job_service.get(run_id)
-        if run is None:
+        if run is None or run.job_type != "model_training":
             return None
 
         try:

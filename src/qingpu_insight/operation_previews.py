@@ -41,6 +41,7 @@ class OperationPreview:
 
 class OperationPreviewRepository(Protocol):
     def create(self, preview: OperationPreview) -> None: ...
+    def get(self, preview_id: str) -> OperationPreview | None: ...
     def consume(
         self, preview_id: str, confirmation_text: str, now: datetime
     ) -> OperationPreview: ...
@@ -98,6 +99,21 @@ class MySQLOperationPreviewRepository:
             except Exception:
                 conn.rollback()
                 raise
+
+    def get(self, preview_id: str) -> OperationPreview | None:
+        with self._connection() as conn:
+            try:
+                with conn.cursor(pymysql.cursors.DictCursor) as cursor:
+                    cursor.execute(
+                        "SELECT * FROM operation_previews WHERE preview_id = %s",
+                        (preview_id,),
+                    )
+                    row = cursor.fetchone()
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return None if row is None else self._row_to_preview(row)
 
     def consume(self, preview_id: str, confirmation_text: str, now: datetime) -> OperationPreview:
         with self._connection() as conn:
@@ -163,6 +179,9 @@ class InMemoryOperationPreviewRepository:
         if preview.preview_id not in self._previews:
             self._previews[preview.preview_id] = preview
 
+    def get(self, preview_id: str) -> OperationPreview | None:
+        return self._previews.get(preview_id)
+
     def consume(self, preview_id: str, confirmation_text: str, now: datetime) -> OperationPreview:
         preview = self._previews.get(preview_id)
         if preview is None:
@@ -222,3 +241,9 @@ class OperationPreviewService:
     def consume(self, preview_id: str, confirmation_text: str) -> OperationPreview:
         now = self._clock()
         return self._repository.consume(preview_id, confirmation_text, now)
+
+    def get(self, preview_id: str) -> OperationPreview:
+        preview = self._repository.get(preview_id)
+        if preview is None:
+            raise PreviewNotFound(f"Preview {preview_id!r} not found")
+        return preview

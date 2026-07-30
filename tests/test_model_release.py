@@ -409,6 +409,8 @@ class TestModelReleaseService:
 
         with pytest.raises(ValueError, match="resale"):
             service.submit(preview.preview_id, preview.confirmation_text)
+        stored = service._preview_service.get(preview.preview_id)
+        assert stored.consumed_at is None
 
     def _start_job(self, service: ModelReleaseService) -> str:
         submission = service._job_service.create(

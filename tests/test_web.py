@@ -3826,6 +3826,47 @@ class TestModelReleaseApi:
             resale.run_id
         ]
 
+    def test_release_list_scans_past_presale_history_to_fill_limit(
+        self,
+        model_release_client,
+    ) -> None:
+        jobs = model_release_client.application.extensions[
+            "qingpu_admin_runtime"
+        ].job_service
+        resale_ids = []
+        for index in range(2):
+            run = jobs.create(
+                "model_release",
+                f"history:older-resale:{index}",
+                "manual",
+            ).run
+            jobs.start(run.run_id)
+            jobs.succeed(
+                run.run_id,
+                f"resale-version-{index}",
+                {"market": "resale", "version_id": f"resale-version-{index}"},
+            )
+            resale_ids.append(run.run_id)
+        for index in range(101):
+            run = jobs.create(
+                "model_release",
+                f"history:newer-presale:{index}",
+                "manual",
+            ).run
+            jobs.start(run.run_id)
+            jobs.succeed(
+                run.run_id,
+                f"presale-version-{index}",
+                {"market": "presale", "version_id": f"presale-version-{index}"},
+            )
+
+        response = model_release_client.get("/api/admin/model-releases?limit=2")
+
+        assert response.status_code == 200
+        assert {
+            item["run_id"] for item in response.get_json()["items"]
+        } == set(resale_ids)
+
     def test_release_list_rejects_presale_filter(
         self,
         model_release_client,
