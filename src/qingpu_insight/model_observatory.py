@@ -17,6 +17,8 @@ from qingpu_insight.model_release import OfficialModelStore
 from qingpu_insight.model_training_service import ModelTrainingService, build_data_snapshot
 from qingpu_insight.valuation import ValuationBundle
 
+_PUBLIC_MARKET = "resale"
+
 
 def _project_result(r: Any) -> dict[str, Any]:
     data = r.model_dump(mode="json")
@@ -99,6 +101,48 @@ def _official_model_report(bundle: ValuationBundle) -> dict[str, Any]:
     return report
 
 
+def _project_snapshot(snapshot: Any) -> dict[str, Any]:
+    data = snapshot.model_dump(mode="json")
+    usable_counts = data.get("usable_counts", {})
+    excluded_counts = data.get("excluded_counts", {})
+    resale_usable = int(usable_counts.get(_PUBLIC_MARKET, 0))
+    resale_excluded = int(excluded_counts.get(_PUBLIC_MARKET, 0))
+    data["raw_count"] = resale_usable + resale_excluded
+    data["usable_counts"] = {_PUBLIC_MARKET: resale_usable}
+    data["excluded_counts"] = {_PUBLIC_MARKET: resale_excluded}
+    return data
+
+
+def _project_summary(summary: dict[str, object]) -> dict[str, object]:
+    projected = dict(summary)
+    for key in ("markets", "completed_markets"):
+        value = projected.get(key)
+        if isinstance(value, list):
+            projected[key] = [_PUBLIC_MARKET] if _PUBLIC_MARKET in value else []
+    if projected.get("market") != _PUBLIC_MARKET:
+        projected.pop("market", None)
+    results = projected.get("results")
+    if isinstance(results, list):
+        projected["results"] = [
+            item
+            for item in results
+            if isinstance(item, dict) and item.get("market") == _PUBLIC_MARKET
+        ]
+    data_snapshot = projected.get("data_snapshot")
+    if isinstance(data_snapshot, dict):
+        public_snapshot = dict(data_snapshot)
+        usable_counts = public_snapshot.get("usable_counts", {})
+        if isinstance(usable_counts, dict):
+            resale_usable = int(usable_counts.get(_PUBLIC_MARKET, 0))
+            public_snapshot["usable_counts"] = {_PUBLIC_MARKET: resale_usable}
+            public_snapshot["raw_count"] = resale_usable
+        projected["data_snapshot"] = public_snapshot
+    stage = projected.get("stage")
+    if isinstance(stage, str) and "presale" in stage:
+        projected["stage"] = "processing_model_training"
+    return projected
+
+
 class ModelObservatory:
     def __init__(
         self,
@@ -142,7 +186,7 @@ class ModelObservatory:
 
     def status(self, latest_data_date: pd.Timestamp | None = None) -> dict[str, Any]:
         official_models: dict[str, Any] = {}
-        for market in ("resale", "presale"):
+        for market in (_PUBLIC_MARKET,):
             if self._official_store is not None:
                 current = self._official_store.current(market)
                 if current is not None:
@@ -199,7 +243,11 @@ class ModelObservatory:
                     }
 
         try:
-            candidates = self._candidate_store.list_recent(limit=9999)
+            candidates = [
+                manifest
+                for manifest in self._candidate_store.list_recent(limit=9999)
+                if _PUBLIC_MARKET in manifest.markets
+            ]
         except Exception:
             candidates = []
 
@@ -215,14 +263,29 @@ class ModelObservatory:
                 try:
                     frame = pd.read_parquet(self._input_path)
                     snapshot = build_data_snapshot(self._input_path, frame)
+                    resale = frame[frame["transaction_type"] == _PUBLIC_MARKET]
+                    usable_resale = resale[resale["analysis_eligible"]]
+                    station_counts = (
+                        usable_resale["station_code"].value_counts().to_dict()
+                    )
+                    for station in ("A17", "A18", "A19"):
+                        station_counts.setdefault(station, 0)
+                    min_date = usable_resale["transaction_date"].min()
+                    max_date = usable_resale["transaction_date"].max()
                     self._cached_snapshot = {
                         "sha256": snapshot.sha256,
-                        "raw_count": snapshot.raw_count,
-                        "usable_counts": dict(snapshot.usable_counts),
-                        "excluded_counts": dict(snapshot.excluded_counts),
-                        "station_counts": dict(snapshot.station_counts),
-                        "min_date": snapshot.min_date.isoformat(),
-                        "max_date": snapshot.max_date.isoformat(),
+                        "raw_count": len(resale),
+                        "usable_counts": {_PUBLIC_MARKET: len(usable_resale)},
+                        "excluded_counts": {
+                            _PUBLIC_MARKET: len(resale) - len(usable_resale)
+                        },
+                        "station_counts": station_counts,
+                        "min_date": (
+                            min_date.date().isoformat() if pd.notna(min_date) else None
+                        ),
+                        "max_date": (
+                            max_date.date().isoformat() if pd.notna(max_date) else None
+                        ),
                     }
                     self._cached_snapshot_key = key
                 except Exception:
@@ -231,7 +294,11 @@ class ModelObservatory:
                 result["data_status"] = dict(self._cached_snapshot)
 
         ref_date = latest_data_date
-        if ref_date is None and self._cached_snapshot is not None:
+        if (
+            ref_date is None
+            and self._cached_snapshot is not None
+            and self._cached_snapshot["max_date"] is not None
+        ):
             ref_date = pd.Timestamp(self._cached_snapshot["max_date"])
 
         for market_info in official_models.values():
@@ -252,10 +319,12 @@ class ModelObservatory:
         return result
 
     def report_path(self, run_id: str, report_type: str) -> Path:
+        if not report_type.startswith("resale-"):
+            raise ValueError("model observatory only exposes resale reports")
         return self._candidate_store.report_path(run_id, report_type)
 
     def list_runs(self, limit: int = 20) -> list[dict[str, Any]]:
-        jobs = self._job_service.list_recent(limit, job_type="model_training")
+        jobs = self._job_service.list_recent(9999, job_type="model_training")
         manifests: dict[str, TrainingManifest] = {}
         for run in jobs:
             try:
@@ -267,6 +336,9 @@ class ModelObservatory:
 
         results: list[dict[str, Any]] = []
         for run in jobs:
+            manifest = manifests.get(run.run_id)
+            if not self._supports_resale(run, manifest):
+                continue
             entry: dict[str, Any] = {
                 "run_id": run.run_id,
                 "status": run.status,
@@ -274,13 +346,33 @@ class ModelObservatory:
                 "started_at": (run.started_at.isoformat() if run.started_at else None),
                 "finished_at": (run.finished_at.isoformat() if run.finished_at else None),
             }
-            manifest = manifests.get(run.run_id)
             if manifest is not None:
-                entry["markets"] = manifest.markets
+                entry["markets"] = [_PUBLIC_MARKET]
                 entry["created_at"] = manifest.created_at.isoformat()
             results.append(entry)
 
-        return results
+        return results[:limit]
+
+    def _supports_resale(
+        self,
+        run: Any,
+        manifest: TrainingManifest | None,
+    ) -> bool:
+        if manifest is not None:
+            return _PUBLIC_MARKET in manifest.markets
+        for key in ("markets", "completed_markets"):
+            markets = run.summary.get(key)
+            if isinstance(markets, list) and markets:
+                return _PUBLIC_MARKET in markets
+        market = run.summary.get("market")
+        if isinstance(market, str):
+            return market == _PUBLIC_MARKET
+        if self._automl_output_store is not None:
+            if self._automl_output_store.get(run.run_id, _PUBLIC_MARKET) is not None:
+                return True
+            if self._automl_output_store.get(run.run_id, "presale") is not None:
+                return False
+        return True
 
     def get_run(self, run_id: str) -> dict[str, Any] | None:
         run = self._job_service.get(run_id)
@@ -292,11 +384,19 @@ class ModelObservatory:
         except (FileNotFoundError, Exception):
             manifest = None
 
+        if not self._supports_resale(run, manifest):
+            return None
+
+        public_summary = _project_summary(dict(run.summary))
+        if manifest is not None and "data_snapshot" in public_summary:
+            public_summary["data_snapshot"] = _project_snapshot(
+                manifest.data_snapshot
+            )
         result: dict[str, Any] = {
             "run_id": run.run_id,
             "status": run.status,
             "trigger": run.trigger,
-            "summary": dict(run.summary),
+            "summary": public_summary,
             "started_at": (run.started_at.isoformat() if run.started_at else None),
             "finished_at": (run.finished_at.isoformat() if run.finished_at else None),
         }
@@ -304,12 +404,16 @@ class ModelObservatory:
         if manifest is not None:
             result["manifest"] = {
                 "schema_version": manifest.schema_version,
-                "markets": manifest.markets,
+                "markets": [_PUBLIC_MARKET],
                 "created_at": manifest.created_at.isoformat(),
                 "source_commit": manifest.source_commit,
                 "source_dirty": manifest.source_dirty,
-                "data_snapshot": manifest.data_snapshot.model_dump(mode="json"),
-                "results": [_project_result(r) for r in manifest.results],
+                "data_snapshot": _project_snapshot(manifest.data_snapshot),
+                "results": [
+                    _project_result(r)
+                    for r in manifest.results
+                    if r.market == _PUBLIC_MARKET
+                ],
                 "tuning_plan_version": manifest.tuning_plan_version,
                 "profiles": [profile.model_dump(mode="json") for profile in manifest.profiles],
                 "legacy_tuning_record": manifest.schema_version < 3,
@@ -318,6 +422,8 @@ class ModelObservatory:
             markets_info: dict[str, dict[str, Any]] = {}
             for m_result in manifest.results:
                 m = m_result.market
+                if m != _PUBLIC_MARKET:
+                    continue
                 blockers: list[str] = []
                 publishable = True
 
@@ -366,16 +472,22 @@ class ModelObservatory:
             result["markets"] = markets_info
 
             if manifest.automl is not None:
-                result["manifest"]["automl"] = manifest.automl.model_dump(mode="json")
+                automl = manifest.automl.model_dump(mode="json")
+                resale_automl = automl.get("markets", {}).get(_PUBLIC_MARKET)
+                automl["markets"] = (
+                    {_PUBLIC_MARKET: resale_automl}
+                    if resale_automl is not None
+                    else {}
+                )
+                result["manifest"]["automl"] = automl
 
         if manifest is None and self._automl_output_store is not None:
             markets: dict[str, dict[str, Any]] = {}
             stopped = run.status == "skipped"
-            for market in ("resale", "presale"):
-                automl_data = self._automl_output_store.get(run_id, market)
-                if automl_data is not None:
-                    markets[market] = automl_data
-                    stopped = stopped or bool(automl_data.get("stopped"))
+            automl_data = self._automl_output_store.get(run_id, _PUBLIC_MARKET)
+            if automl_data is not None:
+                markets[_PUBLIC_MARKET] = automl_data
+                stopped = stopped or bool(automl_data.get("stopped"))
             if markets:
                 result["automl"] = {
                     "candidate_available": False,

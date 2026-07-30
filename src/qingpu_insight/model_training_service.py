@@ -230,11 +230,11 @@ def public_training_summary(manifest: TrainingManifest) -> dict[str, object]:
 
 
 class ModelTrainingRequest:
-    SUPPORTED = frozenset({"resale", "presale"})
+    SUPPORTED = frozenset({"resale"})
 
     def __init__(
         self,
-        markets: tuple[Literal["resale", "presale"], ...],
+        markets: tuple[Literal["resale"], ...],
         trigger: str = "web",
         tuning_plan: TrainingPlan | None = None,
     ) -> None:
@@ -248,13 +248,13 @@ class ModelTrainingRequest:
                 raise ValueError(f"duplicate market: {m}")
             seen.add(m)
         # canonicalise
-        ordered = [m for m in ("resale", "presale") if m in seen]
+        ordered = [m for m in ("resale",) if m in seen]
         self._markets = tuple(ordered)
         self.trigger = trigger
         self.tuning_plan = tuning_plan or parse_tuning_plan(self._markets, None)
 
     @property
-    def markets(self) -> tuple[Literal["resale", "presale"], ...]:
+    def markets(self) -> tuple[Literal["resale"], ...]:
         return self._markets
 
     def __eq__(self, other: object) -> bool:
@@ -291,6 +291,11 @@ class ModelTrainingService:
         self._clock = clock or (lambda: datetime.now())
         self._automl_registry = automl_registry or AutoMLControlRegistry()
         self._automl_output_store = automl_output_store
+
+    @staticmethod
+    def _require_resale_request(request: ModelTrainingRequest) -> None:
+        if request.markets != ("resale",):
+            raise ValueError("model training only supports the resale market")
 
     def _merge_market_quality_diagnostics(
         self,
@@ -917,6 +922,7 @@ class ModelTrainingService:
         return self._jobs.start(run_id)
 
     def submit(self, request: ModelTrainingRequest) -> JobSubmission:
+        self._require_resale_request(request)
         return self._jobs.create(
             job_type="model_training",
             idempotency_key="model_training:active",
@@ -929,6 +935,7 @@ class ModelTrainingService:
         request: ModelTrainingRequest,
         executor: LocalJobExecutor,
     ) -> Any:
+        self._require_resale_request(request)
         run_id = submission.run.run_id
         return executor.submit(
             run_id,
@@ -936,6 +943,7 @@ class ModelTrainingService:
         )
 
     def execute(self, run_id: str, request: ModelTrainingRequest) -> TrainingManifest | None:
+        self._require_resale_request(request)
         markets = list(request.markets)
         is_automl = isinstance(request.tuning_plan, AutoMLTuningPlan)
 

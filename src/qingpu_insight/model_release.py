@@ -312,7 +312,14 @@ class ModelReleaseService:
         self._candidate_store = candidate_store
         self._artifact_dir = artifact_dir
 
+    @staticmethod
+    def _require_resale_market(market: object) -> str:
+        if market != "resale":
+            raise ValueError("model release only supports the resale market")
+        return "resale"
+
     def preview_publish(self, run_id: str, market: str) -> OperationPreview:
+        market = self._require_resale_market(market)
         manifest = self._candidate_store.get(run_id)
         if manifest is None:
             raise ValueError(f"candidate run {run_id!r} not found")
@@ -352,6 +359,7 @@ class ModelReleaseService:
         )
 
     def preview_rollback(self, market: str, version_id: str) -> OperationPreview:
+        market = self._require_resale_market(market)
         self._official_store.load(market, version_id)
 
         return self._preview_service.create_for(
@@ -367,7 +375,7 @@ class ModelReleaseService:
     def submit(self, preview_id: str, confirmation_text: str) -> object:
 
         preview = self._preview_service.consume(preview_id, confirmation_text)
-        market = str(preview.payload["market"])
+        market = self._require_resale_market(preview.payload.get("market"))
         idempotency_key = f"model_release:{market}:active"
         submission = self._job_service.create(
             job_type="model_release",
@@ -381,6 +389,7 @@ class ModelReleaseService:
         )
 
     def execute(self, run_id: str, preview: OperationPreview) -> ModelVersionRecord:
+        self._require_resale_market(preview.payload.get("market"))
         op = preview.payload.get("operation")
         if op == "publish":
             result = self._execute_publish(run_id, preview)

@@ -197,7 +197,13 @@ def market_parquet(tmp_path: Path) -> Path:
 
 @pytest.mark.parametrize(
     "markets",
-    [(), ("resale", "resale"), ("sale",)],
+    [
+        (),
+        ("resale", "resale"),
+        ("sale",),
+        ("presale",),
+        ("resale", "presale"),
+    ],
 )
 def test_training_request_rejects_nonfixed_markets(markets) -> None:
     with pytest.raises(ValueError):
@@ -207,7 +213,7 @@ def test_training_request_rejects_nonfixed_markets(markets) -> None:
 def test_submit_returns_the_existing_active_model_job(tmp_path: Path) -> None:
     service, jobs = service_fixture(tmp_path)
     first = service.submit(ModelTrainingRequest(("resale",)))
-    second = service.submit(ModelTrainingRequest(("presale",)))
+    second = service.submit(ModelTrainingRequest(("resale",)))
     assert first.created is True
     assert second.created is False
     assert second.run.run_id == first.run.run_id
@@ -244,7 +250,7 @@ def test_execute_writes_traceable_candidate_without_touching_official_models(
     assert jobs.get(run.run_id).status == "succeeded"
 
 
-def test_execute_fails_atomically_when_a_market_raises(
+def test_service_rejects_forged_mixed_request_without_touching_artifacts(
     tmp_path: Path,
     market_parquet: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -258,28 +264,20 @@ def test_execute_fails_atomically_when_a_market_raises(
     before_resale = sha256_file(official_resale)
     before_presale = sha256_file(official_presale)
 
-    import qingpu_insight.model_training_service as mts
-
-    call_count = 0
-    original_run = mts.run_tuned_model_experiment
-
-    def failing_run(split, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count > 1:
-            raise RuntimeError("presale experiment failed")
-        return original_run(split, **kwargs)
-
-    monkeypatch.setattr(mts, "run_tuned_model_experiment", failing_run)
-
-    run = service.submit(ModelTrainingRequest(("resale", "presale"))).run
+    run = service.submit(ModelTrainingRequest(("resale",))).run
     jobs.start(run.run_id)
+    request = object.__new__(ModelTrainingRequest)
+    request._markets = ("resale", "presale")
+    request.trigger = "manual"
+    request.tuning_plan = parse_tuning_plan(("resale",), None)
 
-    with pytest.raises(RuntimeError, match="presale experiment failed"):
-        service.execute(run.run_id, ModelTrainingRequest(("resale", "presale")))
+    with pytest.raises(ValueError, match="resale"):
+        service.submit(request)
+    with pytest.raises(ValueError, match="resale"):
+        service.execute(run.run_id, request)
 
     candidate_root = tmp_path / "candidates"
-    assert jobs.get(run.run_id).status == "failed"
+    assert jobs.get(run.run_id).status == "running"
     assert not (candidate_root / run.run_id).exists()
     assert sha256_file(official_resale) == before_resale
     assert sha256_file(official_presale) == before_presale
@@ -409,13 +407,12 @@ def test_execute_runs_tuned_model_experiment_with_profiles_and_recency_weighting
     monkeypatch.setattr(mts, "run_tuned_model_experiment", spy)
 
     service, jobs = service_fixture(tmp_path, input_path=market_parquet)
-    run = service.submit(ModelTrainingRequest(("resale", "presale"))).run
+    run = service.submit(ModelTrainingRequest(("resale",))).run
     jobs.start(run.run_id)
-    manifest = service.execute(run.run_id, ModelTrainingRequest(("resale", "presale")))
+    manifest = service.execute(run.run_id, ModelTrainingRequest(("resale",)))
 
-    assert len(captured) == 2
+    assert len(captured) == 1
     assert captured[0]["use_recency_weights"] is True
-    assert captured[1]["use_recency_weights"] is False
     for cap in captured:
         assert cap["profile_count"] == 3
         assert cap["profile_names"] == ["quick", "balanced", "thorough"]
@@ -492,17 +489,9 @@ def test_training_diagnostics_merge_market_quality_exclusions(tmp_path: Path) ->
     }
 
 
-def test_presale_training_does_not_run_resale_analysis(tmp_path, market_parquet):
-    service, jobs = service_fixture(tmp_path, input_path=market_parquet)
-    run = service.submit(ModelTrainingRequest(("presale",))).run
-    jobs.start(run.run_id)
-    manifest = service.execute(run.run_id, ModelTrainingRequest(("presale",)))
-    result = manifest.results[0]
-    assert result.market == "presale"
-    assert result.feature_experiments == []
-    assert result.backtests == []
-    artifact = joblib.load(tmp_path / "candidates" / run.run_id / result.artifact_file)
-    assert artifact.feature_columns == BASE_FEATURE_COLUMNS
+def test_presale_training_request_is_rejected() -> None:
+    with pytest.raises(ValueError, match="unsupported market: presale"):
+        ModelTrainingRequest(("presale",))
 
 
 @pytest.fixture
@@ -1028,7 +1017,7 @@ class TestAutoMLOrchestration:
 
         monkeypatch.setattr(mts, "evaluate_fit_spec", side_effect_evaluate)
 
-        request = ModelTrainingRequest(("resale", "presale"), tuning_plan=automl_plan)
+        request = ModelTrainingRequest(("resale",), tuning_plan=automl_plan)
         run = service.submit(request).run
         jobs.start(run.run_id)
 
@@ -1048,7 +1037,7 @@ class TestAutoMLOrchestration:
         assert result.selected_profile is not None
         assert len(result.profile_results) == 3
 
-    def test_automl_presale_returns_candidate(
+    def test_automl_presale_request_is_rejected(
         self,
         tmp_path: Path,
         market_parquet: Path,
@@ -1056,21 +1045,5 @@ class TestAutoMLOrchestration:
         automl_service_fixture: tuple,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-
-        service, jobs, registry, output_store = automl_service_fixture
-        self._patch_automl_pipeline(monkeypatch, passing=True, market="presale")
-
-        request = ModelTrainingRequest(("presale",), tuning_plan=automl_plan)
-        run = service.submit(request).run
-        jobs.start(run.run_id)
-        manifest = service.execute(run.run_id, request)
-
-        assert manifest is not None
-        assert manifest.automl is not None
-        assert "presale" in manifest.automl.markets
-        snap = manifest.automl.markets["presale"]
-        assert snap.selected_trial_number is not None
-        assert not snap.stopped
-
-        assert len(manifest.results) == 1
-        assert manifest.results[0].market == "presale"
+        with pytest.raises(ValueError, match="unsupported market: presale"):
+            ModelTrainingRequest(("presale",), tuning_plan=automl_plan)

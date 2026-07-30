@@ -76,8 +76,6 @@
         <label>市場
           <select id="ma-market-select">
             <option value="resale">中古屋</option>
-            <option value="presale">預售屋</option>
-            <option value="all">全部</option>
           </select>
         </label>
         {% include "_model_training_controls.html" %}
@@ -356,7 +354,7 @@
         var container = document.getElementById("mr-official-cards");
         container.innerHTML = "";
         var models = (data && data.official_models) || {};
-        var keys = Object.keys(models);
+        var keys = models.resale ? ["resale"] : [];
         if (keys.length === 0) {
           container.textContent = "無官方模型";
           return;
@@ -367,7 +365,7 @@
           var card = document.createElement("div");
           card.className = "ma-card";
           var title = document.createElement("h3");
-          title.textContent = market === "resale" ? "中古屋" : "預售屋";
+          title.textContent = "中古屋";
           card.appendChild(title);
           var lines = [
             "狀態：" + (m.available ? "可使用" : "不可使用"),
@@ -434,7 +432,9 @@
         var rendered = 0;
         for (var i = 0; i < details.length; i++) {
           var run = details[i];
-          var markets = (run.manifest && run.manifest.markets) || [];
+          var markets = ((run.manifest && run.manifest.markets) || []).filter(
+            function (market) { return market === "resale"; }
+          );
           for (var j = 0; j < markets.length; j++) {
             var market = markets[j];
             var marketInfo = run.markets && run.markets[market];
@@ -449,8 +449,7 @@
             content.className = "mr-candidate-content";
             var label = document.createElement("strong");
             label.textContent =
-              (market === "resale" ? "中古屋" : "預售屋") +
-              " — " + (run.run_id ? run.run_id.slice(0, 8) : "");
+              "中古屋 — " + (run.run_id ? run.run_id.slice(0, 8) : "");
             content.appendChild(label);
             if (summary) {
               var model = document.createElement("div");
@@ -849,17 +848,19 @@
         summary.textContent =
           "工作 " + (detail.run_id || "—") + "｜狀態 " + ma.statusLabel(detail.status);
         container.appendChild(summary);
-        var results = (detail.manifest && detail.manifest.results) || [];
+        var results = ((detail.manifest && detail.manifest.results) || []).filter(
+          function (result) { return result.market === "resale"; }
+        );
         if (results.length === 0) {
           var noResult = document.createElement("p");
           var automlMarkets = (detail.automl && detail.automl.markets) || {};
           var blockers = [];
-          Object.keys(automlMarkets).forEach(function (market) {
-            (automlMarkets[market].release_blockers || []).forEach(function (code) {
+          if (automlMarkets.resale) {
+            (automlMarkets.resale.release_blockers || []).forEach(function (code) {
               if (blockers.indexOf(code) === -1) blockers.push(code);
             });
-          });
-          if (detail.status === "succeeded" && Object.keys(automlMarkets).length > 0) {
+          }
+          if (detail.status === "succeeded" && automlMarkets.resale) {
             noResult.textContent = blockers.length > 0
               ? "AutoML 搜尋完成，但正式回測未通過：" +
                 blockers.map(ma.reasonLabel).join("、")
@@ -1149,7 +1150,9 @@
               renderOfficialCards(data);
               renderDataSnapshot(data);
               var statusBar = document.getElementById("mr-status");
-              var officialKeys = Object.keys(data.official_models || {});
+              var officialKeys = data.official_models && data.official_models.resale
+                ? ["resale"]
+                : [];
               var availableKeys = officialKeys.filter(function (key) {
                 return data.official_models[key].available;
               });
@@ -1479,7 +1482,7 @@
           recency_half_life_months: [
             "ma-custom-half-life",
             "ma-error-half-life",
-            "中古屋請輸入 12～84 個月；預售屋不適用",
+            "請輸入 12～84 個月",
           ],
         };
         var hasErrors = false;
@@ -1515,13 +1518,8 @@
         var sel = document.getElementById("ma-market-select");
         var halfLife = document.getElementById("ma-custom-half-life");
         if (!halfLife || !sel) return;
-        if (sel.value === "presale") {
-          halfLife.disabled = true;
-          halfLife.value = "";
-        } else {
-          halfLife.disabled = false;
-          if (!halfLife.value) halfLife.value = "48";
-        }
+        halfLife.disabled = false;
+        if (!halfLife.value) halfLife.value = "48";
         updateTrainingSummary();
       }
 

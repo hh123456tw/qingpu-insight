@@ -629,7 +629,7 @@ def test_mysql_load_success(tmp_path, monkeypatch) -> None:
     assert len(called_with[0]) == len(clean)
 
 
-def test_model_train_builds_both_types_without_network(
+def test_model_train_builds_resale_without_network(
     tmp_path, monkeypatch, capsys
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -1624,7 +1624,7 @@ def test_model_train_cli_submits_and_executes_common_service(
     assert "candidate run:" in capsys.readouterr().out
 
 
-def test_model_train_default_markets_both(tmp_path, monkeypatch, capsys) -> None:
+def test_model_train_default_market_is_resale(tmp_path, monkeypatch, capsys) -> None:
     from qingpu_insight.model_training_service import ModelTrainingRequest
 
     fake = RecordingModelTrainingService()
@@ -1635,8 +1635,19 @@ def test_model_train_default_markets_both(tmp_path, monkeypatch, capsys) -> None
 
     assert result == 0
     assert fake.requests == [
-        ModelTrainingRequest(("resale", "presale"), trigger="manual")
+        ModelTrainingRequest(("resale",), trigger="manual")
     ]
+
+
+def test_model_train_cli_rejects_presale_choice(tmp_path, monkeypatch) -> None:
+    fake = RecordingModelTrainingService()
+    monkeypatch.setattr(cli, "_create_model_training_service", lambda root: fake)
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(SystemExit):
+        cli.main(["model-train", "--markets", "presale"])
+
+    assert fake.requests == []
 
 
 # --- M4.3 ops CLI tests ---

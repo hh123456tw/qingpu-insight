@@ -622,10 +622,10 @@ def _parse_model_training_request() -> object:
         fields["markets"] = "string_items"
     elif len(set(raw_markets)) != len(raw_markets):
         fields["markets"] = "unique"
-    elif any(m not in {"resale", "presale"} for m in raw_markets):
+    elif raw_markets != ["resale"]:
         fields["markets"] = "supported_values"
 
-    market_order = ("resale", "presale")
+    market_order = ("resale",)
     ordered = [m for m in market_order if m in raw_markets] if isinstance(raw_markets, list) else []
 
     try:
@@ -1616,6 +1616,8 @@ def create_app(
             uuid.UUID(run_id)
         except (ValueError, AttributeError):
             return _invalid_request({"run_id": "invalid_uuid"})
+        if not report_type.startswith("resale-"):
+            return _invalid_request({"report_type": "not_allowed"})
         try:
             path = admin_services.model_observatory.report_path(run_id, report_type)
         except ValueError:

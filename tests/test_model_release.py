@@ -295,6 +295,14 @@ class TestModelReleaseService:
         with pytest.raises(ValueError):
             service.preview_publish("nonexistent-run", "resale")
 
+    def test_preview_publish_rejects_presale_before_candidate_lookup(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        service, _, _ = self._create_service(tmp_path)
+        with pytest.raises(ValueError, match="resale"):
+            service.preview_publish("historic-presale-run", "presale")
+
     def test_preview_rollback_creates_preview(
         self, tmp_path: Path
     ) -> None:
@@ -321,6 +329,14 @@ class TestModelReleaseService:
         service, _, _ = self._create_service(tmp_path)
         with pytest.raises((ValueError, FileNotFoundError)):
             service.preview_rollback("resale", "nonexistent")
+
+    def test_preview_rollback_rejects_presale_before_store_lookup(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        service, _, _ = self._create_service(tmp_path)
+        with pytest.raises(ValueError, match="resale"):
+            service.preview_rollback("presale", "historic-version")
 
     def test_submit_consumes_preview_and_creates_job(
         self, tmp_path: Path
@@ -375,6 +391,24 @@ class TestModelReleaseService:
         service.submit(preview.preview_id, confirm_text)
         with pytest.raises(PreviewAlreadyConsumed):
             service.submit(preview.preview_id, confirm_text)
+
+    def test_submit_rejects_legacy_presale_preview(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        service, _, _ = self._create_service(tmp_path)
+        preview = service._preview_service.create_for(
+            "model_publish",
+            {
+                "operation": "publish",
+                "market": "presale",
+                "run_id": "historic-presale-run",
+            },
+            "legacy confirmation",
+        )
+
+        with pytest.raises(ValueError, match="resale"):
+            service.submit(preview.preview_id, preview.confirmation_text)
 
     def _start_job(self, service: ModelReleaseService) -> str:
         submission = service._job_service.create(
@@ -447,6 +481,25 @@ class TestModelReleaseService:
         current_file = store.current("resale")
         assert current_file is not None
         assert current_file.version_id == v1.version_id
+
+    def test_execute_rejects_legacy_presale_preview(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        service, _, _ = self._create_service(tmp_path)
+        preview = service._preview_service.create_for(
+            "model_rollback",
+            {
+                "operation": "rollback",
+                "market": "presale",
+                "version_id": "historic-version",
+            },
+            "legacy confirmation",
+        )
+        job_run_id = self._start_job(service)
+
+        with pytest.raises(ValueError, match="resale"):
+            service.execute(job_run_id, preview)
 
     def test_execute_publish_failure_restores_file_pointer(
         self, tmp_path: Path

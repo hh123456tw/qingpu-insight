@@ -8,8 +8,6 @@
 
   var MARKET_PAYLOADS = {
     resale: ["resale"],
-    presale: ["presale"],
-    all: ["resale", "presale"],
   };
 
   var PROFILE_LABELS = {
@@ -29,8 +27,6 @@
     validating_data: "驗證訓練資料",
     training_resale: "正在訓練中古屋模型",
     evaluating_resale: "正在評估中古屋模型",
-    training_presale: "正在訓練預售屋模型",
-    evaluating_presale: "正在評估預售屋模型",
     writing_artifacts: "正在寫入模型成品",
   };
 
@@ -54,12 +50,10 @@
           hgb_learning_rate: Number(custom.hgb_learning_rate),
           hgb_max_iter: Number(custom.hgb_max_iter),
           rf_n_estimators: Number(custom.rf_n_estimators),
-        };
-        if (value !== "presale") {
-          customPayload.recency_half_life_months = Number(
+          recency_half_life_months: Number(
             custom.recency_half_life_months
-          );
-        }
+          ),
+        };
         tuning.custom = customPayload;
       }
       payload.tuning = tuning;
@@ -69,23 +63,17 @@
 
   function derivePageState(statusPayload, activeRun) {
     var officialModels = (statusPayload && statusPayload.official_models) || {};
-    var modelNames = Object.keys(officialModels);
-    var hasOfficial = modelNames.length > 0;
+    var resaleModel = officialModels.resale;
 
     var officialLabel;
-    if (!hasOfficial) {
+    if (!resaleModel) {
       officialLabel = "無官方模型";
     } else {
-      officialLabel = modelNames
-        .map(function (key) {
-          var m = officialModels[key];
-          var name = m.name || key;
-          var rec = "";
-          if (m.recommended === true) rec = "（建議）";
-          else if (m.recommended === false) rec = "（不建議）";
-          return name + "（官方）" + rec;
-        })
-        .join("；");
+      var name = resaleModel.name || "resale";
+      var rec = "";
+      if (resaleModel.recommended === true) rec = "（建議）";
+      else if (resaleModel.recommended === false) rec = "（不建議）";
+      officialLabel = name + "（官方）" + rec;
     }
 
     var stageLabel = null;
@@ -148,9 +136,8 @@
   function marketLabel(market) {
     var labels = {
       resale: "中古屋",
-      presale: "預售屋",
     };
-    return labels[market] || market || "—";
+    return labels[market] || "—";
   }
 
   function statusLabel(status) {
@@ -217,6 +204,9 @@
   }
 
   function buildReleasePreviewPayload(action, market, id) {
+    if (market !== "resale") {
+      throw new Error("unknown market selection: " + market);
+    }
     if (action === "publish") {
       return { action: action, market: market, run_id: id };
     }
@@ -241,6 +231,9 @@
   }
 
   function validateCustomTuning(market, custom) {
+    if (market !== "resale") {
+      throw new Error("unknown market selection: " + market);
+    }
     var errors = {};
     var lr = Number(custom.hgb_learning_rate);
     if (!Number.isFinite(lr) || lr < 0.01 || lr > 0.20) {
@@ -254,26 +247,19 @@
     if (!Number.isInteger(nEst) || nEst < 100 || nEst > 1000) {
       errors.rf_n_estimators = true;
     }
-    if (market === "presale") {
-      if (
-        custom.recency_half_life_months != null
-        && custom.recency_half_life_months !== ""
-      ) {
-        errors.recency_half_life_months = "not_applicable";
-      }
-    } else {
-      var halfLife = Number(custom.recency_half_life_months);
-      if (!Number.isInteger(halfLife) || halfLife < 12 || halfLife > 84) {
-        errors.recency_half_life_months = true;
-      }
+    var halfLife = Number(custom.recency_half_life_months);
+    if (!Number.isInteger(halfLife) || halfLife < 12 || halfLife > 84) {
+      errors.recency_half_life_months = true;
     }
     return errors;
   }
 
   function trainingSubmitSummary(market, includeCustom) {
-    var marketCount = market === "all" ? 2 : 1;
+    if (!MARKET_PAYLOADS.hasOwnProperty(market)) {
+      throw new Error("unknown market selection: " + market);
+    }
     var configCount = includeCustom ? 4 : 3;
-    return marketCount + " 個市場 × " + configCount + " 組設定";
+    return "1 個市場 × " + configCount + " 組設定";
   }
 
   function metricCards(result) {

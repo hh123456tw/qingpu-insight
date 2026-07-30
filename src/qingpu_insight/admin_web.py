@@ -371,8 +371,8 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
             fields["action"] = "publish_or_rollback"
 
         market = payload.get("market", "")
-        if market not in {"resale", "presale"}:
-            fields["market"] = "resale_or_presale"
+        if market != "resale":
+            fields["market"] = "resale_only"
 
         if action == "publish":
             run_id = payload.get("run_id", "")
@@ -507,10 +507,17 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
                    "fields": {"limit": "integer_1_to_100"}}
             return jsonify({"error": err}), 400
 
-        market = request.args.get("market")
+        market = request.args.get("market", "resale")
+        if market != "resale":
+            err = {
+                "code": "invalid_request",
+                "message": "Request validation failed.",
+                "fields": {"market": "resale_only"},
+            }
+            return jsonify({"error": err}), 400
 
         try:
-            runs = rt.job_service.list_recent(limit, job_type="model_release")
+            runs = rt.job_service.list_recent(100, job_type="model_release")
         except Exception:
             err = {"code": "admin_unavailable", "message": "工作歷史暫時無法取得。"}
             return jsonify({"error": err}), 503
@@ -521,8 +528,12 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
             item["info_url"] = f"/api/jobs/{run.run_id}"
             items.append(item)
 
-        if market is not None:
-            items = [it for it in items if it.get("output_version") == market or True]
+        items = [
+            item
+            for item in items
+            if isinstance(item.get("summary"), dict)
+            and item["summary"].get("market") == market
+        ][:limit]
 
         return jsonify({"items": items, "limit": limit})
 

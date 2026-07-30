@@ -2691,6 +2691,8 @@ class TestModelAdminApi:
             ({"markets": []}, "markets"),
             ({"markets": ["resale", "resale"]}, "markets"),
             ({"markets": ["sale"]}, "markets"),
+            ({"markets": ["presale"]}, "markets"),
+            ({"markets": ["resale", "presale"]}, "markets"),
             ({"markets": ["resale"], "path": "C:/secret"}, "path"),
             ({"markets": ["resale"], "model": "xgboost"}, "model"),
         ],
@@ -2812,11 +2814,12 @@ class TestModelAdminApi:
             json={"markets": ["resale"]},
             headers={"X-Qingpu-CSRF": "test-token"},
         )
-        model_admin_client.post(
+        rejected = model_admin_client.post(
             "/api/admin/model-training-runs",
             json={"markets": ["presale"]},
             headers={"X-Qingpu-CSRF": "test-token"},
         )
+        assert rejected.status_code == 400
         response = model_admin_client.get("/api/admin/model-training-runs?limit=10")
         assert response.status_code == 200
         body = response.get_json()
@@ -2838,6 +2841,7 @@ class TestModelAdminApi:
         "bad_type",
         [
             "resale.joblib",
+            "presale-evaluation",
             "unknown",
         ],
     )
@@ -2863,7 +2867,7 @@ class TestModelAdminApi:
         assert "official_models" in body
         assert "candidate_count" in body
 
-    def test_model_training_post_canonicalizes_markets(
+    def test_model_training_post_rejects_mixed_markets(
         self,
         model_admin_client: FlaskClient,
     ) -> None:
@@ -2872,8 +2876,8 @@ class TestModelAdminApi:
             json={"markets": ["presale", "resale"]},
             headers={"X-Qingpu-CSRF": "test-token"},
         )
-        data = response.get_json()
-        assert data.get("created") is True
+        assert response.status_code == 400
+        assert response.get_json()["error"]["fields"]["markets"] == "supported_values"
 
     def test_model_training_post_accepts_four_profile_plan(
         self,
@@ -2882,7 +2886,7 @@ class TestModelAdminApi:
         response = model_admin_client.post(
             "/api/admin/model-training-runs",
             json={
-                "markets": ["resale", "presale"],
+                "markets": ["resale"],
                 "tuning": {
                     "mode": "preset_comparison",
                     "include_custom": True,
@@ -2968,7 +2972,7 @@ class TestModelAdminApi:
         tmp_path: Path,
     ) -> None:
         obs = model_admin_client.application.extensions["qingpu_admin_services"].model_observatory
-        report_type = "presale-evaluation"
+        report_type = "resale-evaluation"
         report_dir = tmp_path / "reports"
         report_dir.mkdir(parents=True)
         report_file = report_dir / report_type
@@ -3155,8 +3159,9 @@ class TestModelAdminPage:
         assert 'id="ma-data-grid"' in html
         assert 'id="ma-market-select"' in html
         assert 'value="resale"' in html
-        assert 'value="presale"' in html
-        assert 'value="all"' in html
+        assert 'value="presale"' not in html
+        assert 'value="all"' not in html
+        assert "預售屋" not in html
         assert "不會自動發布" in html
         assert 'id="ma-history-table"' in html
         assert 'id="ma-detail-content"' in html
@@ -3649,13 +3654,22 @@ class TestModelReleaseApi:
     def test_preview_rollback_success(self, model_release_client) -> None:
         response = model_release_client.post(
             "/api/admin/model-release-previews",
-            json={"action": "rollback", "market": "presale", "version_id": "abc12345"},
+            json={"action": "rollback", "market": "resale", "version_id": "abc12345"},
             headers={"X-Qingpu-CSRF": "test-token"},
         )
         assert response.status_code == 200
         body = response.get_json()
         assert body["operation"] == "model_rollback"
         assert "preview_id" in body
+
+    def test_preview_rejects_presale(self, model_release_client) -> None:
+        response = model_release_client.post(
+            "/api/admin/model-release-previews",
+            json={"action": "rollback", "market": "presale", "version_id": "abc12345"},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+        assert response.get_json()["error"]["fields"]["market"] == "resale_only"
 
     def test_preview_rejects_non_json(self, model_release_client) -> None:
         response = model_release_client.post(
@@ -3782,6 +3796,45 @@ class TestModelReleaseApi:
         body = response.get_json()
         assert "items" in body
         assert "limit" in body
+
+    def test_release_list_projects_only_resale_history(
+        self,
+        model_release_client,
+    ) -> None:
+        jobs = model_release_client.application.extensions[
+            "qingpu_admin_runtime"
+        ].job_service
+        resale = jobs.create("model_release", "history:resale", "manual").run
+        jobs.start(resale.run_id)
+        jobs.succeed(
+            resale.run_id,
+            "resale-version",
+            {"market": "resale", "version_id": "resale-version"},
+        )
+        presale = jobs.create("model_release", "history:presale", "manual").run
+        jobs.start(presale.run_id)
+        jobs.succeed(
+            presale.run_id,
+            "presale-version",
+            {"market": "presale", "version_id": "presale-version"},
+        )
+
+        response = model_release_client.get("/api/admin/model-releases")
+
+        assert response.status_code == 200
+        assert [item["run_id"] for item in response.get_json()["items"]] == [
+            resale.run_id
+        ]
+
+    def test_release_list_rejects_presale_filter(
+        self,
+        model_release_client,
+    ) -> None:
+        response = model_release_client.get(
+            "/api/admin/model-releases?market=presale"
+        )
+        assert response.status_code == 400
+        assert response.get_json()["error"]["fields"]["market"] == "resale_only"
 
     def test_release_list_with_limit(self, model_release_client) -> None:
         response = model_release_client.get(

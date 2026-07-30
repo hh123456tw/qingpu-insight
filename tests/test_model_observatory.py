@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import joblib
 import pandas as pd
+import pytest
 
 from qingpu_insight.automl_outputs import AutoMLRunOutputStore
 from qingpu_insight.jobs import JobRun, JobService
@@ -281,6 +282,7 @@ class TestModelObservatoryStatus:
             official_models={"resale": bundle},
         ).status()
 
+        assert set(status["official_models"]) == {"resale"}
         model = status["official_models"]["resale"]
         assert model["source_run_id"]
         assert model["activated_at"]
@@ -435,8 +437,9 @@ class TestModelObservatoryStatus:
         status = observatory.status()
         assert "data_status" in status
         assert status["data_status"]["sha256"] is not None
-        assert status["data_status"]["raw_count"] == 200
-        assert status["data_status"]["usable_counts"]["resale"] == 100
+        assert status["data_status"]["raw_count"] == 100
+        assert status["data_status"]["usable_counts"] == {"resale": 100}
+        assert status["data_status"]["excluded_counts"] == {"resale": 0}
 
     def test_list_runs_merges_job_history_with_manifests(self, tmp_path: Path) -> None:
         manifest = manifest_fixture()
@@ -444,7 +447,7 @@ class TestModelObservatoryStatus:
         runs = observatory.list_runs()
         assert len(runs) == 1
         assert runs[0]["run_id"] == str(manifest.run_id)
-        assert runs[0]["markets"] == manifest.markets
+        assert runs[0]["markets"] == ["resale"]
 
     def test_get_run_returns_detailed_info(self, tmp_path: Path) -> None:
         manifest = manifest_fixture()
@@ -453,6 +456,13 @@ class TestModelObservatoryStatus:
         assert result is not None
         assert result["run_id"] == str(manifest.run_id)
         assert "manifest" in result
+        assert result["manifest"]["markets"] == ["resale"]
+        assert [item["market"] for item in result["manifest"]["results"]] == [
+            "resale"
+        ]
+        assert result["manifest"]["data_snapshot"]["usable_counts"] == {
+            "resale": 500
+        }
 
     def test_get_run_marks_candidate_that_is_current_official(
         self,
@@ -487,17 +497,34 @@ class TestModelObservatoryStatus:
         observatory = observatory_fixture(tmp_path)
         assert observatory.get_run("nonexistent-run-id") is None
 
+    def test_report_path_rejects_presale_report(self, tmp_path: Path) -> None:
+        observatory = observatory_fixture(tmp_path)
+        with pytest.raises(ValueError, match="resale"):
+            observatory.report_path(
+                "00000000-0000-4000-8000-000000000000",
+                "presale-evaluation",
+            )
+
     def test_get_run_includes_per_market_publishable_info(self, tmp_path: Path) -> None:
         manifest = manifest_fixture(markets=["resale", "presale"])
         observatory = observatory_fixture(tmp_path, candidate_runs=[manifest])
         result = observatory.get_run(str(manifest.run_id))
         assert result is not None
-        assert "markets" in result
-        for m in ("resale", "presale"):
-            assert m in result["markets"]
-            assert "publishable" in result["markets"][m]
-            assert "release_blockers" in result["markets"][m]
-            assert "current_official_version_id" in result["markets"][m]
+        assert set(result["markets"]) == {"resale"}
+        assert "publishable" in result["markets"]["resale"]
+        assert "release_blockers" in result["markets"]["resale"]
+        assert "current_official_version_id" in result["markets"]["resale"]
+
+    def test_presale_only_candidate_is_hidden_from_status_list_and_detail(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        manifest = manifest_fixture(markets=["presale"])
+        observatory = observatory_fixture(tmp_path, candidate_runs=[manifest])
+
+        assert observatory.status()["candidate_count"] == 0
+        assert observatory.list_runs() == []
+        assert observatory.get_run(str(manifest.run_id)) is None
 
     def test_get_run_includes_schema_v3_tuning_fields(self, tmp_path: Path) -> None:
         profile = TrainingProfileSnapshot(
@@ -571,7 +598,7 @@ def test_official_model_status_marks_2024_model_stale(tmp_path: Path) -> None:
 
 
 def test_get_run_includes_automl_for_v4_manifest(tmp_path: Path) -> None:
-    manifest = manifest_fixture(markets=["resale"])
+    manifest = manifest_fixture(markets=["resale", "presale"])
     v4_manifest = manifest.model_copy(
         update={
             "schema_version": 4,
@@ -592,7 +619,20 @@ def test_get_run_includes_automl_for_v4_manifest(tmp_path: Path) -> None:
                         trial_file="automl/resale-trials.json",
                         trial_sha256="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
                         shortlisted_trial_numbers=[],
-                    )
+                    ),
+                    "presale": AutoMLMarketSearchSnapshot(
+                        budget_name="quick",
+                        budget_seconds=300,
+                        max_trials=12,
+                        completed_trials=0,
+                        failed_trials=0,
+                        seed=42,
+                        stopped=False,
+                        top_trials=[],
+                        trial_file="automl/presale-trials.json",
+                        trial_sha256="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                        shortlisted_trial_numbers=[],
+                    ),
                 },
             ),
         }
@@ -603,6 +643,7 @@ def test_get_run_includes_automl_for_v4_manifest(tmp_path: Path) -> None:
     m = result["manifest"]
     assert "automl" in m
     assert m["automl"]["mode"] == "automl"
+    assert set(m["automl"]["markets"]) == {"resale"}
 
 
 def test_get_run_fallback_automl_when_no_manifest(tmp_path: Path) -> None:
@@ -611,6 +652,7 @@ def test_get_run_fallback_automl_when_no_manifest(tmp_path: Path) -> None:
     store_base.mkdir(parents=True)
     output_store = AutoMLRunOutputStore(store_base)
     output_store.write(run_id, "resale", {"trials": [], "stopped": True})
+    output_store.write(run_id, "presale", {"trials": [{"trial_number": 99}]})
 
     artifact_dir = tmp_path / "artifacts"
     artifact_dir.mkdir()
@@ -662,6 +704,7 @@ def test_get_run_fallback_automl_when_no_manifest(tmp_path: Path) -> None:
     assert "automl" in result
     assert result["automl"]["candidate_available"] is False
     assert result["automl"]["markets"]["resale"]["trials"] == []
+    assert set(result["automl"]["markets"]) == {"resale"}
     assert result["automl"]["stopped"] is True
 
 

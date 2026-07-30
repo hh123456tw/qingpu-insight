@@ -1587,8 +1587,8 @@ def build_parser() -> argparse.ArgumentParser:
     model_parser.add_argument("--artifact-dir", default="artifacts")
     model_parser.add_argument("--report-dir", default="outputs/reports")
     model_parser.add_argument(
-        "--markets", nargs="*", default=["resale", "presale"],
-        choices=("resale", "presale"),
+        "--markets", nargs="*", default=["resale"],
+        choices=("resale",),
     )
 
     scrape_parser = subparsers.add_parser(

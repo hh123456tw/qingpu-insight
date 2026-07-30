@@ -3,15 +3,11 @@
 const assert = require("node:assert/strict");
 const admin = require("../../src/qingpu_insight/static/models_admin.js");
 
-assert.deepEqual(admin.buildTrainingPayload("all"), {
-  markets: ["resale", "presale"],
-});
 assert.deepEqual(admin.buildTrainingPayload("resale"), {
   markets: ["resale"],
 });
-assert.deepEqual(admin.buildTrainingPayload("presale"), {
-  markets: ["presale"],
-});
+assert.throws(() => admin.buildTrainingPayload("all"), /unknown market/i);
+assert.throws(() => admin.buildTrainingPayload("presale"), /unknown market/i);
 assert.throws(() => admin.buildTrainingPayload("xgboost"), /unknown market/i);
 assert.throws(() => admin.buildTrainingPayload(""), /unknown market/i);
 
@@ -67,15 +63,13 @@ assert.deepEqual(
   {
     canSubmit: false,
     stageLabel: "正在處理模型工作",
-    officialLabel: "ridge（官方）（建議）；lasso（官方）（不建議）",
+    officialLabel: "ridge（官方）（建議）",
     candidateNotice: "訓練進行中，無法提交新任務。",
   }
 );
 
 assert.deepEqual(admin.MARKET_PAYLOADS, {
   resale: ["resale"],
-  presale: ["presale"],
-  all: ["resale", "presale"],
 });
 
 assert.equal(admin.REASON_LABELS.data_quality, "資料品質不足");
@@ -88,8 +82,12 @@ assert.equal(admin.formatDatetime(""), "—");
 
 assert.equal(typeof admin.buildReleasePreviewPayload, "function");
 assert.equal(typeof admin.canConfirmDangerousAction, "function");
+assert.throws(
+  () => admin.buildReleasePreviewPayload("publish", "presale", "run-1"),
+  /unknown market/i
+);
 assert.equal(admin.marketLabel("resale"), "中古屋");
-assert.equal(admin.marketLabel("presale"), "預售屋");
+assert.equal(admin.marketLabel("presale"), "—");
 assert.equal(admin.statusLabel("succeeded"), "成功");
 assert.equal(admin.statusLabel("interrupted"), "已中斷");
 
@@ -133,28 +131,6 @@ var custom = {
 };
 
 // Extended buildTrainingPayload tests
-assert.deepEqual(admin.buildTrainingPayload("all", true, custom), {
-  markets: ["resale", "presale"],
-  tuning: {
-    mode: "preset_comparison",
-    include_custom: true,
-    custom: {
-      hgb_learning_rate: 0.05,
-      hgb_max_iter: 420,
-      rf_n_estimators: 520,
-      recency_half_life_months: 36,
-    },
-  },
-});
-
-assert.deepEqual(admin.buildTrainingPayload("all", false), {
-  markets: ["resale", "presale"],
-  tuning: {
-    mode: "preset_comparison",
-    include_custom: false,
-  },
-});
-
 assert.deepEqual(admin.buildTrainingPayload("resale", true, custom), {
   markets: ["resale"],
   tuning: {
@@ -168,29 +144,13 @@ assert.deepEqual(admin.buildTrainingPayload("resale", true, custom), {
     },
   },
 });
-assert.deepEqual(admin.buildTrainingPayload("presale", true, {
-  hgb_learning_rate: "0.05",
-  hgb_max_iter: "420",
-  rf_n_estimators: "520",
-  recency_half_life_months: "",
-}), {
-  markets: ["presale"],
-  tuning: {
-    mode: "preset_comparison",
-    include_custom: true,
-    custom: {
-      hgb_learning_rate: 0.05,
-      hgb_max_iter: 420,
-      rf_n_estimators: 520,
-    },
-  },
-});
+assert.throws(
+  () => admin.buildTrainingPayload("presale", true, custom),
+  /unknown market/i
+);
 
 // validateCustomTuning tests
-assert.equal(
-  admin.validateCustomTuning("presale", custom).recency_half_life_months,
-  "not_applicable"
-);
+assert.throws(() => admin.validateCustomTuning("presale", custom), /unknown market/i);
 
 var emptyCustom = admin.validateCustomTuning("resale", {});
 assert.ok(emptyCustom.hgb_learning_rate);
@@ -219,10 +179,9 @@ assert.ok(admin.validateCustomTuning("resale", { recency_half_life_months: "11" 
 assert.ok(admin.validateCustomTuning("resale", { recency_half_life_months: "85" }).recency_half_life_months);
 
 // trainingSubmitSummary tests
-assert.equal(admin.trainingSubmitSummary("all", true), "2 個市場 × 4 組設定");
-assert.equal(admin.trainingSubmitSummary("all", false), "2 個市場 × 3 組設定");
 assert.equal(admin.trainingSubmitSummary("resale", true), "1 個市場 × 4 組設定");
-assert.equal(admin.trainingSubmitSummary("presale", false), "1 個市場 × 3 組設定");
+assert.throws(() => admin.trainingSubmitSummary("all", true), /unknown market/i);
+assert.throws(() => admin.trainingSubmitSummary("presale", false), /unknown market/i);
 
 // v3Result fixture
 var v3Result = {
@@ -492,11 +451,8 @@ assert.deepEqual(admin.buildAutoMLPayload("resale", "quick"), {
   markets: ["resale"],
   tuning: { mode: "automl", budget: "quick" },
 });
-assert.deepEqual(admin.buildAutoMLPayload("all", "deep"), {
-  markets: ["resale", "presale"],
-  tuning: { mode: "automl", budget: "deep" },
-});
-assert.throws(() => admin.buildAutoMLPayload("all", "hour"), /budget/i);
+assert.throws(() => admin.buildAutoMLPayload("all", "deep"), /unknown market/i);
+assert.throws(() => admin.buildAutoMLPayload("resale", "hour"), /budget/i);
 assert.throws(() => admin.buildAutoMLPayload("xgboost", "quick"), /unknown market/i);
 
 // automlProgressView tests
