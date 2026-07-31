@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "market": "resale",
+  "version_id": "57cf2ba9",
+  "source_run_id": "eaec37a3-7216-4e9b-870b-ff45c83eb8c4",
+  "artifact_file": "official/resale/versions/57cf2ba9/model.joblib",
+  "artifact_sha256": "693302145874d253b5f973e443570e0da95781e54a387119ec1b5e54a10b16c1",
+  "activated_at": "2026-07-29T13:11:26.693680+00:00"
+}
