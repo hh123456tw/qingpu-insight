@@ -1,0 +1,20 @@
+{
+  "input_records": 90322,
+  "output_records": 8091,
+  "output_by_type": {
+    "resale": 5280,
+    "presale": 2811
+  },
+  "exclusion_reasons": {
+    "non_residential": 19518,
+    "outside_life_circle": 51568,
+    "invalid_price": 23,
+    "invalid_area": 7,
+    "non_market_subject": 18,
+    "special_relationship": 446,
+    "missing_completion_date": 3,
+    "future_completion_transfer": 10648
+  },
+  "minimum_date": "2019-03-05",
+  "maximum_date": "2026-06-13"
+}

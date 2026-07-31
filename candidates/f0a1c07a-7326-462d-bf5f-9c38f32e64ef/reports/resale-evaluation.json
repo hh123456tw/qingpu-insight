@@ -1,0 +1,3855 @@
+{
+  "transaction_type": "resale",
+  "model_version": "resale-2026-06-13-56738d0c",
+  "selected_model": "hist_gradient_boosting",
+  "selection_metrics": {
+    "quick:ridge": {
+      "overall": {
+        "mae": 60247.553608281065,
+        "mape": 13.553443644029626,
+        "rmse": 126845.69024674091,
+        "r2": 0.2574305636834685,
+        "count": 380.0
+      },
+      "station:A19": {
+        "mae": 51877.19640436405,
+        "mape": 13.086620737541368,
+        "rmse": 67951.07868996348,
+        "r2": 0.514547574585078,
+        "count": 172.0
+      },
+      "station:A18": {
+        "mae": 68843.8788671145,
+        "mape": 13.118941836298974,
+        "rmse": 170849.41846057834,
+        "r2": 0.11500659927991708,
+        "count": 176.0
+      },
+      "station:A17": {
+        "mae": 57958.43465575109,
+        "mape": 18.452376708922593,
+        "rmse": 75538.65729694007,
+        "r2": 0.5236372151199686,
+        "count": 32.0
+      },
+      "building_type:住宅大樓(11層含以上有電梯)": {
+        "mae": 49727.83337119002,
+        "mape": 11.622364512094828,
+        "rmse": 64216.71088883993,
+        "r2": 0.47799005455078103,
+        "count": 311.0
+      },
+      "building_type:華廈(10層含以下有電梯)": {
+        "mae": 54943.864323032154,
+        "mape": 18.131039274080283,
+        "rmse": 68696.93996698337,
+        "r2": 0.49342670073864503,
+        "count": 50.0
+      }
+    },
+    "quick:random_forest": {
+      "overall": {
+        "mae": 60187.03390373724,
+        "mape": 12.780238674990615,
+        "rmse": 132313.18128251718,
+        "r2": 0.19203627838212056,
+        "count": 380.0
+      },
+      "station:A19": {
+        "mae": 57384.42757995811,
+        "mape": 14.136462777910328,
+        "rmse": 73681.83122600176,
+        "r2": 0.4292120627142303,
+        "count": 172.0
+      },
+      "station:A18": {
+        "mae": 64199.56244633079,
+        "mape": 11.138053446222933,
+        "rmse": 177204.59772347548,
+        "r2": 0.04794290439485738,
+        "count": 176.0
+      },
+      "station:A17": {
+        "mae": 53182.13590978551,
+        "mape": 14.522552880019424,
+        "rmse": 77485.2579063333,
+        "r2": 0.4987695237893761,
+        "count": 32.0
+      },
+      "building_type:住宅大樓(11層含以上有電梯)": {
+        "mae": 52661.1773447682,
+        "mape": 11.886667477033972,
+        "rmse": 70233.4057341737,
+        "r2": 0.3755896126682374,
+        "count": 311.0
+      },
+      "building_type:華廈(10層含以下有電梯)": {
+        "mae": 41179.98885713202,
+        "mape": 11.915875641698923,
+        "rmse": 56356.0333941567,
+        "r2": 0.6590832449574222,
+        "count": 50.0
+      }
+    },
+    "quick:hist_gradient_boosting": {
+      "overall": {
+        "mae": 55457.56474324494,
+        "mape": 11.714010269704136,
+        "rmse": 124675.21386554863,
+        "r2": 0.2826255883326939,
+        "count": 380.0
+      },
+      "station:A19": {
+        "mae": 51946.04810362147,
+        "mape": 12.930882942193778,
+        "rmse": 66635.66246625945,
+        "r2": 0.5331607056685616,
+        "count": 172.0
+      },
+      "station:A18": {
+        "mae": 60750.150577575645,
+        "mape": 10.637775027400052,
+        "rmse": 168873.40727396184,
+        "r2": 0.1353595391318253,
+        "count": 176.0
+      },
+      "station:A17": {
+        "mae": 45222.74459240217,
+        "mape": 11.092613487744782,
+        "rmse": 62185.1442672608,
+        "r2": 0.6771709589589779,
+        "count": 32.0
+      },
+      "building_type:住宅大樓(11層含以上有電梯)": {
+        "mae": 48540.831528373485,
+        "mape": 11.104974302239807,
+        "rmse": 63993.01727105498,
+        "r2": 0.48162047759049786,
+        "count": 311.0
+      },
+      "building_type:華廈(10層含以下有電梯)": {
+        "mae": 41146.70091409824,
+        "mape": 11.736087474682693,
+        "rmse": 54891.58534675002,
+        "r2": 0.6765709251872003,
+        "count": 50.0
+      }
+    },
+    "quick:hist_gradient_boosting_log": {
+      "overall": {
+        "mae": 58861.90095111686,
+        "mape": 12.454121489817384,
+        "rmse": 124950.83634066336,
+        "r2": 0.27945024879339775,
+        "count": 380.0
+      },
+      "station:A19": {
+        "mae": 58961.96845235046,
+        "mape": 14.612372185557218,
+        "rmse": 74982.09663325723,
+        "r2": 0.4088888868032634,
+        "count": 172.0
+      },
+      "station:A18": {
+        "mae": 62187.197405789346,
+        "mape": 10.870344948849848,
+        "rmse": 166329.54152074797,
+        "r2": 0.16121278292910424,
+        "count": 176.0
+      },
+      "station:A17": {
+        "mae": 40034.90763128761,
+        "mape": 9.564294975537216,
+        "rmse": 54960.593626874295,
+        "r2": 0.7478249396876118,
+        "count": 32.0
+      },
+      "building_type:住宅大樓(11層含以上有電梯)": {
+        "mae": 52936.29758089905,
+        "mape": 12.102144797707535,
+        "rmse": 69479.24757227056,
+        "r2": 0.38892730938989595,
+        "count": 311.0
+      },
+      "building_type:華廈(10層含以下有電梯)": {
+        "mae": 39041.780740946364,
+        "mape": 11.200019884306657,
+        "rmse": 51412.324301957284,
+        "r2": 0.7162721369301857,
+        "count": 50.0
+      }
+    },
+    "balanced:ridge": {
+      "overall": {
+        "mae": 60247.553608281065,
+        "mape": 13.553443644029626,
+        "rmse": 126845.69024674091,
+        "r2": 0.2574305636834685,
+        "count": 380.0
+      },
+      "station:A19": {
+        "mae": 51877.19640436405,
+        "mape": 13.086620737541368,
+        "rmse": 67951.07868996348,
+        "r2": 0.514547574585078,
+        "count": 172.0
+      },
+      "station:A18": {
+        "mae": 68843.8788671145,
+        "mape": 13.118941836298974,
+        "rmse": 170849.41846057834,
+        "r2": 0.11500659927991708,
+        "count": 176.0
+      },
+      "station:A17": {
+        "mae": 57958.43465575109,
+        "mape": 18.452376708922593,
+        "rmse": 75538.65729694007,
+        "r2": 0.5236372151199686,
+        "count": 32.0
+      },
+      "building_type:住宅大樓(11層含以上有電梯)": {
+        "mae": 49727.83337119002,
+        "mape": 11.622364512094828,
+        "rmse": 64216.71088883993,
+        "r2": 0.47799005455078103,
+        "count": 311.0
+      },
+      "building_type:華廈(10層含以下有電梯)": {
+        "mae": 54943.864323032154,
+        "mape": 18.131039274080283,
+        "rmse": 68696.93996698337,
+        "r2": 0.49342670073864503,
+        "count": 50.0
+      }
+    },
+    "balanced:random_forest": {
+      "overall": {
+        "mae": 60451.57177305681,
+        "mape": 12.868785339713048,
+        "rmse": 132644.9607173755,
+        "r2": 0.18797920960092263,
+        "count": 380.0
+      },
+      "station:A19": {
+        "mae": 57728.16282224549,
+        "mape": 14.235604895670061,
+        "rmse": 74149.09458579075,
+        "r2": 0.4219496489466227,
+        "count": 172.0
+      },
+      "station:A18": {
+        "mae": 64252.70169658512,
+        "mape": 11.153118356525917,
+        "rmse": 177365.69759091793,
+        "r2": 0.046211053275572955,
+        "count": 176.0
+      },
+      "station:A17": {
+        "mae": 54183.680304261856,
+        "mape": 14.95829863397329,
+        "rmse": 79764.77022258166,
+        "r2": 0.46884467404310126,
+        "count": 32.0
+      },
+      "building_type:住宅大樓(11層含以上有電梯)": {
+        "mae": 52990.875452513435,
+        "mape": 11.974110762209357,
+        "rmse": 70531.39027165351,
+        "r2": 0.370279907016937,
+        "count": 311.0
+      },
+      "building_type:華廈(10層含以下有電梯)": {
+        "mae": 41023.89082523339,
+        "mape": 11.920913685409777,
+        "rmse": 56340.97813476635,
+        "r2": 0.6592653693652089,
+        "count": 50.0
+      }
+    },
+    "balanced:hist_gradient_boosting": {
+      "overall": {
+        "mae": 55947.51373143813,
+        "mape": 11.828448983612725,
+        "rmse": 125299.82319162517,
+        "r2": 0.2754196466398603,
+        "count": 380.0
+      },
+      "station:A19": {
+        "mae": 52534.366668150025,
+        "mape": 13.039460636368302,
+        "rmse": 68377.644987361,
+        "r2": 0.5084335402588294,
+        "count": 172.0
+      },
+      "station:A18": {
+        "mae": 61306.34537631913,
+        "mape": 10.747354849828241,
+        "rmse": 169207.64673613588,
+        "r2": 0.1319335058310197,
+        "count": 176.0
+      },
+      "station:A17": {
+        "mae": 44819.605149766154,
+        "mape": 11.26527908586616,
+        "rmse": 61931.13206222725,
+        "r2": 0.6798029392073393,
+        "count": 32.0
+      },
+      "building_type:住宅大樓(11層含以上有電梯)": {
+        "mae": 48926.63750306765,
+        "mape": 11.136107034935764,
+        "rmse": 64505.943819580854,
+        "r2": 0.47327718533543917,
+        "count": 311.0
+      },
+      "building_type:華廈(10層含以下有電梯)": {
+        "mae": 41362.20420637574,
+        "mape": 12.06895125906943,
+        "rmse": 56128.1839412721,
+        "r2": 0.6618343494833785,
+        "count": 50.0
+      }
+    },
+    "balanced:hist_gradient_boosting_log": {
+      "overall": {
+        "mae": 59158.5851615265,
+        "mape": 12.567636014741836,
+        "rmse": 125332.72320034458,
+        "r2": 0.2750390901633525,
+        "count": 380.0
+      },
+      "station:A19": {
+        "mae": 58244.92264244996,
+        "mape": 14.561431808041394,
+        "rmse": 73471.97890950982,
+        "r2": 0.4324587409043821,
+        "count": 172.0
+      },
+      "station:A18": {
+        "mae": 63423.87528953475,
+        "mape": 11.143589469362764,
+        "rmse": 167577.63499648555,
+        "r2": 0.1485774733030809,
+        "count": 176.0
+      },
+      "station:A17": {
+        "mae": 40610.4254975175,
+        "mape": 9.683239625341637,
+        "rmse": 55394.523040252636,
+        "r2": 0.7438272335484708,
+        "count": 32.0
+      },
+      "building_type:住宅大樓(11層含以上有電梯)": {
+        "mae": 52954.69561568266,
+        "mape": 12.194362992933067,
+        "rmse": 68681.1146167176,
+        "r2": 0.402885893523686,
+        "count": 311.0
+      },
+      "building_type:華廈(10層含以下有電梯)": {
+        "mae": 40306.95883740809,
+        "mape": 11.414743258545764,
+        "rmse": 52329.482488804286,
+        "r2": 0.7060588492492301,
+        "count": 50.0
+      }
+    },
+    "thorough:ridge": {
+      "overall": {
+        "mae": 60247.553608281065,
+        "mape": 13.553443644029626,
+        "rmse": 126845.69024674091,
+        "r2": 0.2574305636834685,
+        "count": 380.0
+      },
+      "station:A19": {
+        "mae": 51877.19640436405,
+        "mape": 13.086620737541368,
+        "rmse": 67951.07868996348,
+        "r2": 0.514547574585078,
+        "count": 172.0
+      },
+      "station:A18": {
+        "mae": 68843.8788671145,
+        "mape": 13.118941836298974,
+        "rmse": 170849.41846057834,
+        "r2": 0.11500659927991708,
+        "count": 176.0
+      },
+      "station:A17": {
+        "mae": 57958.43465575109,
+        "mape": 18.452376708922593,
+        "rmse": 75538.65729694007,
+        "r2": 0.5236372151199686,
+        "count": 32.0
+      },
+      "building_type:住宅大樓(11層含以上有電梯)": {
+        "mae": 49727.83337119002,
+        "mape": 11.622364512094828,
+        "rmse": 64216.71088883993,
+        "r2": 0.47799005455078103,
+        "count": 311.0
+      },
+      "building_type:華廈(10層含以下有電梯)": {
+        "mae": 54943.864323032154,
+        "mape": 18.131039274080283,
+        "rmse": 68696.93996698337,
+        "r2": 0.49342670073864503,
+        "count": 50.0
+      }
+    },
+    "thorough:random_forest": {
+      "overall": {
+        "mae": 60423.02659379106,
+        "mape": 12.874400751527787,
+        "rmse": 132380.94349146818,
+        "r2": 0.19120849349264146,
+        "count": 380.0
+      },
+      "station:A19": {
+        "mae": 57656.90629272923,
+        "mape": 14.23073068837084,
+        "rmse": 74051.32819946163,
+        "r2": 0.42347297535169515,
+        "count": 172.0
+      },
+      "station:A18": {
+        "mae": 64229.43106063351,
+        "mape": 11.156402160055249,
+        "rmse": 176948.2193677403,
+        "r2": 0.05069577045274898,
+        "count": 176.0
+      },
+      "station:A17": {
+        "mae": 54355.69864436468,
+        "mape": 15.0331195940953,
+        "rmse": 80143.23129245728,
+        "r2": 0.46379235564588295,
+        "count": 32.0
+      },
+      "building_type:住宅大樓(11層含以上有電梯)": {
+        "mae": 52937.635304241805,
+        "mape": 11.967930480924212,
+        "rmse": 70424.39504914888,
+        "r2": 0.37218901262643433,
+        "count": 311.0
+      },
+      "building_type:華廈(10層含以下有電梯)": {
+        "mae": 41411.692310349696,
+        "mape": 12.021300119117852,
+        "rmse": 56875.51550919116,
+        "r2": 0.6527692306944883,
+        "count": 50.0
+      }
+    },
+    "thorough:hist_gradient_boosting": {
+      "overall": {
+        "mae": 55946.805854657745,
+        "mape": 11.825567698034654,
+        "rmse": 125329.99557149451,
+        "r2": 0.2750706446165695,
+        "count": 380.0
+      },
+      "station:A19": {
+        "mae": 53161.07644474369,
+        "mape": 13.246437737722822,
+        "rmse": 69183.4361878198,
+        "r2": 0.4967796193717836,
+        "count": 172.0
+      },
+      "station:A18": {
+        "mae": 61282.631711348404,
+        "mape": 10.746114927252172,
+        "rmse": 169172.73239830806,
+        "r2": 0.13229170288113168,
+        "count": 176.0
+      },
+      "station:A17": {
+        "mae": 41573.05922114722,
+        "mape": 10.125381474014423,
+        "rmse": 58261.90197513468,
+        "r2": 0.7166203758254849,
+        "count": 32.0
+      },
+      "building_type:住宅大樓(11層含以上有電梯)": {
+        "mae": 49069.84635131431,
+        "mape": 11.222406004839044,
+        "rmse": 64792.30858147166,
+        "r2": 0.46859018599376956,
+        "count": 311.0
+      },
+      "building_type:華廈(10層含以下有電梯)": {
+        "mae": 40966.12474491148,
+        "mape": 11.997911897406906,
+        "rmse": 55240.957909783036,
+        "r2": 0.672440716700699,
+        "count": 50.0
+      }
+    },
+    "thorough:hist_gradient_boosting_log": {
+      "overall": {
+        "mae": 58240.63577534665,
+        "mape": 12.272478439198679,
+        "rmse": 124905.2495979568,
+        "r2": 0.2799759199305514,
+        "count": 380.0
+      },
+      "station:A19": {
+        "mae": 56804.25513366543,
+        "mape": 14.07077609276482,
+        "rmse": 73431.98597570266,
+        "r2": 0.43307643115451633,
+        "count": 172.0
+      },
+      "station:A18": {
+        "mae": 63000.59451803223,
+        "mape": 11.045212707593558,
+        "rmse": 166833.69546529706,
+        "r2": 0.15612025681187802,
+        "count": 176.0
+      },
+      "station:A17": {
+        "mae": 39781.40863961254,
+        "mape": 9.356590075108839,
+        "rmse": 56552.29116267261,
+        "r2": 0.7330070997740323,
+        "count": 32.0
+      },
+      "building_type:住宅大樓(11層含以上有電梯)": {
+        "mae": 52124.098635777365,
+        "mape": 11.915122528410492,
+        "rmse": 68890.32213113895,
+        "r2": 0.39924264989097824,
+        "count": 311.0
+      },
+      "building_type:華廈(10層含以下有電梯)": {
+        "mae": 38720.04100449097,
+        "mape": 11.008717834126196,
+        "rmse": 52817.39951223558,
+        "r2": 0.7005519151406501,
+        "count": 50.0
+      }
+    }
+  },
+  "final_test_metrics": {
+    "baseline": {
+      "overall": {
+        "mae": 75840.47388813387,
+        "mape": 25.00757890637694,
+        "rmse": 97391.5305501715,
+        "r2": 0.3393437929063172,
+        "count": 624.0
+      },
+      "station:A18": {
+        "mae": 77250.95284110599,
+        "mape": 28.196082358587514,
+        "rmse": 94504.4623503874,
+        "r2": 0.4785918802856982,
+        "count": 378.0
+      },
+      "station:A17": {
+        "mae": 78083.31691938986,
+        "mape": 26.59764633570508,
+        "rmse": 101411.9465158875,
+        "r2": -0.25081790941995563,
+        "count": 63.0
+      },
+      "station:A19": {
+        "mae": 72154.89926959512,
+        "mape": 17.87408954581262,
+        "rmse": 101756.14668058802,
+        "r2": -0.0665212365130583,
+        "count": 183.0
+      },
+      "building_type:住宅大樓(11層含以上有電梯)": {
+        "mae": 63558.59743781998,
+        "mape": 14.416545214159365,
+        "rmse": 86616.14088124293,
+        "r2": -0.028278110713596094,
+        "count": 426.0
+      },
+      "building_type:華廈(10層含以下有電梯)": {
+        "mae": 102248.2740224841,
+        "mape": 48.69397768701818,
+        "rmse": 114727.23992221314,
+        "r2": -0.26918826562264586,
+        "count": 173.0
+      }
+    },
+    "hist_gradient_boosting": {
+      "overall": {
+        "mae": 64485.42384269794,
+        "mape": 22.93269872691063,
+        "rmse": 89187.71376288949,
+        "r2": 0.44595734674467347,
+        "count": 624.0
+      },
+      "station:A18": {
+        "mae": 75721.05239896558,
+        "mape": 30.41964969659789,
+        "rmse": 101063.87963018069,
+        "r2": 0.40369961412687116,
+        "count": 378.0
+      },
+      "station:A17": {
+        "mae": 41392.74291615876,
+        "mape": 10.450150640265745,
+        "rmse": 68023.332017425,
+        "r2": 0.4372290694691431,
+        "count": 63.0
+      },
+      "station:A19": {
+        "mae": 49227.34353724877,
+        "mape": 11.765119835745837,
+        "rmse": 66579.45054933854,
+        "r2": 0.5434076658211711,
+        "count": 183.0
+      },
+      "building_type:住宅大樓(11層含以上有電梯)": {
+        "mae": 46676.89143942738,
+        "mape": 10.297413181182664,
+        "rmse": 61764.68518054375,
+        "r2": 0.4771303969819839,
+        "count": 426.0
+      },
+      "building_type:華廈(10層含以下有電梯)": {
+        "mae": 109283.89206797635,
+        "mape": 54.80315420373155,
+        "rmse": 133459.4288505052,
+        "r2": -0.7174791791717132,
+        "count": 173.0
+      }
+    }
+  },
+  "recommendation": {
+    "status": "not_recommended",
+    "reason_codes": [
+      "a18_not_improved"
+    ]
+  },
+  "grouped_metrics": {
+    "overall": {
+      "mae": 64485.42384269794,
+      "mape": 22.93269872691063,
+      "rmse": 89187.71376288949,
+      "r2": 0.44595734674467347,
+      "count": 624.0
+    },
+    "station:A18": {
+      "mae": 75721.05239896558,
+      "mape": 30.41964969659789,
+      "rmse": 101063.87963018069,
+      "r2": 0.40369961412687116,
+      "count": 378.0
+    },
+    "station:A17": {
+      "mae": 41392.74291615876,
+      "mape": 10.450150640265745,
+      "rmse": 68023.332017425,
+      "r2": 0.4372290694691431,
+      "count": 63.0
+    },
+    "station:A19": {
+      "mae": 49227.34353724877,
+      "mape": 11.765119835745837,
+      "rmse": 66579.45054933854,
+      "r2": 0.5434076658211711,
+      "count": 183.0
+    },
+    "building_type:住宅大樓(11層含以上有電梯)": {
+      "mae": 46676.89143942738,
+      "mape": 10.297413181182664,
+      "rmse": 61764.68518054375,
+      "r2": 0.4771303969819839,
+      "count": 426.0
+    },
+    "building_type:華廈(10層含以下有電梯)": {
+      "mae": 109283.89206797635,
+      "mape": 54.80315420373155,
+      "rmse": 133459.4288505052,
+      "r2": -0.7174791791717132,
+      "count": 173.0
+    }
+  },
+  "split": {
+    "train_start": "2019-03-05",
+    "train_end": "2024-12-12",
+    "calibration_start": "2024-12-14",
+    "calibration_end": "2025-06-13",
+    "test_start": "2025-06-14",
+    "test_end": "2026-06-13",
+    "train_count": 4276,
+    "calibration_count": 380,
+    "test_count": 624
+  },
+  "leakage_audit": {
+    "target_in_features": false,
+    "transaction_key_overlap": false,
+    "road_group_overlap_count": 84
+  },
+  "target_policy_counts": {
+    "official_unit_price": 2736,
+    "split": 1540
+  },
+  "calibration_quantile_twd_per_ping": 98063.6786623928,
+  "test_coverage": 0.774,
+  "average_interval_width_twd_per_ping": 196127.36,
+  "feature_ranges": {
+    "station_distance_m": [
+      175.49102569637415,
+      1473.4525057731628
+    ],
+    "building_area_ping": [
+      27.941926047822225,
+      97.03610488885394
+    ],
+    "bedrooms": [
+      1.0,
+      4.0
+    ],
+    "living_rooms": [
+      1.0,
+      2.0
+    ],
+    "bathrooms": [
+      1.0,
+      3.0
+    ],
+    "building_age_years": [
+      0.15578690869764603,
+      14.315283681389767
+    ],
+    "floor": [
+      2.0,
+      17.0
+    ],
+    "total_floors": [
+      5.0,
+      22.0
+    ],
+    "floor_ratio": [
+      0.15384615384615385,
+      1.0
+    ],
+    "transaction_year": [
+      2021.0,
+      2025.0
+    ],
+    "transaction_month": [
+      1.0,
+      12.0
+    ],
+    "transaction_month_index": [
+      24259.0,
+      24312.0
+    ],
+    "twd97_x": [
+      270079.74,
+      272556.567
+    ],
+    "twd97_y": [
+      2765821.7655,
+      2768324.9605
+    ]
+  },
+  "data_date": "2026-06-13",
+  "parking_policy": {
+    "version": 1,
+    "minimum_type_samples": 20,
+    "by_type": {
+      "坡道平面": {
+        "price_twd": 1900000,
+        "sample_size": 1855
+      }
+    },
+    "market_fallback": {
+      "price_twd": 1900000,
+      "sample_size": 1894
+    }
+  },
+  "diagnostics": {
+    "station_counts": {
+      "A17": 831,
+      "A18": 2673,
+      "A19": 1776
+    },
+    "missing_rates": {
+      "area_band": 0.0,
+      "bathrooms": 0.0,
+      "bedrooms": 0.0,
+      "building_age_band": 0.0,
+      "building_age_years": 0.0,
+      "building_area_ping": 0.0,
+      "building_type": 0.0,
+      "floor": 0.045833,
+      "floor_band": 0.0,
+      "floor_ratio": 0.045833,
+      "living_rooms": 0.0,
+      "location_known": 0.0,
+      "station_building_type": 0.0,
+      "station_code": 0.0,
+      "station_distance_m": 0.0,
+      "total_floors": 0.0,
+      "transaction_month": 0.0,
+      "transaction_month_index": 0.0,
+      "transaction_year": 0.0,
+      "twd97_x": 0.0,
+      "twd97_y": 0.0
+    },
+    "monthly_summary": [
+      {
+        "period": "2019-03",
+        "station_code": "A18",
+        "count": 1,
+        "median_target": 302212.9029671211
+      },
+      {
+        "period": "2019-12",
+        "station_code": "A19",
+        "count": 1,
+        "median_target": 337441.30966
+      },
+      {
+        "period": "2020-08",
+        "station_code": "A19",
+        "count": 1,
+        "median_target": 214153.9355176541
+      },
+      {
+        "period": "2020-12",
+        "station_code": "A19",
+        "count": 1,
+        "median_target": 221786.83820914102
+      },
+      {
+        "period": "2021-01",
+        "station_code": "A19",
+        "count": 2,
+        "median_target": 233503.9335819616
+      },
+      {
+        "period": "2021-02",
+        "station_code": "A18",
+        "count": 1,
+        "median_target": 267011.56023500004
+      },
+      {
+        "period": "2021-03",
+        "station_code": "A18",
+        "count": 5,
+        "median_target": 350816.1499965723
+      },
+      {
+        "period": "2021-04",
+        "station_code": "A17",
+        "count": 4,
+        "median_target": 249181.8088375
+      },
+      {
+        "period": "2021-04",
+        "station_code": "A18",
+        "count": 35,
+        "median_target": 350688.79553135566
+      },
+      {
+        "period": "2021-04",
+        "station_code": "A19",
+        "count": 13,
+        "median_target": 271907.42782000004
+      },
+      {
+        "period": "2021-05",
+        "station_code": "A17",
+        "count": 10,
+        "median_target": 245208.2552675
+      },
+      {
+        "period": "2021-05",
+        "station_code": "A18",
+        "count": 66,
+        "median_target": 355092.5486675
+      },
+      {
+        "period": "2021-05",
+        "station_code": "A19",
+        "count": 33,
+        "median_target": 283640.84785496606
+      },
+      {
+        "period": "2021-06",
+        "station_code": "A18",
+        "count": 40,
+        "median_target": 347402.8902966019
+      },
+      {
+        "period": "2021-06",
+        "station_code": "A19",
+        "count": 20,
+        "median_target": 278588.419305
+      },
+      {
+        "period": "2021-07",
+        "station_code": "A17",
+        "count": 14,
+        "median_target": 242138.7199024138
+      },
+      {
+        "period": "2021-07",
+        "station_code": "A18",
+        "count": 77,
+        "median_target": 361397.304275045
+      },
+      {
+        "period": "2021-07",
+        "station_code": "A19",
+        "count": 20,
+        "median_target": 242087.59422750003
+      },
+      {
+        "period": "2021-08",
+        "station_code": "A17",
+        "count": 21,
+        "median_target": 254360.32104
+      },
+      {
+        "period": "2021-08",
+        "station_code": "A18",
+        "count": 69,
+        "median_target": 317722.42896425305
+      },
+      {
+        "period": "2021-08",
+        "station_code": "A19",
+        "count": 35,
+        "median_target": 290066.10482500005
+      },
+      {
+        "period": "2021-09",
+        "station_code": "A17",
+        "count": 17,
+        "median_target": 258912.38698500002
+      },
+      {
+        "period": "2021-09",
+        "station_code": "A18",
+        "count": 86,
+        "median_target": 326364.5593630989
+      },
+      {
+        "period": "2021-09",
+        "station_code": "A19",
+        "count": 44,
+        "median_target": 286459.49339
+      },
+      {
+        "period": "2021-10",
+        "station_code": "A17",
+        "count": 20,
+        "median_target": 270411.56010750006
+      },
+      {
+        "period": "2021-10",
+        "station_code": "A18",
+        "count": 79,
+        "median_target": 322724.44090252527
+      },
+      {
+        "period": "2021-10",
+        "station_code": "A19",
+        "count": 46,
+        "median_target": 274373.54343
+      },
+      {
+        "period": "2021-11",
+        "station_code": "A17",
+        "count": 15,
+        "median_target": 267616.51889
+      },
+      {
+        "period": "2021-11",
+        "station_code": "A18",
+        "count": 73,
+        "median_target": 334846.26843500003
+      },
+      {
+        "period": "2021-11",
+        "station_code": "A19",
+        "count": 41,
+        "median_target": 282482.634035
+      },
+      {
+        "period": "2021-12",
+        "station_code": "A17",
+        "count": 9,
+        "median_target": 280935.526655
+      },
+      {
+        "period": "2021-12",
+        "station_code": "A18",
+        "count": 74,
+        "median_target": 323921.27977843344
+      },
+      {
+        "period": "2021-12",
+        "station_code": "A19",
+        "count": 28,
+        "median_target": 294866.8550419756
+      },
+      {
+        "period": "2022-01",
+        "station_code": "A17",
+        "count": 11,
+        "median_target": 264575.19669
+      },
+      {
+        "period": "2022-01",
+        "station_code": "A18",
+        "count": 38,
+        "median_target": 311175.1949425
+      },
+      {
+        "period": "2022-01",
+        "station_code": "A19",
+        "count": 27,
+        "median_target": 303361.97209500003
+      },
+      {
+        "period": "2022-02",
+        "station_code": "A17",
+        "count": 10,
+        "median_target": 351901.4150129688
+      },
+      {
+        "period": "2022-02",
+        "station_code": "A18",
+        "count": 23,
+        "median_target": 305371.889375
+      },
+      {
+        "period": "2022-02",
+        "station_code": "A19",
+        "count": 21,
+        "median_target": 276148.74997500004
+      },
+      {
+        "period": "2022-03",
+        "station_code": "A17",
+        "count": 14,
+        "median_target": 284408.25379750005
+      },
+      {
+        "period": "2022-03",
+        "station_code": "A18",
+        "count": 74,
+        "median_target": 303553.7396509042
+      },
+      {
+        "period": "2022-03",
+        "station_code": "A19",
+        "count": 37,
+        "median_target": 320343.78964000003
+      },
+      {
+        "period": "2022-04",
+        "station_code": "A17",
+        "count": 15,
+        "median_target": 295669.4104
+      },
+      {
+        "period": "2022-04",
+        "station_code": "A18",
+        "count": 50,
+        "median_target": 319709.07892
+      },
+      {
+        "period": "2022-04",
+        "station_code": "A19",
+        "count": 33,
+        "median_target": 325404.946475
+      },
+      {
+        "period": "2022-05",
+        "station_code": "A17",
+        "count": 14,
+        "median_target": 338333.0445978202
+      },
+      {
+        "period": "2022-05",
+        "station_code": "A18",
+        "count": 13,
+        "median_target": 384393.60465116275
+      },
+      {
+        "period": "2022-05",
+        "station_code": "A19",
+        "count": 30,
+        "median_target": 341591.4961089771
+      },
+      {
+        "period": "2022-06",
+        "station_code": "A17",
+        "count": 16,
+        "median_target": 302995.02996
+      },
+      {
+        "period": "2022-06",
+        "station_code": "A18",
+        "count": 35,
+        "median_target": 309960.318955
+      },
+      {
+        "period": "2022-06",
+        "station_code": "A19",
+        "count": 23,
+        "median_target": 348240.4561491936
+      },
+      {
+        "period": "2022-07",
+        "station_code": "A17",
+        "count": 12,
+        "median_target": 280361.9729575
+      },
+      {
+        "period": "2022-07",
+        "station_code": "A18",
+        "count": 17,
+        "median_target": 314618.17002
+      },
+      {
+        "period": "2022-07",
+        "station_code": "A19",
+        "count": 43,
+        "median_target": 370637.8513285209
+      },
+      {
+        "period": "2022-08",
+        "station_code": "A17",
+        "count": 11,
+        "median_target": 311553.707325
+      },
+      {
+        "period": "2022-08",
+        "station_code": "A18",
+        "count": 23,
+        "median_target": 387622.0929317499
+      },
+      {
+        "period": "2022-08",
+        "station_code": "A19",
+        "count": 35,
+        "median_target": 379226.43206
+      },
+      {
+        "period": "2022-09",
+        "station_code": "A17",
+        "count": 19,
+        "median_target": 317447.92198000004
+      },
+      {
+        "period": "2022-09",
+        "station_code": "A18",
+        "count": 21,
+        "median_target": 335256.185775
+      },
+      {
+        "period": "2022-09",
+        "station_code": "A19",
+        "count": 26,
+        "median_target": 358778.8298667952
+      },
+      {
+        "period": "2022-10",
+        "station_code": "A17",
+        "count": 10,
+        "median_target": 323728.91348
+      },
+      {
+        "period": "2022-10",
+        "station_code": "A18",
+        "count": 32,
+        "median_target": 363370.2343075
+      },
+      {
+        "period": "2022-10",
+        "station_code": "A19",
+        "count": 41,
+        "median_target": 368604.944855
+      },
+      {
+        "period": "2022-11",
+        "station_code": "A17",
+        "count": 10,
+        "median_target": 290393.37754
+      },
+      {
+        "period": "2022-11",
+        "station_code": "A18",
+        "count": 21,
+        "median_target": 304671.06295500003
+      },
+      {
+        "period": "2022-11",
+        "station_code": "A19",
+        "count": 26,
+        "median_target": 336781.8055525
+      },
+      {
+        "period": "2022-12",
+        "station_code": "A17",
+        "count": 9,
+        "median_target": 328238.00422
+      },
+      {
+        "period": "2022-12",
+        "station_code": "A18",
+        "count": 13,
+        "median_target": 369305.53644903353
+      },
+      {
+        "period": "2022-12",
+        "station_code": "A19",
+        "count": 31,
+        "median_target": 337894.20220500004
+      },
+      {
+        "period": "2023-01",
+        "station_code": "A17",
+        "count": 3,
+        "median_target": 332307.3965903689
+      },
+      {
+        "period": "2023-01",
+        "station_code": "A18",
+        "count": 15,
+        "median_target": 352165.27605000004
+      },
+      {
+        "period": "2023-01",
+        "station_code": "A19",
+        "count": 12,
+        "median_target": 379546.19584750064
+      },
+      {
+        "period": "2023-02",
+        "station_code": "A17",
+        "count": 6,
+        "median_target": 244502.47017000002
+      },
+      {
+        "period": "2023-02",
+        "station_code": "A18",
+        "count": 17,
+        "median_target": 294439.65838000004
+      },
+      {
+        "period": "2023-02",
+        "station_code": "A19",
+        "count": 21,
+        "median_target": 294568.583995
+      },
+      {
+        "period": "2023-03",
+        "station_code": "A17",
+        "count": 18,
+        "median_target": 308163.62480750005
+      },
+      {
+        "period": "2023-03",
+        "station_code": "A18",
+        "count": 33,
+        "median_target": 330667.756195
+      },
+      {
+        "period": "2023-03",
+        "station_code": "A19",
+        "count": 27,
+        "median_target": 352585.110745
+      },
+      {
+        "period": "2023-04",
+        "station_code": "A17",
+        "count": 14,
+        "median_target": 309757.0131775
+      },
+      {
+        "period": "2023-04",
+        "station_code": "A18",
+        "count": 27,
+        "median_target": 352489.24298000004
+      },
+      {
+        "period": "2023-04",
+        "station_code": "A19",
+        "count": 27,
+        "median_target": 351160.31741
+      },
+      {
+        "period": "2023-05",
+        "station_code": "A17",
+        "count": 17,
+        "median_target": 312654.53373
+      },
+      {
+        "period": "2023-05",
+        "station_code": "A18",
+        "count": 41,
+        "median_target": 345011.55731
+      },
+      {
+        "period": "2023-05",
+        "station_code": "A19",
+        "count": 32,
+        "median_target": 341937.17726
+      },
+      {
+        "period": "2023-06",
+        "station_code": "A17",
+        "count": 30,
+        "median_target": 391329.05448296794
+      },
+      {
+        "period": "2023-06",
+        "station_code": "A18",
+        "count": 63,
+        "median_target": 409871.05901
+      },
+      {
+        "period": "2023-06",
+        "station_code": "A19",
+        "count": 29,
+        "median_target": 316644.616225
+      },
+      {
+        "period": "2023-07",
+        "station_code": "A17",
+        "count": 17,
+        "median_target": 391531.49327461014
+      },
+      {
+        "period": "2023-07",
+        "station_code": "A18",
+        "count": 62,
+        "median_target": 421910.5471005214
+      },
+      {
+        "period": "2023-07",
+        "station_code": "A19",
+        "count": 37,
+        "median_target": 359467.755115
+      },
+      {
+        "period": "2023-08",
+        "station_code": "A17",
+        "count": 26,
+        "median_target": 386631.1782208853
+      },
+      {
+        "period": "2023-08",
+        "station_code": "A18",
+        "count": 73,
+        "median_target": 427807.47058823536
+      },
+      {
+        "period": "2023-08",
+        "station_code": "A19",
+        "count": 34,
+        "median_target": 356606.1552303763
+      },
+      {
+        "period": "2023-09",
+        "station_code": "A17",
+        "count": 25,
+        "median_target": 399122.7428780131
+      },
+      {
+        "period": "2023-09",
+        "station_code": "A18",
+        "count": 69,
+        "median_target": 392542.13404000003
+      },
+      {
+        "period": "2023-09",
+        "station_code": "A19",
+        "count": 40,
+        "median_target": 333917.34285
+      },
+      {
+        "period": "2023-10",
+        "station_code": "A17",
+        "count": 28,
+        "median_target": 411950.1229895751
+      },
+      {
+        "period": "2023-10",
+        "station_code": "A18",
+        "count": 47,
+        "median_target": 383365.27488000004
+      },
+      {
+        "period": "2023-10",
+        "station_code": "A19",
+        "count": 41,
+        "median_target": 356641.30894
+      },
+      {
+        "period": "2023-11",
+        "station_code": "A17",
+        "count": 28,
+        "median_target": 395377.4248564453
+      },
+      {
+        "period": "2023-11",
+        "station_code": "A18",
+        "count": 48,
+        "median_target": 396535.52232
+      },
+      {
+        "period": "2023-11",
+        "station_code": "A19",
+        "count": 35,
+        "median_target": 339408.251735
+      },
+      {
+        "period": "2023-12",
+        "station_code": "A17",
+        "count": 16,
+        "median_target": 420685.5029398042
+      },
+      {
+        "period": "2023-12",
+        "station_code": "A18",
+        "count": 44,
+        "median_target": 414175.33726725186
+      },
+      {
+        "period": "2023-12",
+        "station_code": "A19",
+        "count": 24,
+        "median_target": 389559.817021332
+      },
+      {
+        "period": "2024-01",
+        "station_code": "A17",
+        "count": 28,
+        "median_target": 406515.3781838779
+      },
+      {
+        "period": "2024-01",
+        "station_code": "A18",
+        "count": 76,
+        "median_target": 388662.79534250003
+      },
+      {
+        "period": "2024-01",
+        "station_code": "A19",
+        "count": 27,
+        "median_target": 372198.33315
+      },
+      {
+        "period": "2024-02",
+        "station_code": "A17",
+        "count": 31,
+        "median_target": 421922.2001155783
+      },
+      {
+        "period": "2024-02",
+        "station_code": "A18",
+        "count": 28,
+        "median_target": 428336.6766990394
+      },
+      {
+        "period": "2024-02",
+        "station_code": "A19",
+        "count": 18,
+        "median_target": 362538.82938
+      },
+      {
+        "period": "2024-03",
+        "station_code": "A17",
+        "count": 41,
+        "median_target": 432481.0183712423
+      },
+      {
+        "period": "2024-03",
+        "station_code": "A18",
+        "count": 110,
+        "median_target": 444078.5852595909
+      },
+      {
+        "period": "2024-03",
+        "station_code": "A19",
+        "count": 48,
+        "median_target": 359677.67246250005
+      },
+      {
+        "period": "2024-04",
+        "station_code": "A17",
+        "count": 24,
+        "median_target": 363798.33346500003
+      },
+      {
+        "period": "2024-04",
+        "station_code": "A18",
+        "count": 79,
+        "median_target": 425206.595625
+      },
+      {
+        "period": "2024-04",
+        "station_code": "A19",
+        "count": 38,
+        "median_target": 390348.74569250003
+      },
+      {
+        "period": "2024-05",
+        "station_code": "A17",
+        "count": 28,
+        "median_target": 472474.0744724145
+      },
+      {
+        "period": "2024-05",
+        "station_code": "A18",
+        "count": 88,
+        "median_target": 453181.9721040089
+      },
+      {
+        "period": "2024-05",
+        "station_code": "A19",
+        "count": 63,
+        "median_target": 392680.97701000003
+      },
+      {
+        "period": "2024-06",
+        "station_code": "A17",
+        "count": 34,
+        "median_target": 463768.79063569976
+      },
+      {
+        "period": "2024-06",
+        "station_code": "A18",
+        "count": 85,
+        "median_target": 479738.6071726439
+      },
+      {
+        "period": "2024-06",
+        "station_code": "A19",
+        "count": 47,
+        "median_target": 401603.290725
+      },
+      {
+        "period": "2024-07",
+        "station_code": "A17",
+        "count": 24,
+        "median_target": 426300.22269109497
+      },
+      {
+        "period": "2024-07",
+        "station_code": "A18",
+        "count": 37,
+        "median_target": 469127.4834437087
+      },
+      {
+        "period": "2024-07",
+        "station_code": "A19",
+        "count": 41,
+        "median_target": 415330.3155716503
+      },
+      {
+        "period": "2024-08",
+        "station_code": "A17",
+        "count": 13,
+        "median_target": 397930.56359000003
+      },
+      {
+        "period": "2024-08",
+        "station_code": "A18",
+        "count": 32,
+        "median_target": 458917.33816250006
+      },
+      {
+        "period": "2024-08",
+        "station_code": "A19",
+        "count": 44,
+        "median_target": 421081.0297296443
+      },
+      {
+        "period": "2024-09",
+        "station_code": "A17",
+        "count": 10,
+        "median_target": 364727.25905
+      },
+      {
+        "period": "2024-09",
+        "station_code": "A18",
+        "count": 28,
+        "median_target": 464218.16441
+      },
+      {
+        "period": "2024-09",
+        "station_code": "A19",
+        "count": 19,
+        "median_target": 417348.74468
+      },
+      {
+        "period": "2024-10",
+        "station_code": "A17",
+        "count": 9,
+        "median_target": 324013.21099
+      },
+      {
+        "period": "2024-10",
+        "station_code": "A18",
+        "count": 20,
+        "median_target": 426306.37385426834
+      },
+      {
+        "period": "2024-10",
+        "station_code": "A19",
+        "count": 32,
+        "median_target": 335274.36759250006
+      },
+      {
+        "period": "2024-11",
+        "station_code": "A17",
+        "count": 1,
+        "median_target": 397864.44789
+      },
+      {
+        "period": "2024-11",
+        "station_code": "A18",
+        "count": 22,
+        "median_target": 480051.22166750004
+      },
+      {
+        "period": "2024-11",
+        "station_code": "A19",
+        "count": 16,
+        "median_target": 338841.30960750004
+      },
+      {
+        "period": "2024-12",
+        "station_code": "A17",
+        "count": 6,
+        "median_target": 325211.5580525
+      },
+      {
+        "period": "2024-12",
+        "station_code": "A18",
+        "count": 20,
+        "median_target": 464028.19790114975
+      },
+      {
+        "period": "2024-12",
+        "station_code": "A19",
+        "count": 18,
+        "median_target": 404293.56375387823
+      },
+      {
+        "period": "2025-01",
+        "station_code": "A17",
+        "count": 3,
+        "median_target": 446753.702255
+      },
+      {
+        "period": "2025-01",
+        "station_code": "A18",
+        "count": 23,
+        "median_target": 468370.23037
+      },
+      {
+        "period": "2025-01",
+        "station_code": "A19",
+        "count": 15,
+        "median_target": 359477.67247000005
+      },
+      {
+        "period": "2025-02",
+        "station_code": "A17",
+        "count": 4,
+        "median_target": 337850.8684741293
+      },
+      {
+        "period": "2025-02",
+        "station_code": "A18",
+        "count": 32,
+        "median_target": 428213.20708250004
+      },
+      {
+        "period": "2025-02",
+        "station_code": "A19",
+        "count": 65,
+        "median_target": 374377.6401804624
+      },
+      {
+        "period": "2025-03",
+        "station_code": "A17",
+        "count": 10,
+        "median_target": 374128.91159000003
+      },
+      {
+        "period": "2025-03",
+        "station_code": "A18",
+        "count": 45,
+        "median_target": 454591.71849
+      },
+      {
+        "period": "2025-03",
+        "station_code": "A19",
+        "count": 27,
+        "median_target": 428651.22359500005
+      },
+      {
+        "period": "2025-04",
+        "station_code": "A17",
+        "count": 1,
+        "median_target": 417368.1100501543
+      },
+      {
+        "period": "2025-04",
+        "station_code": "A18",
+        "count": 27,
+        "median_target": 489285.932065
+      },
+      {
+        "period": "2025-04",
+        "station_code": "A19",
+        "count": 22,
+        "median_target": 439390.3431098991
+      },
+      {
+        "period": "2025-05",
+        "station_code": "A17",
+        "count": 7,
+        "median_target": 430449.570635
+      },
+      {
+        "period": "2025-05",
+        "station_code": "A18",
+        "count": 26,
+        "median_target": 445188.41305750003
+      },
+      {
+        "period": "2025-05",
+        "station_code": "A19",
+        "count": 27,
+        "median_target": 389818.1672
+      },
+      {
+        "period": "2025-06",
+        "station_code": "A17",
+        "count": 7,
+        "median_target": 296423.12938
+      },
+      {
+        "period": "2025-06",
+        "station_code": "A18",
+        "count": 30,
+        "median_target": 465351.39802277565
+      },
+      {
+        "period": "2025-06",
+        "station_code": "A19",
+        "count": 13,
+        "median_target": 366876.01930000004
+      },
+      {
+        "period": "2025-07",
+        "station_code": "A17",
+        "count": 5,
+        "median_target": 346829.73906
+      },
+      {
+        "period": "2025-07",
+        "station_code": "A18",
+        "count": 28,
+        "median_target": 452370.23097000003
+      },
+      {
+        "period": "2025-07",
+        "station_code": "A19",
+        "count": 19,
+        "median_target": 399897.505665
+      },
+      {
+        "period": "2025-08",
+        "station_code": "A17",
+        "count": 7,
+        "median_target": 293742.137745
+      },
+      {
+        "period": "2025-08",
+        "station_code": "A18",
+        "count": 33,
+        "median_target": 420965.27347
+      },
+      {
+        "period": "2025-08",
+        "station_code": "A19",
+        "count": 15,
+        "median_target": 408885.93508
+      },
+      {
+        "period": "2025-09",
+        "station_code": "A17",
+        "count": 7,
+        "median_target": 349763.1113786113
+      },
+      {
+        "period": "2025-09",
+        "station_code": "A18",
+        "count": 30,
+        "median_target": 446756.3630087805
+      },
+      {
+        "period": "2025-09",
+        "station_code": "A19",
+        "count": 22,
+        "median_target": 403880.97659
+      },
+      {
+        "period": "2025-10",
+        "station_code": "A17",
+        "count": 5,
+        "median_target": 366978.498635
+      },
+      {
+        "period": "2025-10",
+        "station_code": "A18",
+        "count": 36,
+        "median_target": 434588.50287955906
+      },
+      {
+        "period": "2025-10",
+        "station_code": "A19",
+        "count": 24,
+        "median_target": 407912.38139750005
+      },
+      {
+        "period": "2025-11",
+        "station_code": "A17",
+        "count": 5,
+        "median_target": 369758.66382
+      },
+      {
+        "period": "2025-11",
+        "station_code": "A18",
+        "count": 69,
+        "median_target": 375965.976648561
+      },
+      {
+        "period": "2025-11",
+        "station_code": "A19",
+        "count": 23,
+        "median_target": 396024.00552910456
+      },
+      {
+        "period": "2025-12",
+        "station_code": "A17",
+        "count": 7,
+        "median_target": 415246.26542
+      },
+      {
+        "period": "2025-12",
+        "station_code": "A18",
+        "count": 50,
+        "median_target": 209824.0747748913
+      },
+      {
+        "period": "2025-12",
+        "station_code": "A19",
+        "count": 20,
+        "median_target": 414645.55102923873
+      },
+      {
+        "period": "2026-01",
+        "station_code": "A17",
+        "count": 8,
+        "median_target": 382791.7211825
+      },
+      {
+        "period": "2026-01",
+        "station_code": "A18",
+        "count": 34,
+        "median_target": 416680.2553226773
+      },
+      {
+        "period": "2026-01",
+        "station_code": "A19",
+        "count": 17,
+        "median_target": 413424.77788500005
+      },
+      {
+        "period": "2026-02",
+        "station_code": "A17",
+        "count": 3,
+        "median_target": 378409.903165
+      },
+      {
+        "period": "2026-02",
+        "station_code": "A18",
+        "count": 15,
+        "median_target": 434518.99197000003
+      },
+      {
+        "period": "2026-02",
+        "station_code": "A19",
+        "count": 12,
+        "median_target": 441500.80989000003
+      },
+      {
+        "period": "2026-03",
+        "station_code": "A17",
+        "count": 10,
+        "median_target": 366355.3581625
+      },
+      {
+        "period": "2026-03",
+        "station_code": "A18",
+        "count": 30,
+        "median_target": 443216.512305
+      },
+      {
+        "period": "2026-03",
+        "station_code": "A19",
+        "count": 13,
+        "median_target": 407943.78635500005
+      },
+      {
+        "period": "2026-04",
+        "station_code": "A17",
+        "count": 3,
+        "median_target": 348390.06958
+      },
+      {
+        "period": "2026-04",
+        "station_code": "A18",
+        "count": 19,
+        "median_target": 423966.92625
+      },
+      {
+        "period": "2026-04",
+        "station_code": "A19",
+        "count": 10,
+        "median_target": 441340.87157540943
+      },
+      {
+        "period": "2026-05",
+        "station_code": "A17",
+        "count": 1,
+        "median_target": 336932.21877000004
+      },
+      {
+        "period": "2026-05",
+        "station_code": "A18",
+        "count": 13,
+        "median_target": 427543.78562000004
+      },
+      {
+        "period": "2026-05",
+        "station_code": "A19",
+        "count": 2,
+        "median_target": 483840.1843194326
+      },
+      {
+        "period": "2026-06",
+        "station_code": "A18",
+        "count": 3,
+        "median_target": 489966.92377500003
+      },
+      {
+        "period": "2026-06",
+        "station_code": "A19",
+        "count": 2,
+        "median_target": 480401.68249488226
+      }
+    ],
+    "building_type_summary": [
+      {
+        "station_code": "A17",
+        "building_type": "住宅大樓(11層含以上有電梯)",
+        "count": 214,
+        "median_target": 400301.3080045971
+      },
+      {
+        "station_code": "A17",
+        "building_type": "公寓(5樓含以下無電梯)",
+        "count": 15,
+        "median_target": 285814.865315
+      },
+      {
+        "station_code": "A17",
+        "building_type": "華廈(10層含以下有電梯)",
+        "count": 538,
+        "median_target": 345796.6812475
+      },
+      {
+        "station_code": "A17",
+        "building_type": "透天厝",
+        "count": 64,
+        "median_target": 246793.379175
+      },
+      {
+        "station_code": "A18",
+        "building_type": "住宅大樓(11層含以上有電梯)",
+        "count": 2213,
+        "median_target": 399455.8702138239
+      },
+      {
+        "station_code": "A18",
+        "building_type": "公寓(5樓含以下無電梯)",
+        "count": 18,
+        "median_target": 282816.51832000003
+      },
+      {
+        "station_code": "A18",
+        "building_type": "華廈(10層含以下有電梯)",
+        "count": 348,
+        "median_target": 245154.78531510185
+      },
+      {
+        "station_code": "A18",
+        "building_type": "透天厝",
+        "count": 94,
+        "median_target": 328998.33477
+      },
+      {
+        "station_code": "A19",
+        "building_type": "住宅大樓(11層含以上有電梯)",
+        "count": 1571,
+        "median_target": 361381.80463
+      },
+      {
+        "station_code": "A19",
+        "building_type": "公寓(5樓含以下無電梯)",
+        "count": 1,
+        "median_target": 284621.47693
+      },
+      {
+        "station_code": "A19",
+        "building_type": "華廈(10層含以下有電梯)",
+        "count": 120,
+        "median_target": 308281.68747682497
+      },
+      {
+        "station_code": "A19",
+        "building_type": "透天厝",
+        "count": 84,
+        "median_target": 283459.4935025
+      }
+    ],
+    "feature_extreme_rates": {
+      "station_distance_m": 0.0,
+      "building_area_ping": 0.0,
+      "building_age_years": 0.0,
+      "floor_ratio": 0.0
+    },
+    "evaluation_error_summary": [
+      {
+        "station_code": "A17",
+        "building_type": "住宅大樓(11層含以上有電梯)",
+        "count": 10,
+        "mae": 45178.96545788097
+      },
+      {
+        "station_code": "A17",
+        "building_type": "公寓(5樓含以下無電梯)",
+        "count": 2,
+        "mae": 15122.074235064152
+      },
+      {
+        "station_code": "A17",
+        "building_type": "華廈(10層含以下有電梯)",
+        "count": 45,
+        "mae": 34168.63572628911
+      },
+      {
+        "station_code": "A17",
+        "building_type": "透天厝",
+        "count": 6,
+        "mae": 98020.0654976755
+      },
+      {
+        "station_code": "A18",
+        "building_type": "住宅大樓(11層含以上有電梯)",
+        "count": 247,
+        "mae": 44942.8882630989
+      },
+      {
+        "station_code": "A18",
+        "building_type": "公寓(5樓含以下無電梯)",
+        "count": 3,
+        "mae": 45566.56643213708
+      },
+      {
+        "station_code": "A18",
+        "building_type": "華廈(10層含以下有電梯)",
+        "count": 119,
+        "mae": 141070.9937794642
+      },
+      {
+        "station_code": "A18",
+        "building_type": "透天厝",
+        "count": 9,
+        "mae": 66390.7163078787
+      },
+      {
+        "station_code": "A19",
+        "building_type": "住宅大樓(11層含以上有電梯)",
+        "count": 169,
+        "mae": 49299.838447525595
+      },
+      {
+        "station_code": "A19",
+        "building_type": "華廈(10層含以下有電梯)",
+        "count": 9,
+        "mae": 64564.05114673996
+      },
+      {
+        "station_code": "A19",
+        "building_type": "透天厝",
+        "count": 5,
+        "mae": 19170.94187280817
+      }
+    ],
+    "top_residuals": [
+      {
+        "record_id": "RPTNMLRJMHLGFEH09DA",
+        "transaction_date": "2025-12-11",
+        "station_code": "A17",
+        "road_key": "大智路",
+        "building_type": "透天厝",
+        "actual_twd_per_ping": 701371.874525,
+        "predicted_twd_per_ping": 320084.18033687066,
+        "absolute_error_twd_per_ping": 381287.69418812933,
+        "absolute_percentage_error": 54.36312861081779,
+        "flags": [
+          "高價尾端",
+          "高相對誤差"
+        ]
+      },
+      {
+        "record_id": "RPUPMLMLNHLGFBH88DA",
+        "transaction_date": "2026-04-10",
+        "station_code": "A19",
+        "road_key": "領航北路二段",
+        "building_type": "住宅大樓(11層含以上有電梯)",
+        "actual_twd_per_ping": 720969.8815387492,
+        "predicted_twd_per_ping": 474219.5010147269,
+        "absolute_error_twd_per_ping": 246750.38052402233,
+        "absolute_percentage_error": 34.22478342609663,
+        "flags": [
+          "高價尾端",
+          "高相對誤差"
+        ]
+      },
+      {
+        "record_id": "RPTNMLMKRHKGFEH09DA",
+        "transaction_date": "2025-08-20",
+        "station_code": "A18",
+        "road_key": "中正東路三段",
+        "building_type": "透天厝",
+        "actual_twd_per_ping": 267371.8908,
+        "predicted_twd_per_ping": 510258.8842937851,
+        "absolute_error_twd_per_ping": 242886.9934937851,
+        "absolute_percentage_error": 90.84238166063233,
+        "flags": [
+          "高相對誤差"
+        ]
+      },
+      {
+        "record_id": "RPXOMLQLJHLGFEH76DA",
+        "transaction_date": "2025-12-04",
+        "station_code": "A18",
+        "road_key": "水源南路",
+        "building_type": "華廈(10層含以下有電梯)",
+        "actual_twd_per_ping": 162165.28317500002,
+        "predicted_twd_per_ping": 392629.60025234206,
+        "absolute_error_twd_per_ping": 230464.31707734204,
+        "absolute_percentage_error": 142.1169269803805,
+        "flags": [
+          "高相對誤差"
+        ]
+      },
+      {
+        "record_id": "RPOOMLNJJIKGFEH97DA",
+        "transaction_date": "2025-10-30",
+        "station_code": "A18",
+        "road_key": "水源南路",
+        "building_type": "華廈(10層含以下有電梯)",
+        "actual_twd_per_ping": 163173.54760000002,
+        "predicted_twd_per_ping": 391579.06067040353,
+        "absolute_error_twd_per_ping": 228405.5130704035,
+        "absolute_percentage_error": 139.97704678843635,
+        "flags": [
+          "高相對誤差"
+        ]
+      },
+      {
+        "record_id": "RPUTMLKKKIKGFEH98DA",
+        "transaction_date": "2025-12-02",
+        "station_code": "A18",
+        "road_key": "水源南路",
+        "building_type": "華廈(10層含以下有電梯)",
+        "actual_twd_per_ping": 147715.69694,
+        "predicted_twd_per_ping": 373603.49805965513,
+        "absolute_error_twd_per_ping": 225887.80111965514,
+        "absolute_percentage_error": 152.92064810919015,
+        "flags": [
+          "高相對誤差"
+        ]
+      },
+      {
+        "record_id": "RPQOMLKLJHLGFEH08DA",
+        "transaction_date": "2026-01-20",
+        "station_code": "A18",
+        "road_key": "水源南路",
+        "building_type": "華廈(10層含以下有電梯)",
+        "actual_twd_per_ping": 135408.259385,
+        "predicted_twd_per_ping": 360141.004861588,
+        "absolute_error_twd_per_ping": 224732.745476588,
+        "absolute_percentage_error": 165.96679293957678,
+        "flags": [
+          "高相對誤差"
+        ]
+      },
+      {
+        "record_id": "RPQNMLKKLHLGFEH18EA",
+        "transaction_date": "2025-12-23",
+        "station_code": "A18",
+        "road_key": "水源南路",
+        "building_type": "華廈(10層含以下有電梯)",
+        "actual_twd_per_ping": 160889.250165,
+        "predicted_twd_per_ping": 384386.01294706366,
+        "absolute_error_twd_per_ping": 223496.76278206366,
+        "absolute_percentage_error": 138.91342184319743,
+        "flags": [
+          "高相對誤差"
+        ]
+      },
+      {
+        "record_id": "RPURMLSLJHLGFEH96DA",
+        "transaction_date": "2026-01-27",
+        "station_code": "A18",
+        "road_key": "水源南路",
+        "building_type": "華廈(10層含以下有電梯)",
+        "actual_twd_per_ping": 157976.85358,
+        "predicted_twd_per_ping": 373435.8017251643,
+        "absolute_error_twd_per_ping": 215458.9481451643,
+        "absolute_percentage_error": 136.3864029840645,
+        "flags": [
+          "高相對誤差"
+        ]
+      },
+      {
+        "record_id": "RPSNMLOKJHLGFBH18DA",
+        "transaction_date": "2025-11-21",
+        "station_code": "A18",
+        "road_key": "領航南路三段",
+        "building_type": "住宅大樓(11層含以上有電梯)",
+        "actual_twd_per_ping": 287606.600785,
+        "predicted_twd_per_ping": 501313.3225303644,
+        "absolute_error_twd_per_ping": 213706.72174536437,
+        "absolute_percentage_error": 74.30522149424539,
+        "flags": [
+          "高相對誤差"
+        ]
+      },
+      {
+        "record_id": "RPPPMLTJKIKGFEH88DA",
+        "transaction_date": "2025-11-20",
+        "station_code": "A18",
+        "road_key": "水源南路",
+        "building_type": "華廈(10層含以下有電梯)",
+        "actual_twd_per_ping": 159966.93615000002,
+        "predicted_twd_per_ping": 369864.7781918575,
+        "absolute_error_twd_per_ping": 209897.84204185748,
+        "absolute_percentage_error": 131.21326637464477,
+        "flags": [
+          "高相對誤差"
+        ]
+      },
+      {
+        "record_id": "RPWOMLPLJIKGFEH56DA",
+        "transaction_date": "2025-10-28",
+        "station_code": "A18",
+        "road_key": "水源南路",
+        "building_type": "華廈(10層含以下有電梯)",
+        "actual_twd_per_ping": 178489.249505,
+        "predicted_twd_per_ping": 385645.9250524799,
+        "absolute_error_twd_per_ping": 207156.67554747988,
+        "absolute_percentage_error": 116.06114996952621,
+        "flags": [
+          "高相對誤差"
+        ]
+      },
+      {
+        "record_id": "RPSOMLPJJIKGFEH58DA",
+        "transaction_date": "2025-06-25",
+        "station_code": "A18",
+        "road_key": "水源南路",
+        "building_type": "華廈(10層含以下有電梯)",
+        "actual_twd_per_ping": 167090.902825,
+        "predicted_twd_per_ping": 373418.3866170491,
+        "absolute_error_twd_per_ping": 206327.4837920491,
+        "absolute_percentage_error": 123.48217664976227,
+        "flags": [
+          "高相對誤差"
+        ]
+      },
+      {
+        "record_id": "RPRPMLLKKIKGFEH38DA",
+        "transaction_date": "2025-12-01",
+        "station_code": "A18",
+        "road_key": "水源南路",
+        "building_type": "華廈(10層含以下有電梯)",
+        "actual_twd_per_ping": 163996.68806500002,
+        "predicted_twd_per_ping": 368852.22613585304,
+        "absolute_error_twd_per_ping": 204855.538070853,
+        "absolute_percentage_error": 124.91443607059833,
+        "flags": [
+          "高相對誤差"
+        ]
+      },
+      {
+        "record_id": "RPPNMLPLKHLGFEH58EA",
+        "transaction_date": "2025-12-04",
+        "station_code": "A18",
+        "road_key": "水源南路",
+        "building_type": "華廈(10層含以下有電梯)",
+        "actual_twd_per_ping": 169464.456455,
+        "predicted_twd_per_ping": 371827.62539632636,
+        "absolute_error_twd_per_ping": 202363.16894132635,
+        "absolute_percentage_error": 119.41334081171313,
+        "flags": [
+          "高相對誤差"
+        ]
+      },
+      {
+        "record_id": "RPXOMLRLLHLGFEH07DA",
+        "transaction_date": "2026-03-26",
+        "station_code": "A18",
+        "road_key": "水源南路",
+        "building_type": "華廈(10層含以下有電梯)",
+        "actual_twd_per_ping": 175992.58094394332,
+        "predicted_twd_per_ping": 377460.1144614124,
+        "absolute_error_twd_per_ping": 201467.5335174691,
+        "absolute_percentage_error": 114.47501504716269,
+        "flags": [
+          "高相對誤差"
+        ]
+      },
+      {
+        "record_id": "RPVNMLPJKIKGFEH88DA",
+        "transaction_date": "2025-12-04",
+        "station_code": "A18",
+        "road_key": "水源南路",
+        "building_type": "華廈(10層含以下有電梯)",
+        "actual_twd_per_ping": 176704.125605,
+        "predicted_twd_per_ping": 373834.27653862344,
+        "absolute_error_twd_per_ping": 197130.15093362343,
+        "absolute_percentage_error": 111.55945015923581,
+        "flags": [
+          "高相對誤差"
+        ]
+      },
+      {
+        "record_id": "RPQNMLTJJIKGFEH68DA",
+        "transaction_date": "2025-10-25",
+        "station_code": "A18",
+        "road_key": "水源南路",
+        "building_type": "華廈(10層含以下有電梯)",
+        "actual_twd_per_ping": 188847.10259109657,
+        "predicted_twd_per_ping": 385645.9250524799,
+        "absolute_error_twd_per_ping": 196798.82246138333,
+        "absolute_percentage_error": 104.21066553904421,
+        "flags": [
+          "高相對誤差"
+        ]
+      },
+      {
+        "record_id": "RPSNMLPKNHLGFBH68DA",
+        "transaction_date": "2026-04-17",
+        "station_code": "A19",
+        "road_key": "領航北路二段",
+        "building_type": "住宅大樓(11層含以上有電梯)",
+        "actual_twd_per_ping": 680469.5705655207,
+        "predicted_twd_per_ping": 483970.1982481178,
+        "absolute_error_twd_per_ping": 196499.37231740286,
+        "absolute_percentage_error": 28.877025633063546,
+        "flags": [
+          "高價尾端"
+        ]
+      },
+      {
+        "record_id": "RPQOMLTLKIKGFEH09DA",
+        "transaction_date": "2025-12-09",
+        "station_code": "A18",
+        "road_key": "水源南路",
+        "building_type": "華廈(10層含以下有電梯)",
+        "actual_twd_per_ping": 166786.770605,
+        "predicted_twd_per_ping": 362876.85205078934,
+        "absolute_error_twd_per_ping": 196090.08144578934,
+        "absolute_percentage_error": 117.56932563325913,
+        "flags": [
+          "高相對誤差"
+        ]
+      }
+    ],
+    "data_quality": {
+      "special_relationship_excluded": 446,
+      "non_market_subject_excluded": 18,
+      "ambiguous_registration_note_count": 506,
+      "raw_count": 90322,
+      "usable_count": 5280,
+      "missing_completion_date": 3,
+      "future_completion_transfer": 10648
+    },
+    "split_summary": {
+      "train": {
+        "row_count": 4276,
+        "date_min": "2019-03-05",
+        "date_max": "2024-12-12",
+        "median_target": 359938.60113385716,
+        "station_proportions": {
+          "A17": 0.17212347988774557,
+          "A18": 0.49555659494855003,
+          "A19": 0.3323199251637044
+        },
+        "building_type_proportions": {
+          "住宅大樓(11層含以上有電梯)": 0.7626286248830683,
+          "公寓(5樓含以下無電梯)": 0.005612722170252572,
+          "華廈(10層含以下有電梯)": 0.18311506080449017,
+          "透天厝": 0.04864359214218896
+        }
+      },
+      "calibration": {
+        "row_count": 380,
+        "date_min": "2024-12-14",
+        "date_max": "2025-06-13",
+        "median_target": 417787.6638087988,
+        "station_proportions": {
+          "A17": 0.08421052631578947,
+          "A18": 0.4631578947368421,
+          "A19": 0.45263157894736844
+        },
+        "building_type_proportions": {
+          "住宅大樓(11層含以上有電梯)": 0.8184210526315789,
+          "公寓(5樓含以下無電梯)": 0.013157894736842105,
+          "華廈(10層含以下有電梯)": 0.13157894736842105,
+          "透天厝": 0.03684210526315789
+        }
+      },
+      "test": {
+        "row_count": 624,
+        "date_min": "2025-06-14",
+        "date_max": "2026-06-13",
+        "median_target": 408865.37958267727,
+        "station_proportions": {
+          "A17": 0.10096153846153846,
+          "A18": 0.6057692307692307,
+          "A19": 0.2932692307692308
+        },
+        "building_type_proportions": {
+          "住宅大樓(11層含以上有電梯)": 0.6826923076923077,
+          "公寓(5樓含以下無電梯)": 0.008012820512820512,
+          "華廈(10層含以下有電梯)": 0.27724358974358976,
+          "透天厝": 0.03205128205128205
+        }
+      }
+    }
+  },
+  "feature_experiments": [
+    {
+      "name": "base",
+      "feature_columns": [
+        "station_code",
+        "station_distance_m",
+        "building_area_ping",
+        "building_type",
+        "bedrooms",
+        "living_rooms",
+        "bathrooms",
+        "building_age_years",
+        "floor",
+        "total_floors",
+        "floor_ratio",
+        "transaction_year",
+        "transaction_month"
+      ],
+      "selected_model": "ridge",
+      "metrics": {
+        "overall": {
+          "mae": 60927.507616983254,
+          "mape": 13.606426104478253,
+          "rmse": 132234.5892718689,
+          "r2": 0.19299582956111028,
+          "count": 380.0
+        },
+        "station:A19": {
+          "mae": 50185.56675314641,
+          "mape": 12.72367619929741,
+          "rmse": 70820.4515386658,
+          "r2": 0.4726835163030303,
+          "count": 172.0
+        },
+        "station:A18": {
+          "mae": 72225.15661419251,
+          "mape": 13.99934526779372,
+          "rmse": 178869.5924368383,
+          "r2": 0.029968008797177204,
+          "count": 176.0
+        },
+        "station:A17": {
+          "mae": 56528.37027545538,
+          "mape": 16.190151446590228,
+          "rmse": 68693.24506596105,
+          "r2": 0.6060624591958942,
+          "count": 32.0
+        },
+        "building_type:住宅大樓(11層含以上有電梯)": {
+          "mae": 48603.23052614358,
+          "mape": 11.550195818942202,
+          "rmse": 64731.91342306378,
+          "r2": 0.46958041530842476,
+          "count": 311.0
+        },
+        "building_type:華廈(10層含以下有電梯)": {
+          "mae": 53311.3517852119,
+          "mape": 17.06188893228068,
+          "rmse": 64656.99866518938,
+          "r2": 0.5512560642972623,
+          "count": 50.0
+        }
+      },
+      "candidate_errors": {}
+    },
+    {
+      "name": "enhanced",
+      "feature_columns": [
+        "station_code",
+        "station_distance_m",
+        "building_area_ping",
+        "building_type",
+        "bedrooms",
+        "living_rooms",
+        "bathrooms",
+        "building_age_years",
+        "floor",
+        "total_floors",
+        "floor_ratio",
+        "transaction_year",
+        "transaction_month",
+        "transaction_month_index",
+        "station_building_type",
+        "building_age_band",
+        "area_band",
+        "floor_band",
+        "twd97_x",
+        "twd97_y",
+        "location_known"
+      ],
+      "selected_model": "hist_gradient_boosting",
+      "metrics": {
+        "overall": {
+          "mae": 55947.51373143813,
+          "mape": 11.828448983612725,
+          "rmse": 125299.82319162517,
+          "r2": 0.2754196466398603,
+          "count": 380.0
+        },
+        "station:A19": {
+          "mae": 52534.366668150025,
+          "mape": 13.039460636368302,
+          "rmse": 68377.644987361,
+          "r2": 0.5084335402588294,
+          "count": 172.0
+        },
+        "station:A18": {
+          "mae": 61306.34537631913,
+          "mape": 10.747354849828241,
+          "rmse": 169207.64673613588,
+          "r2": 0.1319335058310197,
+          "count": 176.0
+        },
+        "station:A17": {
+          "mae": 44819.605149766154,
+          "mape": 11.26527908586616,
+          "rmse": 61931.13206222725,
+          "r2": 0.6798029392073393,
+          "count": 32.0
+        },
+        "building_type:住宅大樓(11層含以上有電梯)": {
+          "mae": 48926.63750306765,
+          "mape": 11.136107034935764,
+          "rmse": 64505.943819580854,
+          "r2": 0.47327718533543917,
+          "count": 311.0
+        },
+        "building_type:華廈(10層含以下有電梯)": {
+          "mae": 41362.20420637574,
+          "mape": 12.06895125906943,
+          "rmse": 56128.1839412721,
+          "r2": 0.6618343494833785,
+          "count": 50.0
+        }
+      },
+      "candidate_errors": {}
+    },
+    {
+      "name": "without_transaction_trend",
+      "feature_columns": [
+        "station_code",
+        "station_distance_m",
+        "building_area_ping",
+        "building_type",
+        "bedrooms",
+        "living_rooms",
+        "bathrooms",
+        "building_age_years",
+        "floor",
+        "total_floors",
+        "floor_ratio",
+        "transaction_year",
+        "transaction_month",
+        "station_building_type",
+        "building_age_band",
+        "area_band",
+        "floor_band",
+        "twd97_x",
+        "twd97_y",
+        "location_known"
+      ],
+      "selected_model": "hist_gradient_boosting",
+      "metrics": {
+        "overall": {
+          "mae": 65474.70015236526,
+          "mape": 13.585506968130339,
+          "rmse": 131012.19457048393,
+          "r2": 0.20784698250146916,
+          "count": 380.0
+        },
+        "station:A19": {
+          "mae": 63167.92443873751,
+          "mape": 15.224029797199695,
+          "rmse": 79074.61994857714,
+          "r2": 0.34260228363172174,
+          "count": 172.0
+        },
+        "station:A18": {
+          "mae": 70427.38547854591,
+          "mape": 12.266853550395664,
+          "rmse": 173415.02153227865,
+          "r2": 0.08822758080186965,
+          "count": 176.0
+        },
+        "station:A17": {
+          "mae": 50633.85031912076,
+          "mape": 12.031040559423262,
+          "rmse": 69396.02215928923,
+          "r2": 0.5979607467241796,
+          "count": 32.0
+        },
+        "building_type:住宅大樓(11層含以上有電梯)": {
+          "mae": 59765.922555270256,
+          "mape": 13.212118411382459,
+          "rmse": 77435.92840815116,
+          "r2": 0.24095472488690983,
+          "count": 311.0
+        },
+        "building_type:華廈(10層含以下有電梯)": {
+          "mae": 46323.74791527871,
+          "mape": 12.9359268199784,
+          "rmse": 59611.579940091,
+          "r2": 0.6185577676428202,
+          "count": 50.0
+        }
+      },
+      "candidate_errors": {}
+    },
+    {
+      "name": "without_station_building_type",
+      "feature_columns": [
+        "station_code",
+        "station_distance_m",
+        "building_area_ping",
+        "building_type",
+        "bedrooms",
+        "living_rooms",
+        "bathrooms",
+        "building_age_years",
+        "floor",
+        "total_floors",
+        "floor_ratio",
+        "transaction_year",
+        "transaction_month",
+        "transaction_month_index",
+        "building_age_band",
+        "area_band",
+        "floor_band",
+        "twd97_x",
+        "twd97_y",
+        "location_known"
+      ],
+      "selected_model": "hist_gradient_boosting",
+      "metrics": {
+        "overall": {
+          "mae": 55078.5842610758,
+          "mape": 11.651206107854401,
+          "rmse": 124407.88728965471,
+          "r2": 0.28569865539423867,
+          "count": 380.0
+        },
+        "station:A19": {
+          "mae": 51045.97154331096,
+          "mape": 12.635957339947598,
+          "rmse": 67042.64896520632,
+          "r2": 0.5274407202960503,
+          "count": 172.0
+        },
+        "station:A18": {
+          "mae": 60936.643546353065,
+          "mape": 10.761578187126695,
+          "rmse": 168457.90315787765,
+          "r2": 0.13960910931597048,
+          "count": 176.0
+        },
+        "station:A17": {
+          "mae": 44534.551550036886,
+          "mape": 11.25112179935585,
+          "rmse": 59621.66378205599,
+          "r2": 0.7032385489768826,
+          "count": 32.0
+        },
+        "building_type:住宅大樓(11層含以上有電梯)": {
+          "mae": 48214.662716671235,
+          "mape": 10.996747302331942,
+          "rmse": 64071.60314923289,
+          "r2": 0.48034651598576694,
+          "count": 311.0
+        },
+        "building_type:華廈(10層含以下有電梯)": {
+          "mae": 40316.582159458616,
+          "mape": 11.811838180993613,
+          "rmse": 54285.27877715365,
+          "r2": 0.68367635576171,
+          "count": 50.0
+        }
+      },
+      "candidate_errors": {}
+    },
+    {
+      "name": "without_age_band",
+      "feature_columns": [
+        "station_code",
+        "station_distance_m",
+        "building_area_ping",
+        "building_type",
+        "bedrooms",
+        "living_rooms",
+        "bathrooms",
+        "building_age_years",
+        "floor",
+        "total_floors",
+        "floor_ratio",
+        "transaction_year",
+        "transaction_month",
+        "transaction_month_index",
+        "station_building_type",
+        "area_band",
+        "floor_band",
+        "twd97_x",
+        "twd97_y",
+        "location_known"
+      ],
+      "selected_model": "hist_gradient_boosting",
+      "metrics": {
+        "overall": {
+          "mae": 55811.2116764415,
+          "mape": 11.738021351581214,
+          "rmse": 126154.22486220289,
+          "r2": 0.2655043352392854,
+          "count": 380.0
+        },
+        "station:A19": {
+          "mae": 53506.5714696922,
+          "mape": 13.307682345469527,
+          "rmse": 70022.86019287564,
+          "r2": 0.48449407999355776,
+          "count": 172.0
+        },
+        "station:A18": {
+          "mae": 60892.855418024395,
+          "mape": 10.566646639669676,
+          "rmse": 170187.57573003502,
+          "r2": 0.12184995818432387,
+          "count": 176.0
+        },
+        "station:A17": {
+          "mae": 40249.612209013125,
+          "mape": 9.743654424945005,
+          "rmse": 57737.640373150025,
+          "r2": 0.7216973345156483,
+          "count": 32.0
+        },
+        "building_type:住宅大樓(11層含以上有電梯)": {
+          "mae": 49111.86486230943,
+          "mape": 11.210794304731287,
+          "rmse": 65497.4028288298,
+          "r2": 0.4569612506600058,
+          "count": 311.0
+        },
+        "building_type:華廈(10層含以下有電梯)": {
+          "mae": 39282.18905612729,
+          "mape": 11.328040130490315,
+          "rmse": 54014.95870373949,
+          "r2": 0.6868188552532849,
+          "count": 50.0
+        }
+      },
+      "candidate_errors": {}
+    },
+    {
+      "name": "without_area_band",
+      "feature_columns": [
+        "station_code",
+        "station_distance_m",
+        "building_area_ping",
+        "building_type",
+        "bedrooms",
+        "living_rooms",
+        "bathrooms",
+        "building_age_years",
+        "floor",
+        "total_floors",
+        "floor_ratio",
+        "transaction_year",
+        "transaction_month",
+        "transaction_month_index",
+        "station_building_type",
+        "building_age_band",
+        "floor_band",
+        "twd97_x",
+        "twd97_y",
+        "location_known"
+      ],
+      "selected_model": "hist_gradient_boosting",
+      "metrics": {
+        "overall": {
+          "mae": 56082.258686902685,
+          "mape": 11.866165076206773,
+          "rmse": 125927.68012563456,
+          "r2": 0.26813994608743597,
+          "count": 380.0
+        },
+        "station:A19": {
+          "mae": 52353.79668059279,
+          "mape": 13.032754297671751,
+          "rmse": 68320.39157386316,
+          "r2": 0.5092563844849911,
+          "count": 172.0
+        },
+        "station:A18": {
+          "mae": 61990.0139447425,
+          "mape": 10.88170250079385,
+          "rmse": 170424.72126404167,
+          "r2": 0.1194009609433393,
+          "count": 176.0
+        },
+        "station:A17": {
+          "mae": 43630.08805269944,
+          "mape": 11.010292175603583,
+          "rmse": 58967.49949959602,
+          "r2": 0.7097149112815845,
+          "count": 32.0
+        },
+        "building_type:住宅大樓(11層含以上有電梯)": {
+          "mae": 48764.83610329366,
+          "mape": 11.10944913489684,
+          "rmse": 64457.953562734205,
+          "r2": 0.47406062198754617,
+          "count": 311.0
+        },
+        "building_type:華廈(10層含以下有電梯)": {
+          "mae": 42425.26588818165,
+          "mape": 12.523044520784385,
+          "rmse": 56720.46338579691,
+          "r2": 0.6546598678429618,
+          "count": 50.0
+        }
+      },
+      "candidate_errors": {}
+    },
+    {
+      "name": "without_floor_band",
+      "feature_columns": [
+        "station_code",
+        "station_distance_m",
+        "building_area_ping",
+        "building_type",
+        "bedrooms",
+        "living_rooms",
+        "bathrooms",
+        "building_age_years",
+        "floor",
+        "total_floors",
+        "floor_ratio",
+        "transaction_year",
+        "transaction_month",
+        "transaction_month_index",
+        "station_building_type",
+        "building_age_band",
+        "area_band",
+        "twd97_x",
+        "twd97_y",
+        "location_known"
+      ],
+      "selected_model": "hist_gradient_boosting",
+      "metrics": {
+        "overall": {
+          "mae": 55978.477466075085,
+          "mape": 11.893070971728692,
+          "rmse": 124994.24173555996,
+          "r2": 0.2789495530047027,
+          "count": 380.0
+        },
+        "station:A19": {
+          "mae": 52664.87271589567,
+          "mape": 13.169196549680917,
+          "rmse": 68528.37160412548,
+          "r2": 0.5062640063116182,
+          "count": 172.0
+        },
+        "station:A18": {
+          "mae": 61612.84749205715,
+          "mape": 10.881478526882402,
+          "rmse": 168840.56956579842,
+          "r2": 0.13569576792076798,
+          "count": 176.0
+        },
+        "station:A17": {
+          "mae": 42800.06785538801,
+          "mape": 10.597654436890082,
+          "rmse": 59150.50048342433,
+          "r2": 0.7079103617261477,
+          "count": 32.0
+        },
+        "building_type:住宅大樓(11層含以上有電梯)": {
+          "mae": 48890.016445623085,
+          "mape": 11.161714632655952,
+          "rmse": 64514.448235320226,
+          "r2": 0.4731382906905415,
+          "count": 311.0
+        },
+        "building_type:華廈(10層含以下有電梯)": {
+          "mae": 42426.21389034232,
+          "mape": 12.539031551549353,
+          "rmse": 56665.95372585681,
+          "r2": 0.6553233083975087,
+          "count": 50.0
+        }
+      },
+      "candidate_errors": {}
+    }
+  ],
+  "backtests": [
+    {
+      "cutoff_date": "2026-06-30",
+      "train_max_date": "2024-12-12",
+      "test_min_date": "2025-06-14",
+      "source_max_date": "2026-06-13",
+      "passed": true,
+      "stations_within_limit": true,
+      "candidate_metrics": {
+        "overall": {
+          "mae": 64780.03032251094,
+          "mape": 22.961706373045164,
+          "rmse": 89380.12970981449,
+          "r2": 0.4435641552329024,
+          "count": 624.0
+        },
+        "station:A18": {
+          "mae": 75781.50675073535,
+          "mape": 30.397166915822478,
+          "rmse": 100742.21046090461,
+          "r2": 0.4074894191259485,
+          "count": 378.0
+        },
+        "station:A17": {
+          "mae": 39786.333100802665,
+          "mape": 10.028823117390738,
+          "rmse": 67518.86288390611,
+          "r2": 0.4455452702521937,
+          "count": 63.0
+        },
+        "station:A19": {
+          "mae": 50660.0567438158,
+          "mape": 12.055518175976337,
+          "rmse": 68612.01566364797,
+          "r2": 0.5151040482411517,
+          "count": 183.0
+        },
+        "building_type:住宅大樓(11層含以上有電梯)": {
+          "mae": 47412.15954081625,
+          "mape": 10.44150146740937,
+          "rmse": 62699.49835379197,
+          "r2": 0.4611832811418053,
+          "count": 426.0
+        },
+        "building_type:華廈(10層含以下有電梯)": {
+          "mae": 108661.91111808798,
+          "mape": 54.50005302616393,
+          "rmse": 132899.37062218867,
+          "r2": -0.7030947315883318,
+          "count": 173.0
+        }
+      },
+      "baseline_metrics": {
+        "overall": {
+          "mae": 75840.47388813387,
+          "mape": 25.00757890637694,
+          "rmse": 97391.5305501715,
+          "r2": 0.3393437929063172,
+          "count": 624.0
+        },
+        "station:A18": {
+          "mae": 77250.95284110599,
+          "mape": 28.196082358587514,
+          "rmse": 94504.4623503874,
+          "r2": 0.4785918802856982,
+          "count": 378.0
+        },
+        "station:A17": {
+          "mae": 78083.31691938986,
+          "mape": 26.59764633570508,
+          "rmse": 101411.9465158875,
+          "r2": -0.25081790941995563,
+          "count": 63.0
+        },
+        "station:A19": {
+          "mae": 72154.89926959512,
+          "mape": 17.87408954581262,
+          "rmse": 101756.14668058802,
+          "r2": -0.0665212365130583,
+          "count": 183.0
+        },
+        "building_type:住宅大樓(11層含以上有電梯)": {
+          "mae": 63558.59743781998,
+          "mape": 14.416545214159365,
+          "rmse": 86616.14088124293,
+          "r2": -0.028278110713596094,
+          "count": 426.0
+        },
+        "building_type:華廈(10層含以下有電梯)": {
+          "mae": 102248.2740224841,
+          "mape": 48.69397768701818,
+          "rmse": 114727.23992221314,
+          "r2": -0.26918826562264586,
+          "count": 173.0
+        }
+      }
+    },
+    {
+      "cutoff_date": "2025-06-30",
+      "train_max_date": "2023-12-31",
+      "test_min_date": "2024-07-02",
+      "source_max_date": "2025-06-30",
+      "passed": true,
+      "stations_within_limit": true,
+      "candidate_metrics": {
+        "overall": {
+          "mae": 78537.86026709065,
+          "mape": 17.36493320502993,
+          "rmse": 119238.71196523057,
+          "r2": 0.07090030943096115,
+          "count": 776.0
+        },
+        "station:A19": {
+          "mae": 72780.70980270363,
+          "mape": 17.472295684872364,
+          "rmse": 87888.78869427594,
+          "r2": 0.04668069561235244,
+          "count": 339.0
+        },
+        "station:A18": {
+          "mae": 85319.54795172921,
+          "mape": 16.645754427344315,
+          "rmse": 149839.604900343,
+          "r2": -0.03455254678189035,
+          "count": 342.0
+        },
+        "station:A17": {
+          "mae": 74667.72152267827,
+          "mape": 19.570862271365698,
+          "rmse": 88014.96953387048,
+          "r2": 0.19593332982373024,
+          "count": 95.0
+        },
+        "building_type:華廈(10層含以下有電梯)": {
+          "mae": 71878.12742218477,
+          "mape": 18.625052860398323,
+          "rmse": 83931.98968255428,
+          "r2": -0.04266047329774758,
+          "count": 164.0
+        },
+        "building_type:住宅大樓(11層含以上有電梯)": {
+          "mae": 75908.04127894768,
+          "mape": 16.480655930973835,
+          "rmse": 91897.04937980713,
+          "r2": -0.10039520929337353,
+          "count": 573.0
+        },
+        "building_type:透天厝": {
+          "mae": 173270.18628979582,
+          "mape": 27.324544053319144,
+          "rmse": 402618.7944428573,
+          "r2": 0.07275890589910383,
+          "count": 31.0
+        }
+      },
+      "baseline_metrics": {
+        "overall": {
+          "mae": 88229.49212848757,
+          "mape": 20.31218070766587,
+          "rmse": 131354.56319635367,
+          "r2": -0.1275040030087644,
+          "count": 776.0
+        },
+        "station:A19": {
+          "mae": 76471.01944852494,
+          "mape": 18.399932523748006,
+          "rmse": 100838.04511809151,
+          "r2": -0.2549322058171999,
+          "count": 339.0
+        },
+        "station:A18": {
+          "mae": 96644.8556645375,
+          "mape": 19.80084230261102,
+          "rmse": 158503.21734690145,
+          "r2": -0.1576452120738172,
+          "count": 342.0
+        },
+        "station:A17": {
+          "mae": 99893.3648566798,
+          "mape": 28.976705643212313,
+          "rmse": 119203.70239388241,
+          "r2": -0.47488603464976364,
+          "count": 95.0
+        },
+        "building_type:華廈(10層含以下有電梯)": {
+          "mae": 82396.08913865575,
+          "mape": 22.085223119558858,
+          "rmse": 98053.9534778949,
+          "r2": -0.423043220243974,
+          "count": 164.0
+        },
+        "building_type:住宅大樓(11層含以上有電梯)": {
+          "mae": 80423.02463594115,
+          "mape": 17.439148333548214,
+          "rmse": 101556.1178408487,
+          "r2": -0.343871482157192,
+          "count": 573.0
+        },
+        "building_type:透天厝": {
+          "mae": 252586.94128326143,
+          "mape": 53.748972068555766,
+          "rmse": 430084.7262881053,
+          "r2": -0.05806566576261596,
+          "count": 31.0
+        }
+      }
+    },
+    {
+      "cutoff_date": "2024-06-30",
+      "train_max_date": "2022-12-31",
+      "test_min_date": "2023-07-01",
+      "source_max_date": "2024-06-30",
+      "passed": true,
+      "stations_within_limit": true,
+      "candidate_metrics": {
+        "overall": {
+          "mae": 66330.26928403055,
+          "mape": 15.351336839299739,
+          "rmse": 88966.24866335726,
+          "r2": -0.012588846618734939,
+          "count": 1587.0
+        },
+        "station:A19": {
+          "mae": 48237.8883066622,
+          "mape": 12.514317514365509,
+          "rmse": 65245.79371347392,
+          "r2": 0.3526799542511977,
+          "count": 452.0
+        },
+        "station:A17": {
+          "mae": 78825.30624384794,
+          "mape": 18.752803439965895,
+          "rmse": 92786.28918192665,
+          "r2": -0.6841199708707906,
+          "count": 326.0
+        },
+        "station:A18": {
+          "mae": 71403.66131477225,
+          "mape": 15.56574304826526,
+          "rmse": 98381.8024979598,
+          "r2": -0.1420748361810953,
+          "count": 809.0
+        },
+        "building_type:透天厝": {
+          "mae": 96752.14710735173,
+          "mape": 20.180405466735778,
+          "rmse": 190277.86722557075,
+          "r2": 0.16589666256863522,
+          "count": 56.0
+        },
+        "building_type:住宅大樓(11層含以上有電梯)": {
+          "mae": 64644.654141383486,
+          "mape": 14.770982844962525,
+          "rmse": 82100.57897969928,
+          "r2": -0.15607654136224403,
+          "count": 1241.0
+        },
+        "building_type:華廈(10層含以下有電梯)": {
+          "mae": 67723.68231969066,
+          "mape": 16.8189068234208,
+          "rmse": 86476.5909284418,
+          "r2": 0.012160355538018641,
+          "count": 281.0
+        }
+      },
+      "baseline_metrics": {
+        "overall": {
+          "mae": 83513.0900817143,
+          "mape": 20.001957706833863,
+          "rmse": 108055.1808758784,
+          "r2": -0.49373573765809664,
+          "count": 1587.0
+        },
+        "station:A19": {
+          "mae": 61752.268722001114,
+          "mape": 17.142907965733624,
+          "rmse": 83118.46636944536,
+          "r2": -0.05053145743163312,
+          "count": 452.0
+        },
+        "station:A17": {
+          "mae": 92051.33140033763,
+          "mape": 22.233655051259632,
+          "rmse": 109098.4375430609,
+          "r2": -1.3283189621661564,
+          "count": 326.0
+        },
+        "station:A18": {
+          "mae": 92230.54939533501,
+          "mape": 20.700050597679976,
+          "rmse": 119365.65113500807,
+          "r2": -0.6812169315007643,
+          "count": 809.0
+        },
+        "building_type:透天厝": {
+          "mae": 129815.34342000002,
+          "mape": 27.575460374799533,
+          "rmse": 228286.22322963324,
+          "r2": -0.2006120988033624,
+          "count": 56.0
+        },
+        "building_type:住宅大樓(11層含以上有電梯)": {
+          "mae": 77548.69751193875,
+          "mape": 18.12915007571598,
+          "rmse": 96376.29296606782,
+          "r2": -0.5930689908611604,
+          "count": 1241.0
+        },
+        "building_type:華廈(10層含以下有電梯)": {
+          "mae": 101126.7791473741,
+          "mape": 26.5196562459895,
+          "rmse": 119686.54659925758,
+          "r2": -0.8922564866074596,
+          "count": 281.0
+        }
+      }
+    }
+  ],
+  "release_checks": {
+    "overall_mae_improved": true,
+    "stations_within_limit": true,
+    "a18_improved": false,
+    "backtests_passed": true,
+    "backtest_stations_within_limit": true,
+    "candidate_fresh": true,
+    "recommended": false,
+    "parking_price_consistency": true
+  },
+  "selected_profile": "quick",
+  "profile_results": {
+    "quick": {
+      "parameters": {
+        "name": "quick",
+        "source": "preset",
+        "hgb_learning_rate": 0.08,
+        "hgb_max_iter": 180,
+        "rf_n_estimators": 160,
+        "recency_half_life_months": 48
+      },
+      "selection_metrics": {
+        "ridge": {
+          "overall": {
+            "mae": 60247.553608281065,
+            "mape": 13.553443644029626,
+            "rmse": 126845.69024674091,
+            "r2": 0.2574305636834685,
+            "count": 380.0
+          },
+          "station:A19": {
+            "mae": 51877.19640436405,
+            "mape": 13.086620737541368,
+            "rmse": 67951.07868996348,
+            "r2": 0.514547574585078,
+            "count": 172.0
+          },
+          "station:A18": {
+            "mae": 68843.8788671145,
+            "mape": 13.118941836298974,
+            "rmse": 170849.41846057834,
+            "r2": 0.11500659927991708,
+            "count": 176.0
+          },
+          "station:A17": {
+            "mae": 57958.43465575109,
+            "mape": 18.452376708922593,
+            "rmse": 75538.65729694007,
+            "r2": 0.5236372151199686,
+            "count": 32.0
+          },
+          "building_type:住宅大樓(11層含以上有電梯)": {
+            "mae": 49727.83337119002,
+            "mape": 11.622364512094828,
+            "rmse": 64216.71088883993,
+            "r2": 0.47799005455078103,
+            "count": 311.0
+          },
+          "building_type:華廈(10層含以下有電梯)": {
+            "mae": 54943.864323032154,
+            "mape": 18.131039274080283,
+            "rmse": 68696.93996698337,
+            "r2": 0.49342670073864503,
+            "count": 50.0
+          }
+        },
+        "random_forest": {
+          "overall": {
+            "mae": 60187.03390373724,
+            "mape": 12.780238674990615,
+            "rmse": 132313.18128251718,
+            "r2": 0.19203627838212056,
+            "count": 380.0
+          },
+          "station:A19": {
+            "mae": 57384.42757995811,
+            "mape": 14.136462777910328,
+            "rmse": 73681.83122600176,
+            "r2": 0.4292120627142303,
+            "count": 172.0
+          },
+          "station:A18": {
+            "mae": 64199.56244633079,
+            "mape": 11.138053446222933,
+            "rmse": 177204.59772347548,
+            "r2": 0.04794290439485738,
+            "count": 176.0
+          },
+          "station:A17": {
+            "mae": 53182.13590978551,
+            "mape": 14.522552880019424,
+            "rmse": 77485.2579063333,
+            "r2": 0.4987695237893761,
+            "count": 32.0
+          },
+          "building_type:住宅大樓(11層含以上有電梯)": {
+            "mae": 52661.1773447682,
+            "mape": 11.886667477033972,
+            "rmse": 70233.4057341737,
+            "r2": 0.3755896126682374,
+            "count": 311.0
+          },
+          "building_type:華廈(10層含以下有電梯)": {
+            "mae": 41179.98885713202,
+            "mape": 11.915875641698923,
+            "rmse": 56356.0333941567,
+            "r2": 0.6590832449574222,
+            "count": 50.0
+          }
+        },
+        "hist_gradient_boosting": {
+          "overall": {
+            "mae": 55457.56474324494,
+            "mape": 11.714010269704136,
+            "rmse": 124675.21386554863,
+            "r2": 0.2826255883326939,
+            "count": 380.0
+          },
+          "station:A19": {
+            "mae": 51946.04810362147,
+            "mape": 12.930882942193778,
+            "rmse": 66635.66246625945,
+            "r2": 0.5331607056685616,
+            "count": 172.0
+          },
+          "station:A18": {
+            "mae": 60750.150577575645,
+            "mape": 10.637775027400052,
+            "rmse": 168873.40727396184,
+            "r2": 0.1353595391318253,
+            "count": 176.0
+          },
+          "station:A17": {
+            "mae": 45222.74459240217,
+            "mape": 11.092613487744782,
+            "rmse": 62185.1442672608,
+            "r2": 0.6771709589589779,
+            "count": 32.0
+          },
+          "building_type:住宅大樓(11層含以上有電梯)": {
+            "mae": 48540.831528373485,
+            "mape": 11.104974302239807,
+            "rmse": 63993.01727105498,
+            "r2": 0.48162047759049786,
+            "count": 311.0
+          },
+          "building_type:華廈(10層含以下有電梯)": {
+            "mae": 41146.70091409824,
+            "mape": 11.736087474682693,
+            "rmse": 54891.58534675002,
+            "r2": 0.6765709251872003,
+            "count": 50.0
+          }
+        },
+        "hist_gradient_boosting_log": {
+          "overall": {
+            "mae": 58861.90095111686,
+            "mape": 12.454121489817384,
+            "rmse": 124950.83634066336,
+            "r2": 0.27945024879339775,
+            "count": 380.0
+          },
+          "station:A19": {
+            "mae": 58961.96845235046,
+            "mape": 14.612372185557218,
+            "rmse": 74982.09663325723,
+            "r2": 0.4088888868032634,
+            "count": 172.0
+          },
+          "station:A18": {
+            "mae": 62187.197405789346,
+            "mape": 10.870344948849848,
+            "rmse": 166329.54152074797,
+            "r2": 0.16121278292910424,
+            "count": 176.0
+          },
+          "station:A17": {
+            "mae": 40034.90763128761,
+            "mape": 9.564294975537216,
+            "rmse": 54960.593626874295,
+            "r2": 0.7478249396876118,
+            "count": 32.0
+          },
+          "building_type:住宅大樓(11層含以上有電梯)": {
+            "mae": 52936.29758089905,
+            "mape": 12.102144797707535,
+            "rmse": 69479.24757227056,
+            "r2": 0.38892730938989595,
+            "count": 311.0
+          },
+          "building_type:華廈(10層含以下有電梯)": {
+            "mae": 39041.780740946364,
+            "mape": 11.200019884306657,
+            "rmse": 51412.324301957284,
+            "r2": 0.7162721369301857,
+            "count": 50.0
+          }
+        }
+      },
+      "candidate_errors": {}
+    },
+    "balanced": {
+      "parameters": {
+        "name": "balanced",
+        "source": "preset",
+        "hgb_learning_rate": 0.06,
+        "hgb_max_iter": 350,
+        "rf_n_estimators": 400,
+        "recency_half_life_months": 48
+      },
+      "selection_metrics": {
+        "ridge": {
+          "overall": {
+            "mae": 60247.553608281065,
+            "mape": 13.553443644029626,
+            "rmse": 126845.69024674091,
+            "r2": 0.2574305636834685,
+            "count": 380.0
+          },
+          "station:A19": {
+            "mae": 51877.19640436405,
+            "mape": 13.086620737541368,
+            "rmse": 67951.07868996348,
+            "r2": 0.514547574585078,
+            "count": 172.0
+          },
+          "station:A18": {
+            "mae": 68843.8788671145,
+            "mape": 13.118941836298974,
+            "rmse": 170849.41846057834,
+            "r2": 0.11500659927991708,
+            "count": 176.0
+          },
+          "station:A17": {
+            "mae": 57958.43465575109,
+            "mape": 18.452376708922593,
+            "rmse": 75538.65729694007,
+            "r2": 0.5236372151199686,
+            "count": 32.0
+          },
+          "building_type:住宅大樓(11層含以上有電梯)": {
+            "mae": 49727.83337119002,
+            "mape": 11.622364512094828,
+            "rmse": 64216.71088883993,
+            "r2": 0.47799005455078103,
+            "count": 311.0
+          },
+          "building_type:華廈(10層含以下有電梯)": {
+            "mae": 54943.864323032154,
+            "mape": 18.131039274080283,
+            "rmse": 68696.93996698337,
+            "r2": 0.49342670073864503,
+            "count": 50.0
+          }
+        },
+        "random_forest": {
+          "overall": {
+            "mae": 60451.57177305681,
+            "mape": 12.868785339713048,
+            "rmse": 132644.9607173755,
+            "r2": 0.18797920960092263,
+            "count": 380.0
+          },
+          "station:A19": {
+            "mae": 57728.16282224549,
+            "mape": 14.235604895670061,
+            "rmse": 74149.09458579075,
+            "r2": 0.4219496489466227,
+            "count": 172.0
+          },
+          "station:A18": {
+            "mae": 64252.70169658512,
+            "mape": 11.153118356525917,
+            "rmse": 177365.69759091793,
+            "r2": 0.046211053275572955,
+            "count": 176.0
+          },
+          "station:A17": {
+            "mae": 54183.680304261856,
+            "mape": 14.95829863397329,
+            "rmse": 79764.77022258166,
+            "r2": 0.46884467404310126,
+            "count": 32.0
+          },
+          "building_type:住宅大樓(11層含以上有電梯)": {
+            "mae": 52990.875452513435,
+            "mape": 11.974110762209357,
+            "rmse": 70531.39027165351,
+            "r2": 0.370279907016937,
+            "count": 311.0
+          },
+          "building_type:華廈(10層含以下有電梯)": {
+            "mae": 41023.89082523339,
+            "mape": 11.920913685409777,
+            "rmse": 56340.97813476635,
+            "r2": 0.6592653693652089,
+            "count": 50.0
+          }
+        },
+        "hist_gradient_boosting": {
+          "overall": {
+            "mae": 55947.51373143813,
+            "mape": 11.828448983612725,
+            "rmse": 125299.82319162517,
+            "r2": 0.2754196466398603,
+            "count": 380.0
+          },
+          "station:A19": {
+            "mae": 52534.366668150025,
+            "mape": 13.039460636368302,
+            "rmse": 68377.644987361,
+            "r2": 0.5084335402588294,
+            "count": 172.0
+          },
+          "station:A18": {
+            "mae": 61306.34537631913,
+            "mape": 10.747354849828241,
+            "rmse": 169207.64673613588,
+            "r2": 0.1319335058310197,
+            "count": 176.0
+          },
+          "station:A17": {
+            "mae": 44819.605149766154,
+            "mape": 11.26527908586616,
+            "rmse": 61931.13206222725,
+            "r2": 0.6798029392073393,
+            "count": 32.0
+          },
+          "building_type:住宅大樓(11層含以上有電梯)": {
+            "mae": 48926.63750306765,
+            "mape": 11.136107034935764,
+            "rmse": 64505.943819580854,
+            "r2": 0.47327718533543917,
+            "count": 311.0
+          },
+          "building_type:華廈(10層含以下有電梯)": {
+            "mae": 41362.20420637574,
+            "mape": 12.06895125906943,
+            "rmse": 56128.1839412721,
+            "r2": 0.6618343494833785,
+            "count": 50.0
+          }
+        },
+        "hist_gradient_boosting_log": {
+          "overall": {
+            "mae": 59158.5851615265,
+            "mape": 12.567636014741836,
+            "rmse": 125332.72320034458,
+            "r2": 0.2750390901633525,
+            "count": 380.0
+          },
+          "station:A19": {
+            "mae": 58244.92264244996,
+            "mape": 14.561431808041394,
+            "rmse": 73471.97890950982,
+            "r2": 0.4324587409043821,
+            "count": 172.0
+          },
+          "station:A18": {
+            "mae": 63423.87528953475,
+            "mape": 11.143589469362764,
+            "rmse": 167577.63499648555,
+            "r2": 0.1485774733030809,
+            "count": 176.0
+          },
+          "station:A17": {
+            "mae": 40610.4254975175,
+            "mape": 9.683239625341637,
+            "rmse": 55394.523040252636,
+            "r2": 0.7438272335484708,
+            "count": 32.0
+          },
+          "building_type:住宅大樓(11層含以上有電梯)": {
+            "mae": 52954.69561568266,
+            "mape": 12.194362992933067,
+            "rmse": 68681.1146167176,
+            "r2": 0.402885893523686,
+            "count": 311.0
+          },
+          "building_type:華廈(10層含以下有電梯)": {
+            "mae": 40306.95883740809,
+            "mape": 11.414743258545764,
+            "rmse": 52329.482488804286,
+            "r2": 0.7060588492492301,
+            "count": 50.0
+          }
+        }
+      },
+      "candidate_errors": {}
+    },
+    "thorough": {
+      "parameters": {
+        "name": "thorough",
+        "source": "preset",
+        "hgb_learning_rate": 0.04,
+        "hgb_max_iter": 600,
+        "rf_n_estimators": 700,
+        "recency_half_life_months": 48
+      },
+      "selection_metrics": {
+        "ridge": {
+          "overall": {
+            "mae": 60247.553608281065,
+            "mape": 13.553443644029626,
+            "rmse": 126845.69024674091,
+            "r2": 0.2574305636834685,
+            "count": 380.0
+          },
+          "station:A19": {
+            "mae": 51877.19640436405,
+            "mape": 13.086620737541368,
+            "rmse": 67951.07868996348,
+            "r2": 0.514547574585078,
+            "count": 172.0
+          },
+          "station:A18": {
+            "mae": 68843.8788671145,
+            "mape": 13.118941836298974,
+            "rmse": 170849.41846057834,
+            "r2": 0.11500659927991708,
+            "count": 176.0
+          },
+          "station:A17": {
+            "mae": 57958.43465575109,
+            "mape": 18.452376708922593,
+            "rmse": 75538.65729694007,
+            "r2": 0.5236372151199686,
+            "count": 32.0
+          },
+          "building_type:住宅大樓(11層含以上有電梯)": {
+            "mae": 49727.83337119002,
+            "mape": 11.622364512094828,
+            "rmse": 64216.71088883993,
+            "r2": 0.47799005455078103,
+            "count": 311.0
+          },
+          "building_type:華廈(10層含以下有電梯)": {
+            "mae": 54943.864323032154,
+            "mape": 18.131039274080283,
+            "rmse": 68696.93996698337,
+            "r2": 0.49342670073864503,
+            "count": 50.0
+          }
+        },
+        "random_forest": {
+          "overall": {
+            "mae": 60423.02659379106,
+            "mape": 12.874400751527787,
+            "rmse": 132380.94349146818,
+            "r2": 0.19120849349264146,
+            "count": 380.0
+          },
+          "station:A19": {
+            "mae": 57656.90629272923,
+            "mape": 14.23073068837084,
+            "rmse": 74051.32819946163,
+            "r2": 0.42347297535169515,
+            "count": 172.0
+          },
+          "station:A18": {
+            "mae": 64229.43106063351,
+            "mape": 11.156402160055249,
+            "rmse": 176948.2193677403,
+            "r2": 0.05069577045274898,
+            "count": 176.0
+          },
+          "station:A17": {
+            "mae": 54355.69864436468,
+            "mape": 15.0331195940953,
+            "rmse": 80143.23129245728,
+            "r2": 0.46379235564588295,
+            "count": 32.0
+          },
+          "building_type:住宅大樓(11層含以上有電梯)": {
+            "mae": 52937.635304241805,
+            "mape": 11.967930480924212,
+            "rmse": 70424.39504914888,
+            "r2": 0.37218901262643433,
+            "count": 311.0
+          },
+          "building_type:華廈(10層含以下有電梯)": {
+            "mae": 41411.692310349696,
+            "mape": 12.021300119117852,
+            "rmse": 56875.51550919116,
+            "r2": 0.6527692306944883,
+            "count": 50.0
+          }
+        },
+        "hist_gradient_boosting": {
+          "overall": {
+            "mae": 55946.805854657745,
+            "mape": 11.825567698034654,
+            "rmse": 125329.99557149451,
+            "r2": 0.2750706446165695,
+            "count": 380.0
+          },
+          "station:A19": {
+            "mae": 53161.07644474369,
+            "mape": 13.246437737722822,
+            "rmse": 69183.4361878198,
+            "r2": 0.4967796193717836,
+            "count": 172.0
+          },
+          "station:A18": {
+            "mae": 61282.631711348404,
+            "mape": 10.746114927252172,
+            "rmse": 169172.73239830806,
+            "r2": 0.13229170288113168,
+            "count": 176.0
+          },
+          "station:A17": {
+            "mae": 41573.05922114722,
+            "mape": 10.125381474014423,
+            "rmse": 58261.90197513468,
+            "r2": 0.7166203758254849,
+            "count": 32.0
+          },
+          "building_type:住宅大樓(11層含以上有電梯)": {
+            "mae": 49069.84635131431,
+            "mape": 11.222406004839044,
+            "rmse": 64792.30858147166,
+            "r2": 0.46859018599376956,
+            "count": 311.0
+          },
+          "building_type:華廈(10層含以下有電梯)": {
+            "mae": 40966.12474491148,
+            "mape": 11.997911897406906,
+            "rmse": 55240.957909783036,
+            "r2": 0.672440716700699,
+            "count": 50.0
+          }
+        },
+        "hist_gradient_boosting_log": {
+          "overall": {
+            "mae": 58240.63577534665,
+            "mape": 12.272478439198679,
+            "rmse": 124905.2495979568,
+            "r2": 0.2799759199305514,
+            "count": 380.0
+          },
+          "station:A19": {
+            "mae": 56804.25513366543,
+            "mape": 14.07077609276482,
+            "rmse": 73431.98597570266,
+            "r2": 0.43307643115451633,
+            "count": 172.0
+          },
+          "station:A18": {
+            "mae": 63000.59451803223,
+            "mape": 11.045212707593558,
+            "rmse": 166833.69546529706,
+            "r2": 0.15612025681187802,
+            "count": 176.0
+          },
+          "station:A17": {
+            "mae": 39781.40863961254,
+            "mape": 9.356590075108839,
+            "rmse": 56552.29116267261,
+            "r2": 0.7330070997740323,
+            "count": 32.0
+          },
+          "building_type:住宅大樓(11層含以上有電梯)": {
+            "mae": 52124.098635777365,
+            "mape": 11.915122528410492,
+            "rmse": 68890.32213113895,
+            "r2": 0.39924264989097824,
+            "count": 311.0
+          },
+          "building_type:華廈(10層含以下有電梯)": {
+            "mae": 38720.04100449097,
+            "mape": 11.008717834126196,
+            "rmse": 52817.39951223558,
+            "r2": 0.7005519151406501,
+            "count": 50.0
+          }
+        }
+      },
+      "candidate_errors": {}
+    }
+  },
+  "recency_weighting": {
+    "half_life_months": 48
+  }
+}
