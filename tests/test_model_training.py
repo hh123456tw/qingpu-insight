@@ -341,13 +341,13 @@ def test_release_gate_ignores_unpublished_small_station_metrics():
     assert select_release_candidate([baseline, candidate]).name == "ridge"
 
 
-def test_recency_weights_use_24_month_half_life_and_floor(model_frame):
+def test_recency_weights_use_48_month_half_life_and_floor(model_frame):
     latest = model_frame["transaction_date"].max().normalize()
     sample = pd.DataFrame(
         {
             "transaction_date": [
                 latest,
-                latest - pd.DateOffset(months=24),
+                latest - pd.DateOffset(months=48),
                 latest - pd.DateOffset(months=240),
             ]
         }

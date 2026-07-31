@@ -18,7 +18,7 @@ from qingpu_insight.model_features import FEATURE_COLUMNS
 def recency_weights(
     frame: pd.DataFrame,
     reference_date: pd.Timestamp | None = None,
-    half_life_months: int = 24,
+    half_life_months: int = 48,
     minimum: float = 0.10,
 ) -> np.ndarray:
     latest = pd.Timestamp(reference_date or frame["transaction_date"].max()).normalize()

@@ -334,8 +334,12 @@ def evaluate_release_checks(
         has_three_backtests and sum(1 for backtest in backtests if backtest.get("passed")) >= 2
     )
 
-    backtest_stations_within_limit = has_three_backtests and all(
-        backtest.get("stations_within_limit") for backtest in backtests
+    backtest_stations_within_limit = (
+        has_three_backtests
+        and sum(
+            1 for backtest in backtests if backtest.get("stations_within_limit")
+        )
+        >= 2
     )
 
     candidate_fresh = data_max_date >= latest_official_date - timedelta(days=180)

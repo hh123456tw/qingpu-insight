@@ -424,7 +424,19 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
             return jsonify({"error": err}), 400
 
         try:
-            submission = rt.model_release_service.submit(preview_id, confirmation_text)
+            submit_and_handoff = getattr(
+                rt.model_release_service, "submit_and_handoff", None
+            )
+            if callable(submit_and_handoff):
+                submission = submit_and_handoff(
+                    preview_id,
+                    confirmation_text,
+                    rt.executor,
+                )
+            else:
+                submission = rt.model_release_service.submit(
+                    preview_id, confirmation_text
+                )
         except (ValueError, RuntimeError) as e:
             err = {"code": "invalid_request", "message": str(e)}
             return jsonify({"error": err}), 400

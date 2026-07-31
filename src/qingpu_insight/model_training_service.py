@@ -360,7 +360,7 @@ class ModelTrainingService:
                     reference_rows=pd.DataFrame(),
                     data_min_date="",
                     data_max_date=str(
-                        (model_frame if is_resale else split.train)["transaction_date"].max().date()
+                        model_frame["transaction_date"].max().date()
                     ),
                     metrics={},
                     feature_columns=enhanced_features,
@@ -373,7 +373,7 @@ class ModelTrainingService:
                         seed_bundle,
                         stage,
                         feature_columns=enhanced_features,
-                        training_frame=model_frame if is_resale else None,
+                        training_frame=model_frame,
                         use_recency_weights=is_resale,
                     )
                     bundle: ValuationBundle = joblib.load(artifact_path)

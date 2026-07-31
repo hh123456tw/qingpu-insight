@@ -176,11 +176,17 @@ def _create_production_admin_services(
     executor_factory=None,
 ) -> AdminServices:
     # Task 3 owns URL parsing and visible-Selenium dependency construction.
-    from qingpu_insight.cli import _create_listing_update_service
+    from qingpu_insight.cli import (
+        _create_listing_update_service,
+        create_mysql_connection_factory,
+    )
 
+    operation_connection_factory = (
+        connection_factory or create_mysql_connection_factory()
+    )
     service_kwargs = {}
     if connection_factory is not None:
-        service_kwargs["connection_factory"] = connection_factory
+        service_kwargs["connection_factory"] = operation_connection_factory
     if source_factory is not None:
         service_kwargs["source_factory"] = source_factory
     service = _create_listing_update_service(root, **service_kwargs)
@@ -220,7 +226,9 @@ def _create_production_admin_services(
             if jt == "model_training":
                 candidate_store.discard_staging(interrupted.run_id)
 
-    official_runner = ProductionOfficialDataRunner(root, connection_factory)
+    official_runner = ProductionOfficialDataRunner(
+        root, operation_connection_factory
+    )
     official_service = OfficialDataUpdateService(service.job_service, official_runner, root)
 
     from qingpu_insight.model_release import ModelReleaseService
@@ -230,13 +238,14 @@ def _create_production_admin_services(
         OperationPreviewService,
     )
 
-    release_repo = MySQLModelReleaseRepository(connection_factory) if connection_factory else None
-    preview_repo = (
-        MySQLOperationPreviewRepository(connection_factory) if connection_factory else None
-    )
-    preview_service = OperationPreviewService(repository=preview_repo) if preview_repo else None
-    model_release_service = (
-        ModelReleaseService(
+    model_release_service = None
+    try:
+        release_repo = MySQLModelReleaseRepository(operation_connection_factory)
+        preview_repo = MySQLOperationPreviewRepository(
+            operation_connection_factory
+        )
+        preview_service = OperationPreviewService(repository=preview_repo)
+        model_release_service = ModelReleaseService(
             official_store=official_store,
             release_repository=release_repo,
             preview_service=preview_service,
@@ -244,9 +253,8 @@ def _create_production_admin_services(
             candidate_store=candidate_store,
             artifact_dir=root / "artifacts",
         )
-        if release_repo and preview_service
-        else None
-    )
+    except Exception:
+        pass
 
     _backup_job_svc = None
     try:
@@ -302,12 +310,10 @@ def _create_admin_dashboard_service(
 
         probes["mysql"] = _mysql_probe
 
-    for binary_name, code in (
-        ("chromedriver", "chrome"),
-        ("ollama", "ollama"),
-        ("mysqldump", "mysqldump"),
-        ("mysql", "mysql_client"),
-    ):
+    # Keep the dashboard focused on normal project operation. Selenium manages
+    # ChromeDriver on demand, while MySQL CLI tools are only needed when an
+    # optional backup/restore action is actually executed.
+    for binary_name, code in (("ollama", "ollama"),):
 
         def _make_binary_probe(
             name: str = binary_name, probe_code: str = code

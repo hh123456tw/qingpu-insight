@@ -103,6 +103,14 @@ class ModelRegistry:
         return self.get(transaction_type)
 
     def get(self, transaction_type: str) -> ValuationBundle:
+        current_json = (
+            self._artifact_dir
+            / "official"
+            / transaction_type
+            / "current.json"
+        )
+        if current_json.exists():
+            return self.load(transaction_type)
         if transaction_type not in self._bundles:
             path = self._artifact_dir / f"{transaction_type}.joblib"
             if not path.exists():

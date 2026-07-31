@@ -372,15 +372,30 @@ class ModelReleaseService:
         )
 
     def submit(self, preview_id: str, confirmation_text: str) -> object:
-
         preview = self._preview_service.consume(preview_id, confirmation_text)
         market = str(preview.payload["market"])
         idempotency_key = f"model_release:{market}:active"
-        submission = self._job_service.create(
+        return self._job_service.create(
             job_type="model_release",
             idempotency_key=idempotency_key,
             trigger="manual",
         )
+
+    def submit_and_handoff(
+        self,
+        preview_id: str,
+        confirmation_text: str,
+        executor: object,
+    ) -> object:
+        preview = self._preview_service.consume(preview_id, confirmation_text)
+        market = str(preview.payload["market"])
+        submission = self._job_service.create(
+            job_type="model_release",
+            idempotency_key=f"model_release:{market}:active",
+            trigger="manual",
+        )
+        if submission.created:
+            self.handoff(submission, preview, executor)
         return submission
 
     def execute(
@@ -388,11 +403,21 @@ class ModelReleaseService:
     ) -> ModelVersionRecord:
         op = preview.payload.get("operation")
         if op == "publish":
-            return self._execute_publish(run_id, preview)
+            record = self._execute_publish(run_id, preview)
         elif op == "rollback":
-            return self._execute_rollback(run_id, preview)
+            record = self._execute_rollback(run_id, preview)
         else:
             raise ValueError(f"unknown operation {op!r}")
+        self._job_service.succeed(
+            run_id,
+            record.version_id,
+            {
+                "market": record.market,
+                "version_id": record.version_id,
+                "operation": op,
+            },
+        )
+        return record
 
     def handoff(self, submission, preview, executor) -> None:
         executor.submit(

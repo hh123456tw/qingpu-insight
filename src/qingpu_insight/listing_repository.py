@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -591,6 +592,37 @@ def _upgrade_range_schema(cursor) -> None:
                 )
 
 
+def _mysql_frame(
+    rows: Sequence[Sequence[object]], columns: Sequence[str]
+) -> pd.DataFrame:
+    """Convert MySQL DECIMAL values at the repository boundary.
+
+    Current captures use Python floats, while PyMySQL returns DECIMAL columns
+    as ``Decimal``. Keeping both representations in one object column makes
+    PyArrow reject the listing artifact, so expose one stable numeric type.
+    """
+    frame = pd.DataFrame(rows, columns=columns)
+    for column in frame.columns:
+        if frame[column].map(lambda value: isinstance(value, Decimal)).any():
+            frame[column] = frame[column].map(
+                lambda value: float(value) if isinstance(value, Decimal) else value
+            )
+    for column in ("location_eligible", "active"):
+        if column in frame:
+            frame[column] = frame[column].map(
+                lambda value: bool(value) if pd.notna(value) else None
+            )
+    for column in (
+        "snapshot_at",
+        "address_observed_at",
+        "geocoded_at",
+        "created_at",
+    ):
+        if column in frame:
+            frame[column] = pd.to_datetime(frame[column], utc=True)
+    return frame
+
+
 class MySQLListingRepository:
     """MySQL-backed repository using PyMySQL.
 
@@ -648,7 +680,7 @@ class MySQLListingRepository:
 
         if not rows:
             return pd.DataFrame()
-        return pd.DataFrame(rows, columns=cols)
+        return _mysql_frame(rows, cols)
 
     # ------------------------------------------------------------------
     # load_snapshots
@@ -670,7 +702,7 @@ class MySQLListingRepository:
 
         if not rows:
             return pd.DataFrame()
-        return pd.DataFrame(rows, columns=cols)
+        return _mysql_frame(rows, cols)
 
     # ------------------------------------------------------------------
     # append_events
