@@ -825,10 +825,11 @@ def _conversation_parking(
     value = str(raw_parking or "").strip()
     if not value or "無車位" in value:
         return "", 0
-    area_match = _CONVERSATION_PARKING_AREA_RE.search(value)
+    normalized = re.sub(r"\s+", "", value)
+    area_match = _CONVERSATION_PARKING_AREA_RE.search(normalized)
     if area_match is None:
         return "", 0
-    area = float(re.sub(r"\s+", "", area_match.group("area")))
+    area = float(area_match.group("area"))
     if area <= 0:
         return "", 0
     if "機械" in value:

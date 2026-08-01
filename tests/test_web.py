@@ -261,6 +261,30 @@ def test_conversation_valuation_maps_591_elevator_building_type(
     assert captured["building_type"] == "華廈(10層含以下有電梯)"
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected_type", "expected_area"),
+    [
+        ("8.5 16坪 ，平面式，已含售金內", "坡道平面", 8.516),
+        ("8.516坪，平面式，已含售金內", "坡道平面", 8.516),
+        ("10. 32坪，平面式，已含售金內", "坡道平面", 10.32),
+        ("16坪，機械式，已含售金內", "坡道機械", 16.0),
+        ("坡道平面", "", 0.0),
+        ("無車位", "", 0.0),
+        ("", "", 0.0),
+    ],
+)
+def test_conversation_parking_parses_space_split_area(
+    raw: str,
+    expected_type: str,
+    expected_area: float,
+) -> None:
+    from qingpu_insight import web
+
+    parking_type, area = web._conversation_parking(raw)
+    assert parking_type == expected_type
+    assert area == pytest.approx(expected_area)
+
+
 @pytest.fixture
 def client(market_frame: pd.DataFrame) -> FlaskClient:
     from qingpu_insight.web import create_app
