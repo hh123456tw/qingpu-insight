@@ -946,7 +946,7 @@ def _conversation_valuation(
     low, high = result["interval_total_price_twd"]
     model = result.get("model") or {}
     limitations = [
-        f"捷運生活圈與距離由最近一筆實價登錄推定（該成交距物件約 {nearest['distance_m']} 公尺）"
+        f"捷運生活圈與距離由物件座標直接計算（距捷運站約 {station_distance_m:g} 公尺）"
     ]
     if payload.get("parking_type") and not parking_type:
         limitations.append(

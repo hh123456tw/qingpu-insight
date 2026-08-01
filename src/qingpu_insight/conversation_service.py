@@ -18,6 +18,7 @@ from qingpu_insight.conversation_repository import (
     ConversationRecord,
     MySQLConversationRepository,
 )
+from qingpu_insight.conversation_validation import GroundingValidationError
 from qingpu_insight.job_executor import LocalJobExecutor
 from qingpu_insight.jobs import (
     CONVERSATION_IMPORT,
@@ -25,7 +26,6 @@ from qingpu_insight.jobs import (
     CONVERSATION_REPLY,
     JobService,
 )
-from qingpu_insight.conversation_validation import GroundingValidationError
 from qingpu_insight.ollama_report_provider import ProviderError
 
 logger = logging.getLogger(__name__)

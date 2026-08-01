@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
+from urllib import parse as urllib_parse
 from urllib.parse import ParseResult, urlparse
 
 import pandas as pd
@@ -146,8 +147,8 @@ class MySQLMarketDataSource(MarketDataSource):
         return pymysql.connect(
             host=self._parsed_url.hostname or "localhost",
             port=self._parsed_url.port or 3306,
-            user=self._parsed_url.username or "",
-            password=self._parsed_url.password or "",
+            user=urllib_parse.unquote(self._parsed_url.username or ""),
+            password=urllib_parse.unquote(self._parsed_url.password or ""),
             database=self._parsed_url.path.lstrip("/"),
             charset="utf8mb4",
         )

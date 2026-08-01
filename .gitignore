@@ -23,4 +23,6 @@ outputs/valuations/
 /instance/*.log
 /outputs/m45-admin-acceptance/
 /outputs/automl/
+/outputs/m44-benchmark/
+/start-web.ps1
 .gstack/

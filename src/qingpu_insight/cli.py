@@ -141,8 +141,8 @@ def mysql_load(root: Path, input_path: str) -> int:
     connection = pymysql.connect(
         host=parsed.hostname or "localhost",
         port=parsed.port or 3306,
-        user=parsed.username or "",
-        password=parsed.password or "",
+        user=urllib.parse.unquote(parsed.username or ""),
+        password=urllib.parse.unquote(parsed.password or ""),
         database=parsed.path.lstrip("/"),
         charset="utf8mb4",
     )

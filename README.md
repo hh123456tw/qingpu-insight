@@ -127,6 +127,8 @@ py -3.11 -m venv .venv
 
 如果專案已有 `.venv`，不要用另一個 Python 版本直接覆寫。NumPy 顯示 `cp311`／`cp312` 不相容時，請關閉正在使用虛擬環境的程式，再以同一版 Python 乾淨重建。
 
+`web.py` 依賴 `python-dotenv`（提供 `from dotenv import load_dotenv`），已列入 `pyproject.toml` 的 dependencies；`pip install -e ".[dev]"` 會一併安裝。若在乾淨環境看到 `ModuleNotFoundError: No module named 'dotenv'`，代表沒有重新安裝依賴，請重新執行上述安裝指令。
+
 ### 3. 啟動既有本機成果
 
 如果 `data/processed/` 已有處理後資料，且 `artifacts/` 已有正式模型：
@@ -299,7 +301,7 @@ python -m venv .venv
 # 設定連線字串
 $env:QINGPU_DATABASE_URL = "mysql+pymysql://<user>:<url-encoded-password>@127.0.0.1:3306/qingpu_insight"
 
-# 僅建立 M1 市場表格；完整 M4 migration 請見後文
+# 僅建立 M1 市場表格；完整管理功能的 migration 順序請見「管理中心 → 全新 MySQL 建置順序」
 $env:MYSQL_PWD = Read-Host "MySQL password"
 Get-Content -Raw -Encoding UTF8 database/001_market_schema.sql |
   mysql -h 127.0.0.1 -u <user> qingpu_insight
@@ -497,6 +499,46 @@ AutoML 模式與引導調參為互斥選擇。AutoML 不自動發布任何模型
 | LLM | Gemini Key、模型清單與固定案例 benchmark |
 | 工作 | 背景工作進度、歷史、輸出與安全錯誤摘要 |
 | 診斷 | 目前環境、資料及服務狀態 |
+
+### 全新 MySQL 建置順序
+
+公開 clone 的 MySQL 是空的。要啟用完整管理功能，需依序套用以下 migration：
+
+```powershell
+$env:MYSQL_PWD = Read-Host "MySQL password"
+$mysql = "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe"
+
+# 建立資料庫（001 內含 CREATE DATABASE 與 USE，也可先手動建立）
+& $mysql -u root -e "CREATE DATABASE IF NOT EXISTS qingpu_insight CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+
+# 依序套用 migration
+$migrations = @(
+  "database/001_market_schema.sql",
+  "database/003_listing_intelligence_schema.sql",
+  "database/004_listing_range_fields.sql",
+  "database/004_m4_jobs_publishing_schema.sql",
+  "database/005_m43_health_backup_schema.sql",
+  "database/006_m44_reports_schema.sql",
+  "database/007_frontend_operations_schema.sql",
+  "database/008_conversation_assistant_schema.sql",
+  "database/009_conversation_fallback_metadata.sql"
+)
+foreach ($m in $migrations) {
+  Get-Content -Raw -Encoding UTF8 $m | & $mysql -u root qingpu_insight
+}
+Remove-Item Env:MYSQL_PWD
+```
+
+注意事項：
+
+- **跳過 `002_add_valuation_columns.sql`**：全新資料庫由 `001` 建立的 `market_transactions` 已含 `floor`、`total_floors`、`parking_type` 等欄位，再套用 `002` 會報 `Duplicate column`。`002` 只供舊 schema 升級使用。
+- **`004_listing_range_fields.sql`** 使用 stored procedure 以 `IF NOT EXISTS` 方式補欄位，可安全重複執行。
+- **`008`／`009`** 也會在 Web 啟動時由 `_ensure_conversation_schema` 自動套用；手動套用不會衝突（皆使用 `CREATE TABLE IF NOT EXISTS` 或 `INFORMATION_SCHEMA` 檢查）。
+- 套用後執行 `.\.venv\Scripts\qingpu-data.exe mysql-load` 載入市場資料，再啟動 `qingpu-web`。
+
+### 密碼 URL 編碼
+
+`QINGPU_DATABASE_URL` 的密碼含特殊字元（`@`、`:`、`/` 等）時必須做 URL 編碼（例如 `p@ssw0rd` → `p%40ssw0rd`）。程式端（`cli.py`、`market_repository.py`、`web.py`）都會以 `urllib.parse.unquote` 解碼。密碼不含特殊字元時可直接填寫。
 
 ### 完整管理功能的必要設定
 
