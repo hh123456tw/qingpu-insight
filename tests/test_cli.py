@@ -2446,3 +2446,25 @@ def test_listing_update_factory_uses_connection_factories_and_real_runner(
         "preparation_factory": factory,
     }
     assert service.preparation_runner is runner
+
+
+def test_command_line_invocation_loads_dotenv(tmp_path, monkeypatch) -> None:
+    loaded: list[Path] = []
+    monkeypatch.setattr(cli, "load_dotenv", lambda path, override: loaded.append(path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["qingpu-data", "--help"])
+    with pytest.raises(SystemExit):
+        cli.main()
+    assert loaded == [tmp_path / ".env"]
+
+    loaded.clear()
+    with pytest.raises(SystemExit):
+        cli.main(["--help"])
+    assert loaded == []
+
+
+def test_missing_database_url_error_names_the_variable(monkeypatch) -> None:
+    monkeypatch.delenv("QINGPU_DATABASE_URL", raising=False)
+    with pytest.raises(ValueError, match="QINGPU_DATABASE_URL is required") as caught:
+        cli.create_mysql_connection_factory()
+    assert "geocoding" not in str(caught.value)

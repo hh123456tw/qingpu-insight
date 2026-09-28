@@ -13,6 +13,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import pymysql
 import pytest
 from bs4 import BeautifulSoup
 from flask.testing import FlaskClient
@@ -2132,6 +2133,14 @@ def test_production_admin_fails_closed_without_strong_secret(
         lambda root: composition_calls.append(root),
     )
     monkeypatch.setenv("QINGPU_DATABASE_URL", "mysql://placeholder/db")
+
+    def refuse_connection():
+        # Fail fast instead of waiting on a DNS lookup for the placeholder host.
+        raise pymysql.err.OperationalError(2003, "database unavailable in test")
+
+    monkeypatch.setattr(
+        "qingpu_insight.cli.create_mysql_connection_factory", lambda: refuse_connection
+    )
     if secret is None:
         monkeypatch.delenv("QINGPU_SECRET_KEY", raising=False)
     else:

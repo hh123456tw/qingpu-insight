@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # listing_update.py imports msvcrt, so the suite only runs on Windows.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # The committed official model was pickled with Python 3.12.
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check src tests
+
+      - name: Python tests
+        run: python -m pytest -p no:cacheprovider
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: JS contract tests
+        shell: bash
+        run: for f in tests/js/*.cjs; do echo "$f"; node "$f"; done

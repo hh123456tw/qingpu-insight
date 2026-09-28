@@ -16,6 +16,7 @@ from typing import Any
 
 import pandas as pd
 import pymysql
+from dotenv import load_dotenv
 
 from qingpu_insight.addresses import build_doorplate_frame
 from qingpu_insight.backup_repository import MySQLBackupRepository
@@ -177,7 +178,7 @@ def create_listing_source(
 def create_mysql_connection_factory():
     database_url = os.environ.get("QINGPU_DATABASE_URL")
     if not database_url:
-        raise ValueError("QINGPU_DATABASE_URL is required for persistent geocoding")
+        raise ValueError("QINGPU_DATABASE_URL is required (set it in .env; see .env.example)")
     parsed = urllib.parse.urlparse(database_url)
     if parsed.scheme not in ("mysql", "mysql+pymysql"):
         raise ValueError(
@@ -1943,6 +1944,9 @@ def llm_smoke(root: Path, args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        # Real command-line runs read .env like the web app; callers passing argv stay isolated.
+        load_dotenv(Path.cwd() / ".env", override=False)
     args = build_parser().parse_args(argv)
     root = Path.cwd()
     if args.command in ("acquire", "run"):
