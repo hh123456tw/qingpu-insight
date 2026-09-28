@@ -60,6 +60,11 @@ from qingpu_insight.valuation_reporting import (
     write_model_card,
 )
 
+# Resale guided training compares HGB on a log target only. Pre-test rolling backtests put it
+# level with the identity target (mean MAPE 10.3% vs 10.4%), and it optimises the relative
+# error the release gate measures, so it degrades less when a project's price level shifts.
+RESALE_GUIDED_CANDIDATES = ("ridge", "random_forest", "hist_gradient_boosting_log")
+
 
 class ModelTrainingError(Exception):
     def __init__(self, error_code: str, safe_message: str) -> None:
@@ -563,6 +568,7 @@ class ModelTrainingService:
                 feature_columns=(enhanced_features if is_resale else BASE_FEATURE_COLUMNS),
                 use_recency_weights=is_resale,
                 baseline_months=12 if is_resale else 24,
+                candidate_names=RESALE_GUIDED_CANDIDATES if is_resale else None,
                 on_profile_start=lambda pn, _m=market: self._jobs.progress(
                     run_id,
                     {

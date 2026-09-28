@@ -659,6 +659,7 @@ def run_tuned_model_experiment(
     feature_columns: tuple[str, ...] = FEATURE_COLUMNS,
     use_recency_weights: bool = False,
     baseline_months: int = 24,
+    candidate_names: tuple[str, ...] | None = None,
     on_profile_start: Callable[[str], None] | None = None,
 ) -> TunedModelExperiment:
     baseline = RecentMedianBaseline(months=baseline_months)
@@ -688,6 +689,11 @@ def run_tuned_model_experiment(
         if "feature_columns" in estimator_parameters:
             estimator_kwargs["feature_columns"] = feature_columns
         estimators = candidate_estimators(**estimator_kwargs)
+        if candidate_names is not None:
+            unknown = set(candidate_names) - set(estimators)
+            if unknown:
+                raise ValueError(f"unknown candidate: {sorted(unknown)}")
+            estimators = {name: estimators[name] for name in candidate_names}
 
         for model_name, est in estimators.items():
             try:

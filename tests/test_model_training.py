@@ -660,6 +660,49 @@ def test_tuned_model_experiment_selects_on_calibration(monkeypatch) -> None:
     assert set(experiment.final_test_results) == {"baseline", "ridge"}
 
 
+def test_tuned_model_candidate_names_filters_estimators(monkeypatch) -> None:
+    n = 800
+    base = pd.Timestamp("2022-01-01")
+    dates = [base + pd.DateOffset(days=int(i * 1095 / n)) for i in range(n)]
+    frame = pd.DataFrame({
+        "transaction_date": dates,
+        "station_code": ["A17"] * n,
+        "building_type": ["住宅大樓"] * n,
+        "building_area_ping": 35.0,
+        "target_unit_price_twd": [500_000.0] * n,
+        "transaction_key": [f"T{i}" for i in range(n)],
+        "road_key": [f"R{i % 10}" for i in range(n)],
+    })
+    split = split_by_time(frame)
+
+    def mock_candidate_estimators(seed=42, profile=None):
+        return {
+            "ridge": ConstantEstimator(700_000.0),
+            "hist_gradient_boosting": ConstantEstimator(500_000.0),
+            "hist_gradient_boosting_log": ConstantEstimator(510_000.0),
+        }
+
+    monkeypatch.setattr(model_training, "candidate_estimators", mock_candidate_estimators)
+
+    experiment = run_tuned_model_experiment(
+        split,
+        profiles=(PRESET_PROFILES[0],),
+        feature_columns=("building_area_ping",),
+        candidate_names=("ridge", "hist_gradient_boosting_log"),
+    )
+    evaluated = {c.model_name for c in experiment.profile_results[0].candidates}
+    assert evaluated == {"ridge", "hist_gradient_boosting_log"}
+    assert experiment.selected_model == "hist_gradient_boosting_log"
+
+    with pytest.raises(ValueError, match="unknown candidate"):
+        run_tuned_model_experiment(
+            split,
+            profiles=(PRESET_PROFILES[0],),
+            feature_columns=("building_area_ping",),
+            candidate_names=("xgboost",),
+        )
+
+
 def test_tuned_model_tie_breaking(monkeypatch) -> None:
     n = 800
     np.random.seed(42)
