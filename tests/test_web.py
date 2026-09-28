@@ -268,6 +268,9 @@ def test_conversation_valuation_maps_591_elevator_building_type(
         ("8.516坪，平面式，已含售金內", "坡道平面", 8.516),
         ("10. 32坪，平面式，已含售金內", "坡道平面", 10.32),
         ("16坪，機械式，已含售金內", "坡道機械", 16.0),
+        ("B2 16坪，平面式", "坡道平面", 16.0),
+        ("B1 8.5坪，機械式", "坡道機械", 8.5),
+        ("車位 2 10坪，平面式", "坡道平面", 10.0),
         ("坡道平面", "", 0.0),
         ("無車位", "", 0.0),
         ("", "", 0.0),
@@ -2271,9 +2274,11 @@ def test_ops_backups_rejects_invalid_limit(ops_app) -> None:
     assert response.get_json()["error"]["fields"] == {"limit": "integer_1_to_100"}
 
 
-def test_ops_backups_post_returns_503_without_admin(ops_app) -> None:
-    response = ops_app.post("/api/ops/backups")
-    assert response.status_code == 503
+def test_ops_backups_is_read_only(ops_app) -> None:
+    # Mutations live under the guarded /api/admin/backups routes only.
+    assert ops_app.post("/api/ops/backups").status_code == 405
+    restore_drill = "/api/ops/backups/00000000-0000-4000-8000-000000000000/restore-drills"
+    assert ops_app.post(restore_drill).status_code in (404, 405)
 
 
 def test_ops_restore_returns_404(ops_app) -> None:

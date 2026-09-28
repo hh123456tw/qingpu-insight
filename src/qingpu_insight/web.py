@@ -794,8 +794,10 @@ _CONVERSATION_LAYOUT_RE = re.compile(
     r"(?P<bathrooms>\d+)\s*衛"
 )
 _CONVERSATION_FLOOR_RE = re.compile(r"(?P<floor>\d+)\s*[Ff]")
+# 591 sometimes renders 8.516坪 as "8.5 16坪" or "10. 32坪"; only a number that already
+# has a decimal point may absorb a following space-split digit run, so "B2 16坪" stays 16.
 _CONVERSATION_PARKING_AREA_RE = re.compile(
-    r"(?P<area>\d+(?:\s*\.\s*\d+)?)\s*坪"
+    r"(?P<area>\d+\.\s*\d+(?:\s+\d+)?|\d+)\s*坪"
 )
 
 
@@ -825,11 +827,10 @@ def _conversation_parking(
     value = str(raw_parking or "").strip()
     if not value or "無車位" in value:
         return "", 0
-    normalized = re.sub(r"\s+", "", value)
-    area_match = _CONVERSATION_PARKING_AREA_RE.search(normalized)
+    area_match = _CONVERSATION_PARKING_AREA_RE.search(value)
     if area_match is None:
         return "", 0
-    area = float(area_match.group("area"))
+    area = float(re.sub(r"\s+", "", area_match.group("area")))
     if area <= 0:
         return "", 0
     if "機械" in value:
@@ -1966,63 +1967,6 @@ def create_app(
                 "limit": limit,
             }
         )
-
-    @app.post("/api/ops/backups")
-    def ops_backups_post():
-        rt = app.extensions.get("qingpu_admin_runtime")
-        if rt is None or rt.backup_service is None or rt.executor is None:
-            return jsonify(
-                {"error": {"code": "ops_unavailable", "message": "維運功能未啟用。"}}
-            ), 503
-        try:
-            submission = rt.backup_service.submit_create()
-        except Exception:
-            return jsonify(
-                {"error": {"code": "ops_unavailable", "message": "維運功能暫時無法使用。"}}
-            ), 503
-        if submission.created:
-            try:
-                rt.executor.submit(
-                    submission.run.run_id,
-                    lambda: rt.backup_service.execute_create(submission.run.run_id),
-                )
-            except Exception:
-                return jsonify(
-                    {"error": {"code": "enqueue_failed", "message": "工作無法啟動。"}}
-                ), 503
-        body = _public_job(submission.run)
-        body["created"] = submission.created
-        return jsonify(body), 202 if submission.created else 200
-
-    @app.post("/api/ops/backups/<backup_id>/restore-drills")
-    def ops_restore_drill(backup_id: str):
-        rt = app.extensions.get("qingpu_admin_runtime")
-        if rt is None or rt.backup_service is None or rt.executor is None:
-            return jsonify(
-                {"error": {"code": "ops_unavailable", "message": "維運功能未啟用。"}}
-            ), 503
-        try:
-            submission = rt.backup_service.submit_restore_drill(backup_id)
-        except Exception:
-            return jsonify(
-                {"error": {"code": "ops_unavailable", "message": "維運功能暫時無法使用。"}}
-            ), 503
-        if submission.created:
-            try:
-                rt.executor.submit(
-                    submission.run.run_id,
-                    lambda: rt.backup_service.execute_restore_drill(
-                        submission.run.run_id,
-                        backup_id,
-                    ),
-                )
-            except Exception:
-                return jsonify(
-                    {"error": {"code": "enqueue_failed", "message": "工作無法啟動。"}}
-                ), 503
-        body = _public_job(submission.run)
-        body["created"] = submission.created
-        return jsonify(body), 202 if submission.created else 200
 
     @app.route("/api/ops/restore", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
     def ops_restore():
