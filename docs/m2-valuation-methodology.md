@@ -2,7 +2,7 @@
 
 ## 資料來源
 
-僅使用內政部不動產交易實價登錄官方成交資料。不爬取售屋網站，不使用任何 591、樂居、永慶房仲網等非官方資料來源。
+模型訓練與評估僅使用內政部不動產交易實價登錄官方成交資料，且只使用中古屋（`resale`）；預售屋資料保留在底層資料集，但不進入訓練。591 等刊登資料只在估價後拿來與開價比較，不會成為訓練標籤。
 
 ## 地理範圍
 
@@ -15,6 +15,8 @@
 - 當交易記錄含有效車位價格與車位面積，且車位面積小於建物面積時：總價減車位價，除以建物面積減車位面積（`parking_split`）
 - 無法可靠拆分時：使用官方每平方公尺單價換算值（`official_unit_price`）
 
+車位不是模型特徵。估價時，車位價格由同一個 artifact 內的車位價格政策（`parking_price_policy`）另外計算：依車位類型取訓練資料中位價，該類型樣本不足 20 筆時退回全體中位價。估計總價 = 房屋本體估值 + 車位估值。
+
 ## 時間切割
 
 | 分區 | 定義 |
@@ -23,18 +25,22 @@
 | 校準集 | 測試集起始日前 6 個月 |
 | 測試集 | 資料最末日往回 12 個月 |
 
-時間順序嚴格保持，**不打散時間序列**。
+時間順序嚴格保持，**不打散時間序列**。三個分區各自至少 100 筆，否則訓練失敗。
 
 ## 候選模型
 
-所有候選模型的超參數在 M2 中固定，不進行超參數搜尋（hyperparameter tuning）：
+中古屋引導訓練比較三種候選（`model_training_service.RESALE_GUIDED_CANDIDATES`），並與基準線比較：
 
 | 模型 | 關鍵參數 |
 |------|----------|
-| 近期中位數基準（Baseline） | 訓練截止日前 48 個月群組 (`station_code`, `building_type`) 中位數；群組少於 20 筆退到站點中位數；再少退到全體中位數 |
+| 近期中位數基準（Baseline） | 訓練集最後 **12 個月**內，群組 (`station_code`, `building_type`) 中位數；群組少於 20 筆退到站點中位數；再少退到全體中位數 |
 | Ridge | alpha=10.0 |
-| Random Forest | n_estimators=400, min_samples_leaf=5, max_features=0.8 |
-| HistGradientBoosting | learning_rate=0.06, max_iter=350, max_leaf_nodes=31, l2_regularization=1.0 |
+| Random Forest | min_samples_leaf=5, max_features=0.8；樹數由 profile 決定 |
+| HistGradientBoosting（對數價格） | max_leaf_nodes=31, l2_regularization=1.0；學習率與迭代次數由 profile 決定 |
+
+原始目標的 HistGradientBoosting 仍存在於程式中，但 2026-09 起不再列入中古屋引導訓練（原因見[問題紀錄 §18](project-issue-log.md)）；AutoML 模式仍會在 Random Forest 與原始目標 HGB 的參數空間中搜尋。
+
+超參數有三種調整方式：三組內建 profile（下節）、一組選用的自訂 profile，以及 Optuna AutoML 模式（見「AutoML 自動探索」）。基準線只作比較，**永遠不會被發布**。
 
 ## 引導調參設定（Schema v3）
 
@@ -49,7 +55,7 @@
 | 平衡（balanced） | 0.06 | 350 | 400 | 48 個月 |
 | 精細（thorough） | 0.04 | 600 | 700 | 48 個月 |
 
-三組內建 profile 固定鎖定參數值；若選擇自訂 profile，則使用管理介面送出的半衰期。預售屋不適用近期加權。
+三組內建 profile 固定鎖定參數值；若選擇自訂 profile，則使用管理介面送出的半衰期。
 
 ### 自訂 Profile
 
@@ -60,19 +66,23 @@
 | HGB 學習率 | 0.01 ~ 0.20 |
 | HGB 迭代次數 | 100 ~ 1000 |
 | RF 決策樹數量 | 100 ~ 1000 |
-| 近期權重半衰期（僅中古屋） | 12 ~ 84 個月 |
+| 近期權重半衰期 | 12 ~ 84 個月 |
 
 自訂 profile 僅在當次訓練有效，不會影響下一組鎖定 profile。
 
 ## 校準集鎖定與最終測試隔離
 
-1. 所有 profile（含自訂）各自訓練 Ridge、Random Forest、HistGradientBoosting 與 HGB（對數價格）。
-2. 在校準集上比較各 profile 內的最佳模型，選出一個候選模型。
+1. 所有 profile（含自訂）各自訓練 Ridge、Random Forest 與 HGB（對數價格）。
+2. 在校準集上比較所有「profile × 模型」組合，依整體 MAE、MAPE、RMSE 由低至高選出一個候選模型。
 3. 鎖定後，**測試集只比較該候選與 Baseline**。
 4. 測試結果不得用來改選另一個候選模型或 profile。
 5. 若多組 profile 表現相同，以 profile 順序（quick → balanced → thorough → custom）決定。
 
-此設計確保最終測試指標是未被污染的真實泛化評估。
+此設計確保測試集不參與模型與 profile 的選擇。但要注意：2026-09 把 HGB 改為只保留對數目標的決策，是在看過 final test 之後才做的（依據是 final test 之前的滾動回測），因此目前正式模型的 final test 指標應視為略偏樂觀，詳見[問題紀錄 §18](project-issue-log.md)。
+
+### AutoML 自動探索
+
+管理中心也可改用 AutoML 模式（與引導調參互斥）：以 Optuna TPE 取樣器在 Random Forest 與 HistGradientBoosting 的參數空間搜尋，預算分為快速（5 分鐘／最多 12 組）、標準（15 分鐘／35 組）、深度（30 分鐘／70 組）。排行榜只反映校準集表現；入選的候選仍需通過下方完整發布閘門，並由管理者手動發布。
 
 HGB（對數價格）以 `log(y)` 擬合、以 `exp()` 還原預測，所有 MAE、MAPE、RMSE 與畫面價格仍是原始新台幣／坪。它只是一個候選，不會因名稱較複雜而優先。
 
@@ -101,9 +111,12 @@ Schema v2（及更早）的訓練不會有調參快照；頁面上會標示「�
 
 ## 特徵工程
 
-- `NUMERIC_FEATURES`：station_distance_m, building_area_ping, bedrooms, living_rooms, bathrooms, building_age_years, floor, total_floors, floor_ratio, parking_area_ping, transaction_year, transaction_month
-- `CATEGORICAL_FEATURES`：station_code, building_type, parking_type
-- 中位數填補遺漏值 + 標準化（數值特徵）
+中古屋 v3 特徵契約共 21 欄（`model_features.FEATURE_COLUMNS`）：
+
+- 數值特徵：station_distance_m, building_area_ping, bedrooms, living_rooms, bathrooms, building_age_years, floor, total_floors, floor_ratio, transaction_year, transaction_month, transaction_month_index, twd97_x, twd97_y
+- 類別特徵：station_code, building_type, station_building_type, building_age_band, area_band, floor_band, location_known
+- 不含 `parking_type`、`parking_area_ping`：車位由車位價格政策另外計價（見「目標變數」），發布檢查 `parking_price_consistency` 會拒絕把車位欄位當特徵的候選
+- 中位數填補遺漏值（附缺值指示欄）+ 標準化（數值特徵）
 - 眾數填補 + OneHot encoding（類別特徵）
 - 樓層為中文轉數值（如「十層」→ 10、「地下二層」→ -2），再計算 floor_ratio
 
@@ -115,22 +128,31 @@ Schema v2（及更早）的訓練不會有調參快照；頁面上會標示「�
 
 ## Release Gate
 
-所有候選模型只在校準集比較並鎖定一個候選。鎖定後，測試集只比較該候選與 Baseline；
-測試結果不得用來改選另一個候選。候選必須在校準與最終測試兩階段都通過 release gate，
-系統判定才可為 recommended。
+所有候選模型只在校準集比較並鎖定一個候選。鎖定後，測試集只比較該候選與 Baseline（最近 12 個月中位數）；
+測試結果不得用來改選另一個候選。發布閘門以 **final test** 指標與三次年度回測計算，
+結果寫入 manifest 的 `release_checks`，七項全部為 `true` 時才是 `recommended`：
 
-正式模型須同時滿足：
-1. **整體精確度**：時間外 MAE 不超過基準的 98%（至少改善 2%）
-2. **各站穩定性**：A17、A18、A19 各站的 MAPE 皆不超過基準對應站的 110%
+| 檢查 | 條件 |
+|------|------|
+| `overall_mae_improved` | final test 整體 MAE ≤ 基準 MAE × 0.98（至少改善 2%） |
+| `stations_within_limit` | A17、A18、A19 各站 MAPE ≤ 基準對應站 × 1.10 |
+| `a18_improved` | A18 MAPE **嚴格低於**基準 |
+| `backtests_passed` | 必須產生三次年度回測，且至少兩次候選整體 MAE 低於基準 |
+| `backtest_stations_within_limit` | 三次年度回測中至少兩次各站 MAPE ≤ 基準 × 1.10 |
+| `candidate_fresh` | `data_max_date` 不早於最新官方資料日期前 180 天 |
+| `parking_price_consistency` | 模型特徵不含車位欄位，且帶有有效的車位價格政策 |
 
-若無候選模型同時通過兩項門檻，發布基準模型。
+年度回測以資料最後月份的月底為第一個截止日，再逐年往前推兩次，每次用相同的時間切割重新訓練選定的模型。
+1–6 由 `model_analysis.evaluate_release_checks` 計算，7 由 `model_training_service` 補上。
+
+若候選未通過，**不會發布任何模型**（基準線也不會被發布），正式模型維持原版本；管理端只允許發布 `recommended` 的候選。
 
 ## 分群誤差指標
 
 | 指標 | 說明 |
 |------|------|
 | MAE | 平均絕對誤差（新台幣元/坪）。訓練結果以萬元/坪顯示 |
-| MAPE | 平均絕對百分比誤差（百分比）。分母下限 100,000 元/坪 |
+| MAPE | 平均絕對百分比誤差（百分比）。分母為 `max(\|實際單價\|, 100,000)`（`model_training._compute_metrics`）；市場清理已排除官方單價低於 10 萬／坪的交易，因此這個下限實際上不影響結果 |
 | RMSE | 均方根誤差 |
 | R² | 決定係數 |
 | count | 測試樣本筆數 |
@@ -144,9 +166,9 @@ Schema v2（及更早）的訓練不會有調參快照；頁面上會標示「�
 
 系統會為每個訓練結果提供一份摘要，按此順序閱讀：
 
-1. **發布門檻**：先看是否通過發布門檻。通過表示候選模型在校準和測試兩階段都滿足條件。
-2. **MAPE 與 MAE**：確認整體預測誤差在可接受範圍。MAPE 低於 10% 為良好，MAE 對照市場行情判斷。
-3. **站點與年度退化檢查**：展開完整指標，確認各站（A17/A18/A19）的 MAPE 沒有比基準模型對應站超過 110%。若某站退化但整體過關，摘要會顯示警告。
+1. **發布門檻**：先看是否通過發布門檻（上方七項檢查）。
+2. **MAPE 與 MAE**：和同一測試期的基準線比較，而不是和固定數字比較。MAPE 的絕對水準高度取決於測試期是否有新建案等結構變化：目前正式模型在一般期間的滾動回測 MAPE 約 10%，但 final test 因一個沒有價格歷史的新建案而為 17.75%（基準線 25.0%）。
+3. **站點與年度退化檢查**：展開完整指標，確認各站（A17/A18/A19）的 MAPE 沒有比基準模型對應站超過 110%，並查看三次年度回測的結果。
 
 ### MAE Baseline Delta
 
@@ -154,15 +176,15 @@ Schema v2（及更早）的訓練不會有調參快照；頁面上會標示「�
 
 ### 三張指標卡
 
-- **MAPE**（平均絕對百分比誤差）：越低越好。低於 10% 通常表示模型可靠。
+- **MAPE**（平均絕對百分比誤差）：越低越好；請與同期基準線的 MAPE 一起判讀。
 - **MAE**（平均絕對誤差，萬元／坪）：反映平均每坪的估價偏差金額。
-- **測試覆蓋率**：目標 90%，代表估價區間涵蓋大部分實際成交價。
+- **測試覆蓋率**：目標 90%，代表估價區間涵蓋大部分實際成交價。目前正式模型 final test 實際只有 84.5%，區間偏窄。
 
 ## 估價區間
 
 使用校準集絕對殘差的 90 百分位數作為區間半徑：
 - 區間 = [max(0, 預測值 - 半徑), 預測值 + 半徑]
-- 目標覆蓋率 90%
+- 目標覆蓋率 90%；正式模型 `870c95b0` 在 final test 的實際覆蓋率為 84.5%（平均寬度 21.0 萬／坪），遇到訓練資料外的新建案時會低估不確定性
 
 ## 相似成交搜尋
 

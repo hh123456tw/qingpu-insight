@@ -1985,6 +1985,7 @@ def _create_runtime_app(root: Path) -> Flask:
 
 
 def main() -> None:
+    load_dotenv(Path.cwd() / ".env", override=False)
     port = int(os.environ.get("QINGPU_PORT", "5000"))
     debug = os.environ.get("QINGPU_DEBUG", "") == "1"
     app = _create_runtime_app(Path.cwd())

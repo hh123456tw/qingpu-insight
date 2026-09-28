@@ -4881,3 +4881,23 @@ class _StubBenchmarkRunner:
             "p95_latency_ms": 300.0,
             "reports": {"json": "benchmark_results.json", "markdown": "benchmark_results.md"},
         }
+
+
+def test_main_reads_port_and_debug_from_dotenv(tmp_path, monkeypatch) -> None:
+    import qingpu_insight.web as web
+
+    (tmp_path / ".env").write_text("QINGPU_PORT=5123\nQINGPU_DEBUG=1\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("QINGPU_PORT", raising=False)
+    monkeypatch.delenv("QINGPU_DEBUG", raising=False)
+    captured: dict[str, object] = {}
+
+    class FakeApp:
+        extensions = {"qingpu_admin_shutdown": lambda: None}
+
+        def run(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(web, "_create_runtime_app", lambda root: FakeApp())
+    web.main()
+    assert captured == {"host": "127.0.0.1", "port": 5123, "debug": True}

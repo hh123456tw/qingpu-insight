@@ -262,7 +262,7 @@ legacy/unprovenanced，禁止作為發布候選；後續新訓練會記錄真實
 
 ### 結果
 
-候選 `e5a95e0b`（5,280 筆乾淨資料，thorough profile，HGB 對數目標）通過全部發布檢查：
+候選 `9d0c8342`（5,280 筆乾淨資料，thorough profile，HGB 對數目標；以 commit `03e48db` 訓練）通過全部發布檢查，並發布為正式版本 `870c95b0`：
 
 | Final test（2025-06-14～2026-06-13，n=624） | MAE（元／坪） | MAPE | R² |
 |---|---|---|---|

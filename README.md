@@ -8,6 +8,26 @@
 
 > **公開產品範圍：只支援中古屋（`resale`）。** 預售屋（`presale`）底層官方資料仍保留作為資料沿革與研究素材，但不進入公開市場指標、估價、模型訓練、候選／正式模型發布或 591 物件入口。既有預售屋正式 artifact 與 MySQL 歷史工作／對話資料仍保留；目前工作區沒有 legacy 本機 presale candidate／report 目錄，因此不宣稱保存不存在的本機目錄。
 
+## 成果與限制
+
+**做什麼**：輸入 A17～A19 生活圈中古屋的站點、坪數、屋齡、樓層、格局與座標，回傳每坪單價與總價估值、90% 區間、可信度與相似成交；也能貼上 591 中古屋網址，讓 LLM 依據已驗證的證據（fact ID）回答問題。
+
+**目前正式模型**：版本 `870c95b0`，HistGradientBoosting（對數價格目標），以 5,280 筆清理後的中古屋成交訓練。以下皆為 final test（2025-06-14～2026-06-13，n=624，模型從未見過的最後 12 個月）：
+
+| 指標 | 正式模型 | 近期中位數基準線 |
+|------|----------|------------------|
+| MAE（元／坪） | 55,665 | 75,840 |
+| MAPE | 17.75% | 25.0% |
+| R² | 0.634 | 0.339 |
+| A17／A18／A19 MAPE | 10.2%／22.0%／11.6% | 26.6%／28.2%／17.9% |
+
+- final test 之前的 6 個半年滾動回測：模型平均 MAPE 約 10.3%，基準線 18.4%。
+- 90% 估價區間在 final test 的實際覆蓋率只有 84.5%（平均寬度 21.0 萬／坪），**區間偏窄、低於名目 90%**。
+
+**主要限制**：final test 的誤差大多來自 A18 站區（大園區水源南路）一個 2025 年完工、訓練資料中完全沒有價格歷史的新華廈建案；這類「沒有成交紀錄的新建案」是目前模型最弱的地方。模型設定（改用對數目標）是在看過 final test 之後才決定的，所以上表數字應視為略偏樂觀。
+
+**資料污染案例**：舊正式模型 `57cf2ba9` 的 MAE 4.24 萬／坪、R² 0.775 來自預售移轉混入中古屋的污染資料，並非真實能力。追查過程、重現方式與修正決策見 [問題紀錄 §18](docs/project-issue-log.md#18-正式模型指標來自污染前資料改用對數目標重訓)（前因見 §16）。
+
 ## 專案定位
 
 - **AIPE04 期中專題**：展示資料工程、機器學習、MySQL、Web 與生成式 AI 的整合。
@@ -112,9 +132,17 @@ flowchart LR
 - Windows 10／11
 - **Python 3.11**
 - Chrome；更新 591 刊登或分析 591 詳細頁時需要
-- MySQL 8；只有管理工作、版本發布、備份與完整報告流程需要
+- MySQL 8；選用。591 物件助理、模型訓練、管理中心的寫入／發布、備份與完整報告流程需要
+- Gemini API Key；選用。只有選擇 Google 模型回答或 Gemini 報告時需要，未設定時可用 Rule 或本機 Ollama
 
-公開儲存庫不包含資料集、模型、備份、密鑰、Cookie 或 591 原始 HTML。新 clone 可以檢查程式與執行測試，但必須先建立本機資料與模型，才能看到完整產品內容。
+公開儲存庫**不包含**資料集、備份、密鑰、Cookie 或 591 原始 HTML，但**包含目前的正式中古屋模型**（`artifacts/official/resale/current.json` 指向 `versions/870c95b0/`，另保留上一版 `57cf2ba9` 作為回滾目標）。因此新 clone 不必訓練模型，只要先下載官方資料並建立市場資料集，就能使用市場分析與 AI 條件估價。
+
+| 功能 | 只有 Parquet（不設定 MySQL） | 需要 MySQL | 需要 Gemini |
+|------|:---:|:---:|:---:|
+| 市場分析、成交地圖、AI 條件估價 | ✓ | | |
+| 591 物件助理（對話） | | ✓ | 選用（否則用 Rule／Ollama） |
+| 模型訓練（`model-train`）、發布、回滾、管理中心寫入操作 | | ✓（另需強度足夠的 `QINGPU_SECRET_KEY`） | |
+| 買方報告、健康檢查、備份 | | ✓ | 選用 |
 
 ### 2. 建立環境
 
@@ -123,30 +151,40 @@ git clone https://github.com/hh123456tw/qingpu-insight.git
 cd qingpu-insight
 py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+Copy-Item .env.example .env   # 選用：依需要填入 .env，未填的功能會自動停用
 ```
 
 如果專案已有 `.venv`，不要用另一個 Python 版本直接覆寫。NumPy 顯示 `cp311`／`cp312` 不相容時，請關閉正在使用虛擬環境的程式，再以同一版 Python 乾淨重建。
 
 `web.py` 依賴 `python-dotenv`（提供 `from dotenv import load_dotenv`），已列入 `pyproject.toml` 的 dependencies；`pip install -e ".[dev]"` 會一併安裝。若在乾淨環境看到 `ModuleNotFoundError: No module named 'dotenv'`，代表沒有重新安裝依賴，請重新執行上述安裝指令。
 
-### 3. 啟動既有本機成果
+### 3. 建立市場資料（第一次必做）
 
-如果 `data/processed/` 已有處理後資料，且 `artifacts/` 已有正式模型：
+公開 clone 沒有 `data/`。依序執行以下兩個指令；`run` 的下載階段需要網路（內政部實價登錄與桃園門牌），`market-build` 可離線執行：
+
+```powershell
+# 下載 110S3～115S2 官方成交資料與桃園門牌，並完成地址定位（= acquire + analyse）
+.\.venv\Scripts\qingpu-data.exe run --start-season 110S3 --end-season 115S2
+
+# 清理成市場資料集 data/processed/market_transactions.parquet（首頁與估價讀取的就是這個檔案）
+.\.venv\Scripts\qingpu-data.exe market-build
+```
+
+`run` 只做下載與定位，**不會**自動執行 `market-build`；少了第二步，首頁會沒有資料。若 `analyse` 判定 `NO-GO` 會以非零狀態結束，可加上 `--allow-no-go` 單獨重跑 `qingpu-data.exe analyse`。
+
+### 4. 啟動 Web
 
 ```powershell
 .\.venv\Scripts\qingpu-web.exe
 ```
 
-開啟 <http://127.0.0.1:5000/>。未設定 MySQL 時，Web 會使用本機 Parquet 相容路徑；需要寫入或發布的管理功能會保持停用並說明原因。
+開啟 <http://127.0.0.1:5000/>。未設定 `QINGPU_DATABASE_URL` 時，Web 讀取本機 Parquet，並使用 Git 內附的正式模型估價；需要 MySQL 的功能（見上表）會保持停用並說明原因。要啟用完整管理功能，請見「管理中心 → 全新 MySQL 建置順序」。
 
 時間資料在後端與資料庫統一以 UTC 保存；首頁、管理中心與助理介面統一以台北時區 `Asia/Taipei`（UTC+8）顯示。
 
-### 4. 從官方資料建立成果
-
-第一次執行或公開 clone 尚無本機資料時：
+### 5. 驗證（選用）
 
 ```powershell
-.\.venv\Scripts\qingpu-data.exe run --start-season 110S3 --end-season 115S2
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\python.exe -m ruff check .
 .\.venv\Scripts\qingpu-data.exe llm-smoke --provider rule --model rule `
@@ -316,9 +354,20 @@ Remove-Item Env:MYSQL_PWD
 
 ### 環境變數
 
-| 變數 | 用途 | 預設值 |
-|------|------|--------|
-| `QINGPU_DATABASE_URL` | MySQL 連線字串（mysql+pymysql://user:pass@host:port/db） | —（無，未設定時使用 Parquet） |
+所有設定都是選用的；`qingpu-web` 與 `qingpu-data` 啟動時會讀取專案根目錄的 `.env`（不覆寫已存在的環境變數）。範本與說明見 [`.env.example`](.env.example)。
+
+| 變數 | 用途 | 未設定時 |
+|------|------|----------|
+| `QINGPU_DATABASE_URL` | MySQL 連線字串，scheme 須為 `mysql+pymysql://` 或 `mysql://` | 市場資料改讀 Parquet；591 物件助理、模型訓練、管理寫入、報告、備份停用 |
+| `QINGPU_SECRET_KEY` | Flask session 密鑰；管理中心寫入功能另要求至少 32 字元並通過強度檢查 | 每次啟動隨機產生；管理中心寫入功能停用 |
+| `QINGPU_GEMINI_API_KEY` | Google Gemini API Key（也可由管理中心存入 `instance/secrets.env`） | 無法使用 Google 模型（可改選本機 Ollama 或 Rule） |
+| `QINGPU_GEMINI_MODEL` | Gemini 報告與 CLI benchmark 使用的模型 ID | 報告不註冊 Gemini provider |
+| `QINGPU_OLLAMA_BASE_URL` | 本機 Ollama 位址 | `http://127.0.0.1:11434` |
+| `QINGPU_OLLAMA_MODEL` | 報告使用的 Ollama 模型（例如 `gemma4:e2b`） | 報告不註冊 Ollama provider |
+| `QINGPU_PORT` | Web 埠號 | `5000` |
+| `QINGPU_DEBUG` | 設為 `1` 開啟 Flask debug | 關閉 |
+
+所有變數都可以寫在 `.env`；shell 環境變數優先於 `.env`。
 
 ### 生成檔案說明
 
@@ -428,17 +477,17 @@ AutoML 模式與引導調參為互斥選擇。AutoML 不自動發布任何模型
 - 日期語義：`data_max_date` 是訓練資料最後一筆交易的日期，也是模型「知道」的最後日期
 
 **候選模型家族**
-現有候選模型為 `Ridge`、`RandomForest`、`HistGradientBoosting`、`HistGradientBoosting（對數價格）` 及 `RecentMedianBaseline`（僅作為基準線，不作為正式模型發布）。中古屋 v3 特徵契約加入 TWD97 空間座標；對數價格模型只在時間外驗證與年度回測較佳時入選。**XGBoost 被刻意排除**：本專案的資料規模（數千至一萬多筆）不需要 XGBoost 的分散式加速優勢，且 scikit-learn HGB 能減少相依套件與部署複雜度。
+中古屋引導訓練比較 `Ridge`、`RandomForest` 與 `HistGradientBoosting（對數價格）` 三種候選（`RESALE_GUIDED_CANDIDATES`），另以 `RecentMedianBaseline`（最近 12 個月的站點×建物類型中位數）作為基準線；基準線只用來比較，不會被發布。HGB 只保留對數目標版本的原因見[問題紀錄 §18](docs/project-issue-log.md)。AutoML 模式另在 Random Forest 與（原始目標）HistGradientBoosting 的參數空間中搜尋。中古屋 v3 特徵契約加入 TWD97 空間座標。**XGBoost 被刻意排除**：本專案的資料規模（數千至一萬多筆）不需要 XGBoost 的分散式加速優勢，且 scikit-learn HGB 能減少相依套件與部署複雜度。
 
 **衍生特徵**
-在中古屋基本特徵（車站距離、坪數、類型、樓層、車位等 15 個欄位）之上，新增五個衍生特徵：
+在中古屋 13 個基本特徵（站點、車站距離、坪數、建物類型、房／廳／衛、屋齡、樓層、總樓層、樓層比、交易年、交易月）之上，新增五個衍生特徵與三個空間特徵（`twd97_x`、`twd97_y`、`location_known`），合計 21 欄。**車位不是模型特徵**：模型只估算房屋本體（扣除車位後）的每坪單價，車位另由同一 artifact 內的車位價格政策（`parking_price_policy`，依車位類型取訓練資料中位價，樣本不足 20 筆時退回全體中位價）計價，發布檢查 `parking_price_consistency` 會確認模型特徵不含車位欄位。五個衍生特徵：
 - `transaction_month_index`：交易年月數值，捕獲長期時間趨勢
 - `station_building_type`：車站與建物類型交互項
 - `building_age_band`：屋齡分群（0–5、5–10、10–20、20+ 年）
 - `area_band`：坪數分群（small ≤ 20、standard > 20 且 ≤ 50、large > 50 坪）
 - `floor_band`：樓層比三分群（low、middle、high）
 
-中古屋訓練使用所選 profile 的**近期交易半衰期權重**（內建預設為 48 個月），愈近期的交易權重愈高，權重下限為 0.10。
+中古屋訓練使用所選 profile 的**近期交易半衰期權重**（三組內建 profile 皆為 48 個月，自訂 profile 可設 12～84 個月），愈近期的交易權重愈高，權重下限為 0.10。
 
 **嚴格時間切割**
 所有評估使用嚴格的時間順序切割：
@@ -449,18 +498,19 @@ AutoML 模式與引導調參為互斥選擇。AutoML 不自動發布任何模型
 三組各自至少 100 筆交易，否則訓練失敗。
 
 **三次年度回溯測試**
-中古屋模型自動執行三次年度回溯測試：以最後資料日期為基準，逐年往過去推移三個不同的截止日期，每次重新訓練並驗證候選模型是否能通過發布閘門。每次回溯記錄 `passed`（候選是否勝過基準線）與 `stations_within_limit`（各站 MAPE 是否在基準線 110% 以內）。
+中古屋模型自動執行三次年度回溯測試：以最後資料日期所在月份的月底為第一個截止日，再逐年往前推兩次，每次以相同的時間切割重新訓練選定的模型。每次回溯記錄 `passed`（候選整體 MAE 是否低於 12 個月基準線）與 `stations_within_limit`（A17／A18／A19 各站 MAPE 是否都 ≤ 基準線 × 1.10）。
 
 **發布閘門（Release Gate）**
-候選模型要獲得 `recommended` 狀態，必須同時滿足以下六項條件：
-1. **MAE 改善 ≥ 2%**：整體 MAE ≤ 基準線 MAE × 0.98
-2. **各站 MAPE < 10% 倒退**：所有已發布車站的 MAPE ≤ 基準線 × 1.10
-3. **A18 嚴格不倒退**：A18 車站的 MAPE 必須嚴格低於基準線（`<`，而非 `≤`）
-4. **回溯測試通過 ≥ 2/3**：三次年度回溯中至少兩次 `passed = true`
-5. **回溯各站皆在限制內**：所有回溯的 `stations_within_limit` 皆為 `true`
-6. **資料新鮮度**：`data_max_date` 距最新官方資料日期不超過 180 天
+候選模型要獲得 `recommended` 狀態，必須同時通過以下七項檢查（manifest 的 `release_checks`；1–6 由 `model_analysis.evaluate_release_checks` 以 final test 指標計算，7 由 `model_training_service` 補上）：
+1. `overall_mae_improved`：final test 整體 MAE ≤ 基準線 MAE × 0.98（至少改善 2%）
+2. `stations_within_limit`：A17、A18、A19 各站 MAPE ≤ 基準線對應站 × 1.10（最多退步 10%）
+3. `a18_improved`：A18 的 MAPE 必須**嚴格低於**基準線（`<`，而非 `≤`）
+4. `backtests_passed`：必須剛好產生三次年度回溯，且至少兩次 `passed = true`
+5. `backtest_stations_within_limit`：三次回溯中至少兩次 `stations_within_limit = true`
+6. `candidate_fresh`：`data_max_date` 不早於最新官方資料日期前 180 天
+7. `parking_price_consistency`：模型特徵不含車位欄位，且 artifact 帶有有效的車位價格政策（全體中位價 > 0）
 
-以上六項全部通過，`recommended` 設為 `true`，管理端才允許發布。
+七項全部通過，`recommended` 才會是 `true`，管理端才允許發布；未通過時不會發布任何模型（包含基準線），正式模型維持原版本。
 
 **過期降級（Stale Fallback）**
 正式模型若超過 **180 天**未更新，`valuate()` 自動切換至降級模式：
@@ -593,13 +643,14 @@ pwsh -NoProfile -Command {
 
 ### 為什麼沒有使用 XGBoost
 
-目前候選模型為 Ridge、Random Forest 與 HistGradientBoosting，另以 RecentMedianBaseline 作為比較基準。此專案資料量為數千至一萬多筆，scikit-learn 的 HistGradientBoosting 已能提供合適表現，也能減少額外套件與部署複雜度。模型選擇由實際時間切割結果決定，不因工具熱門程度決定。
+目前中古屋引導訓練的候選模型為 Ridge、Random Forest 與 HistGradientBoosting（對數價格目標），另以 RecentMedianBaseline 作為比較基準。此專案資料量為數千至一萬多筆，scikit-learn 的 HistGradientBoosting 已能提供合適表現，也能減少額外套件與部署複雜度。模型選擇由實際時間切割結果決定，不因工具熱門程度決定。
 
 ### 訓練策略
 
 - 訓練、校準與測試依時間順序切割，不隨機打散未來交易。
-- 中古屋使用近期交易權重，預設半衰期為 48 個月。
-- 中古屋加入交易月份、站點×建物類型、屋齡帶、坪數帶與樓層帶等衍生特徵。
+- 中古屋使用近期交易權重，內建 profile 的半衰期為 48 個月。
+- 中古屋加入交易月份、站點×建物類型、屋齡帶、坪數帶與樓層帶等衍生特徵，以及 TWD97 座標；車位不是模型特徵，另以車位價格政策計價。
+- 基準線為訓練期最後 12 個月的站點×建物類型中位數。
 - Web 提供快速、平衡、精細三組固定 profile，也可加入一組受範圍限制的自訂 profile。
 - 每次訓練產生 immutable candidate，不直接覆蓋正式 artifact。
 
@@ -613,9 +664,11 @@ pwsh -NoProfile -Command {
 | Coverage | 真實價格落在估價區間內的比例 | 越高代表區間較常涵蓋真值 |
 | Baseline delta | 候選模型相對近期中位數改善多少 | 正向改善才值得考慮發布 |
 
+指標由 `model_training._compute_metrics` 計算，單位為元／坪。MAPE 的分母取 `max(|實際單價|, 100,000)`，避免極低單價讓百分比失真；由於市場清理（`market_cleaning.PRICE_PER_PING_MIN`）已排除官方單價低於 10 萬／坪的交易，目前 5,280 筆訓練資料的目標單價也都高於 10 萬，這個下限實際上不會生效。
+
 ### 發布閘門
 
-中古屋候選模型必須同時通過整體 MAE、各站 MAPE、A18 不倒退、年度回溯及資料新鮮度檢查，管理端才會標記為建議發布。發布前可展開查看：
+中古屋候選模型必須同時通過七項檢查（整體 MAE ≤ 基準線 × 0.98、各站 MAPE ≤ 基準線 × 1.10、A18 MAPE 嚴格低於基準線、三次年度回溯至少兩次勝過基準線、三次回溯至少兩次各站在限制內、資料新鮮度 180 天、車位計價一致性），管理端才會標記為建議發布；詳見上方「M2 → 發布閘門」。發布前可展開查看：
 
 - 訓練資料範圍與筆數
 - 使用的 profile 與超參數
@@ -657,9 +710,7 @@ LLM 不是資料清理、刊登發布或模型估價的必要條件。
 
 ### 環境變數
 
-| 變數 | 用途 | 預設值 |
-|------|------|--------|
-| `QINGPU_DATABASE_URL` | MySQL 連線字串（mysql+pymysql://user:pass@host:port/db） | —（必要） |
+健康檢查與備份指令必須設定 `QINGPU_DATABASE_URL`；完整環境變數清單見上方「M1 市場分析工作流程 → 環境變數」與 [`.env.example`](.env.example)。
 
 `backup-create` 產出 `.sql` 檔案至 `outputs/backups/`，僅透過 child process 環境傳遞密碼。
 
@@ -719,11 +770,14 @@ $env:QINGPU_GEMINI_MODEL = "<available-model-id>"
 
 - `.env`、`instance/secrets.env` 與任何 API Key
 - `data/raw/`、`data/processed/` 與 Parquet 資料集
-- `artifacts/` 內的模型
+- `candidates/` 內的訓練候選（實驗輸出，不隨 Git 發佈）
+- `artifacts/` 內除了下列兩個正式版本以外的模型
 - `outputs/backups/` 與執行輸出
 - 591 原始 HTML、Chrome profile、Cookie 與聯絡資訊
 
-因此，公開 clone 的首頁可能沒有資料點或正式模型。這代表本機 runtime artifact 尚未建立，不代表前端故障。
+**會**提交 Git 的模型只有 `artifacts/official/resale/`：`current.json`（指向目前正式版本）、`versions/870c95b0/`（目前正式模型）與 `versions/57cf2ba9/`（上一版，保留作為回滾目標；其指標來自污染前資料，見[問題紀錄 §18](docs/project-issue-log.md)）。其他歷史版本只留在本機。
+
+因此，公開 clone 在執行「五分鐘啟動 → 建立市場資料」之前，首頁沒有資料點；這代表本機資料尚未建立，不代表前端故障。
 
 ## 詳細文件
 
@@ -731,7 +785,7 @@ $env:QINGPU_GEMINI_MODEL = "<available-model-id>"
 |------|------|
 | [M1 市場資料方法論](docs/m1-market-methodology.md) | 住宅篩選、生活圈、定位與市場指標 |
 | [M2 AI 估價方法論](docs/m2-valuation-methodology.md) | 特徵、調參、時間切割、指標與模型限制 |
-| [中古屋估價誤差研究](docs/research/2026-07-29-resale-model-error-analysis.md) | RMSE 根因、資料清理、空間特徵實驗與面試摘要 |
+| [中古屋估價誤差研究](docs/research/2026-07-29-resale-model-error-analysis.md) | RMSE 根因、資料清理、空間特徵實驗與面試摘要（文中正式模型指標為污染前數字，已加註更正） |
 | [M3 刊登方法論](docs/m3-listing-methodology.md) | 591 擷取、批次、事件與隱私邊界 |
 | [M4 刊登定位方法論](docs/m4-location-methodology.md) | 地址證據、定位信心與發布控制 |
 | [專案問題與決策紀錄](docs/project-issue-log.md) | 歷次工程問題、根因分析與設計決策 |
@@ -759,7 +813,7 @@ CLI 的實際參數以程式內說明為準：
 房屋模型估算本體每坪價格；車位採用同版官方資料的類型中位價。
 估計總價 = 房屋本體估值 + 車位估值。
 
-訓練 artifacts 與 reports 為本機產生，已透過 `.gitignore` 排除，不納入版本控制。
+訓練候選（`candidates/`）與 reports 為本機產生，已透過 `.gitignore` 排除；只有目前與上一個正式模型版本納入版本控制（見「公開儲存庫邊界」）。
 
 ## 設計決策
 
@@ -779,8 +833,8 @@ CLI 的實際參數以程式內說明為準：
 ### 訓練與發布分離
 
 每次訓練產出 immutable 候選（candidate），不會自動覆蓋正式模型（official）。
-發布需要經過六項閘門（整體 MAE、各站 MAPE、A18 不倒退、三次年度回溯、
-各站回溯通過、資料新鮮度），由管理者手動在管理端決定。
+發布需要通過七項檢查（整體 MAE、各站 MAPE、A18 嚴格改善、年度回溯 ≥ 2/3、
+回溯各站 ≥ 2/3、資料新鮮度、車位計價一致性），由管理者手動在管理端決定。
 
 ### LLM 只引用 Evidence Pack
 
