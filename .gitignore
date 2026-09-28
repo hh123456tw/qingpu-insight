@@ -15,7 +15,17 @@ outputs/reports/
 
 *.egg-info/
 
-artifacts/
+artifacts/*
+!artifacts/official/
+artifacts/official/*
+!artifacts/official/resale/
+artifacts/official/resale/*
+!artifacts/official/resale/current.json
+!artifacts/official/resale/versions/
+# Track only the current official model and one rollback target; other versions stay local.
+artifacts/official/resale/versions/*
+!artifacts/official/resale/versions/870c95b0/
+!artifacts/official/resale/versions/57cf2ba9/
 outputs/valuations/
 /data/locks/
 /outputs/backups/
@@ -26,3 +36,13 @@ outputs/valuations/
 /outputs/m44-benchmark/
 /start-web.ps1
 .gstack/
+
+# Training candidates are experiment output; the official store keeps what ships.
+candidates/
+# Local-only working files.
+.cache
+docs/superpowers/
+outputs/*.log
+outputs/admin/
+outputs/m42-acceptance/
+outputs/m44-repair-smoke/
