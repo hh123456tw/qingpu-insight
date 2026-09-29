@@ -1250,3 +1250,69 @@ class TestModelRegistryOfficialPreference:
         )
         assert result["model"]["version"] == "official-v2"
         assert result["model"]["version"] != "fallback"
+
+
+def test_anchor_log_radii_calibrate_each_group_with_enough_rows():
+    from qingpu_insight.valuation import anchor_log_radii, conformal_log_radius
+
+    rng = np.random.default_rng(0)
+    predicted = np.full(200, 500_000.0)
+    anchored = np.arange(200) < 150
+    noise = np.where(anchored, rng.uniform(0.95, 1.05, 200), rng.uniform(0.7, 1.3, 200))
+    actual = predicted * noise
+    radii = anchor_log_radii(actual, predicted, anchored)
+    assert radii["anchored"] == pytest.approx(
+        conformal_log_radius(actual[anchored], predicted[anchored])
+    )
+    assert radii["unanchored"] == pytest.approx(
+        conformal_log_radius(actual[~anchored], predicted[~anchored])
+    )
+    assert radii["anchored"] < radii["unanchored"]
+
+    few = anchor_log_radii(actual[:160], predicted[:160], anchored[:160])
+    # Only 10 unanchored rows: fall back to the pooled radius.
+    assert few["unanchored"] == pytest.approx(
+        conformal_log_radius(actual[:160], predicted[:160])
+    )
+
+
+class AnchoredStubModel:
+    def __init__(self, source: str) -> None:
+        self.source = source
+
+    def predict(self, X):
+        return np.full(len(X), 500_000.0)
+
+    def prior_sources(self, X):
+        return np.full(len(X), self.source, dtype=object)
+
+    def anchored_mask(self, X):
+        return np.isin(self.prior_sources(X), ("precompletion", "presale", "resale"))
+
+
+def test_valuation_uses_anchor_group_interval_and_flags_new_projects(
+    bundle, market, valid_resale_input
+):
+    from dataclasses import replace
+
+    bundle.pipeline = AnchoredStubModel("precompletion")
+    bundle.interval_log_radius = float(np.log(1.3))
+    bundle.interval_log_radius_by_anchor = {
+        "anchored": float(np.log(1.1)),
+        "unanchored": float(np.log(1.5)),
+    }
+    new_build = replace(valid_resale_input, building_age_years=0.5)
+
+    result = valuate(new_build, FakeRegistry(bundle), market)
+
+    low, high = result["interval_total_price_twd"]
+    parking = result["estimated_parking_price_twd"] or 0
+    area = new_build.building_area_ping
+    assert low == pytest.approx(round(500_000 / 1.1 * area) + parking, abs=2)
+    assert high == pytest.approx(round(500_000 * 1.1 * area) + parking, abs=2)
+    assert result["confidence"] != "high"
+    assert any("新建案" in reason for reason in result["confidence_reasons"])
+
+    bundle.pipeline = AnchoredStubModel("resale")
+    established = valuate(valid_resale_input, FakeRegistry(bundle), market)
+    assert not any("新建案" in reason for reason in established["confidence_reasons"])

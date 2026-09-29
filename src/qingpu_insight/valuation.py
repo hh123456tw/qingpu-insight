@@ -46,9 +46,11 @@ class ValuationBundle:
     parking_price_policy: ParkingPricePolicy | None = None
     # Relative (log-space) conformal radius; None on bundles built before it existed.
     interval_log_radius: float | None = None
+    # Separate radii for rows with and without a same-building price anchor.
+    interval_log_radius_by_anchor: dict[str, float] | None = None
 
     def __getattr__(self, name):
-        if name == "interval_log_radius":
+        if name in ("interval_log_radius", "interval_log_radius_by_anchor"):
             return None
         if name == "feature_columns":
             return BASE_FEATURE_COLUMNS
@@ -155,8 +157,32 @@ def conformal_log_radius(actual: np.ndarray, predicted: np.ndarray) -> float:
     return float(np.quantile(residuals, level, method="higher"))
 
 
-def interval_bounds(bundle: ValuationBundle, unit_price):
+MIN_INTERVAL_GROUP_ROWS = 30
+NEW_PROJECT_MAX_AGE_YEARS = 2.0
+_PRESALE_PRIOR_SOURCES = ("precompletion", "presale")
+
+
+def anchor_log_radii(
+    actual: np.ndarray, predicted: np.ndarray, anchored: np.ndarray
+) -> dict[str, float]:
+    """Conformal log radius per anchor group; small groups use the pooled radius."""
+    pooled = conformal_log_radius(actual, predicted)
+    radii = {}
+    for name, mask in (("anchored", anchored), ("unanchored", ~anchored)):
+        radii[name] = (
+            conformal_log_radius(actual[mask], predicted[mask])
+            if mask.sum() >= MIN_INTERVAL_GROUP_ROWS
+            else pooled
+        )
+    return radii
+
+
+def interval_bounds(bundle: ValuationBundle, unit_price, anchored=None):
     """Lower/upper unit-price bounds; accepts a scalar or an array of predictions."""
+    by_anchor = bundle.interval_log_radius_by_anchor
+    if by_anchor is not None and anchored is not None:
+        factor = np.exp(np.where(anchored, by_anchor["anchored"], by_anchor["unanchored"]))
+        return np.divide(unit_price, factor), np.multiply(unit_price, factor)
     if bundle.interval_log_radius is not None:
         factor = np.exp(bundle.interval_log_radius)
         return np.divide(unit_price, factor), np.multiply(unit_price, factor)
@@ -164,8 +190,10 @@ def interval_bounds(bundle: ValuationBundle, unit_price):
     return np.maximum(0.0, np.subtract(unit_price, radius)), np.add(unit_price, radius)
 
 
-def prediction_interval(bundle: ValuationBundle, unit_price: float) -> tuple[float, float]:
-    low, high = interval_bounds(bundle, unit_price)
+def prediction_interval(
+    bundle: ValuationBundle, unit_price: float, anchored: bool | None = None
+) -> tuple[float, float]:
+    low, high = interval_bounds(bundle, unit_price, anchored)
     return float(low), float(high)
 
 
@@ -589,11 +617,21 @@ def valuate(
         row["parking_area_ping"] = input_.parking_area_ping
 
     unit_price = float(bundle.pipeline.predict(row)[0])
+    prior_source = (
+        str(bundle.pipeline.prior_sources(row)[0])
+        if hasattr(bundle.pipeline, "prior_sources")
+        else None
+    )
+    anchored = (
+        bool(bundle.pipeline.anchored_mask(row)[0])
+        if hasattr(bundle.pipeline, "anchored_mask")
+        else None
+    )
     parking_estimate = estimate_parking_price(bundle.parking_price_policy, input_.parking_type)
     building_price, parking_price, total_price = compose_total_price(
         unit_price, input_.building_area_ping, parking_estimate
     )
-    interval = prediction_interval(bundle, unit_price)
+    interval = prediction_interval(bundle, unit_price, anchored)
 
     factors = local_factors(bundle, row)
     comparables_result = similar_transactions(bundle, row, market)
@@ -610,6 +648,17 @@ def valuate(
         )
     if bundle.parking_price_policy is None:
         assessing["confidence_reasons"].append("legacy_parking")
+    if (
+        prior_source in _PRESALE_PRIOR_SOURCES
+        and input_.building_age_years is not None
+        and input_.building_age_years < NEW_PROJECT_MAX_AGE_YEARS
+    ):
+        # Resales of new projects have deviated widely from their presale price level.
+        assessing["confidence_reasons"].append(
+            "新建案：主要依同棟完工前成交價推估，完工後轉手價可能與預售價有明顯落差"
+        )
+        if assessing["confidence"] == "high":
+            assessing["confidence"] = "medium"
 
     low, high = interval
     building_low = round(low * input_.building_area_ping)
@@ -700,6 +749,15 @@ def train_artifact(
     )
     log_radius = conformal_log_radius(
         split.calibration["target_unit_price_twd"].to_numpy(), calibration_pred
+    )
+    radii_by_anchor = (
+        anchor_log_radii(
+            split.calibration["target_unit_price_twd"].to_numpy(),
+            calibration_pred,
+            selected.estimator.anchored_mask(split.calibration[list(feature_columns)]),
+        )
+        if hasattr(selected.estimator, "anchored_mask")
+        else None
     )
 
     imp = permutation_importance(
@@ -792,6 +850,7 @@ def train_artifact(
         feature_columns=feature_columns,
         parking_price_policy=parking_policy,
         interval_log_radius=log_radius,
+        interval_log_radius_by_anchor=radii_by_anchor,
     )
 
     artifact_dir.mkdir(parents=True, exist_ok=True)

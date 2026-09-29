@@ -30,7 +30,12 @@ def compute_interval_summary(
         split.test[list(bundle.feature_columns)]
     )
     actual = split.test["target_unit_price_twd"].to_numpy()
-    lows, highs = interval_bounds(bundle, test_pred)
+    anchored = (
+        evaluated.estimator.anchored_mask(split.test[list(bundle.feature_columns)])
+        if hasattr(evaluated.estimator, "anchored_mask")
+        else None
+    )
+    lows, highs = interval_bounds(bundle, test_pred, anchored)
     return {
         "test_coverage": float(((actual >= lows) & (actual <= highs)).mean()),
         "average_interval_width_twd_per_ping": float(np.mean(highs - lows)),
@@ -115,6 +120,7 @@ def write_evaluation(
             bundle.interval_abs_residual_twd_per_ping
         ),
         "calibration_log_radius": bundle.interval_log_radius,
+        "calibration_log_radius_by_anchor": bundle.interval_log_radius_by_anchor,
         "test_coverage": round(interval_summary["test_coverage"], 4),
         "average_interval_width_twd_per_ping": round(
             interval_summary["average_interval_width_twd_per_ping"],
