@@ -4901,3 +4901,14 @@ def test_main_reads_port_and_debug_from_dotenv(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(web, "_create_runtime_app", lambda root: FakeApp())
     web.main()
     assert captured == {"host": "127.0.0.1", "port": 5123, "debug": True}
+
+
+def test_latest_market_date_reads_parquet_or_returns_none(tmp_path) -> None:
+    from qingpu_insight.web import _latest_market_date
+
+    path = tmp_path / "market.parquet"
+    assert _latest_market_date(path) is None
+    pd.DataFrame(
+        {"transaction_date": pd.to_datetime(["2025-01-02", "2026-06-13"])}
+    ).to_parquet(path)
+    assert _latest_market_date(path) == pd.Timestamp("2026-06-13")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 import joblib
+import pandas as pd
 
 from qingpu_insight.jobs import JobService
 from qingpu_insight.model_artifacts import (
@@ -311,6 +313,9 @@ _SMOKE_INPUTS: dict[str, ValuationInput] = {
 }
 
 
+CANDIDATE_STALE_AFTER_DAYS = 180
+
+
 class ModelReleaseService:
     def __init__(
         self,
@@ -320,7 +325,9 @@ class ModelReleaseService:
         job_service: JobService,
         candidate_store: CandidateArtifactStore,
         artifact_dir: Path,
+        latest_data_date: Callable[[], pd.Timestamp | None] | None = None,
     ) -> None:
+        self._latest_data_date = latest_data_date
         self._official_store = official_store
         self._release_repository = release_repository
         self._preview_service = preview_service
@@ -368,12 +375,25 @@ class ModelReleaseService:
             raise TypeError(f"{result.artifact_file} is not a ValuationBundle")
         if bundle.transaction_type != market:
             raise ValueError(f"market mismatch: expected {market}, got {bundle.transaction_type}")
+        self._require_fresh(bundle)
 
         return self._preview_service.create_for(
             operation="model_publish",
             payload={"operation": "publish", "market": market, "run_id": run_id},
             confirmation_text=f"發布 {market} {run_id}",
         )
+
+    def _require_fresh(self, bundle: ValuationBundle) -> None:
+        # Freshness is only meaningful against data that arrived after training.
+        latest = self._latest_data_date() if self._latest_data_date is not None else None
+        if latest is None:
+            return
+        age_days = (pd.Timestamp(latest) - pd.Timestamp(bundle.data_max_date)).days
+        if age_days > CANDIDATE_STALE_AFTER_DAYS:
+            raise ValueError(
+                f"candidate is stale: its data ends {bundle.data_max_date}, "
+                f"{age_days} days before the latest market data"
+            )
 
     def preview_rollback(self, market: str, version_id: str) -> OperationPreview:
         market = self._require_resale_market(market)

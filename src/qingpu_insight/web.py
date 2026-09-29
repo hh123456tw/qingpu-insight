@@ -135,6 +135,13 @@ class _UnavailableMarketDataSource:
         raise RuntimeError("market data unavailable")
 
 
+def _latest_market_date(input_path: Path) -> pd.Timestamp | None:
+    if not input_path.exists():
+        return None
+    dates = pd.read_parquet(input_path, columns=["transaction_date"])["transaction_date"]
+    return pd.Timestamp(dates.max()) if not dates.empty else None
+
+
 def _strong_admin_secret(secret: str | None) -> bool:
     if not secret or len(secret) < 32:
         return False
@@ -269,6 +276,7 @@ def _create_production_admin_services(
         job_service=service.job_service,
         candidate_store=candidate_store,
         artifact_dir=root / "artifacts",
+        latest_data_date=lambda: _latest_market_date(input_path),
     )
 
     _backup_job_svc = None

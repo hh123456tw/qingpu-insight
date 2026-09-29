@@ -139,7 +139,7 @@ Schema v2（及更早）的訓練不會有調參快照；頁面上會標示「�
 | `a18_improved` | A18 MAPE **嚴格低於**基準 |
 | `backtests_passed` | 必須產生三次年度回測，且至少兩次候選整體 MAE 低於基準 |
 | `backtest_stations_within_limit` | 三次年度回測中至少兩次各站 MAPE ≤ 基準 × 1.10 |
-| `candidate_fresh` | `data_max_date` 不早於最新官方資料日期前 180 天 |
+| `candidate_fresh` | `data_max_date` 不早於最新官方資料日期前 180 天；發布預覽時會再以最新市場資料檢查一次，過期即拒絕發布 |
 | `parking_price_consistency` | 模型特徵不含車位欄位，且帶有有效的車位價格政策 |
 
 年度回測以資料最後月份的月底為第一個截止日，再逐年往前推兩次，每次用相同的時間切割重新訓練選定的模型。

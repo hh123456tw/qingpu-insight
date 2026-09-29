@@ -507,7 +507,7 @@ AutoML 模式與引導調參為互斥選擇。AutoML 不自動發布任何模型
 3. `a18_improved`：A18 的 MAPE 必須**嚴格低於**基準線（`<`，而非 `≤`）
 4. `backtests_passed`：必須剛好產生三次年度回溯，且至少兩次 `passed = true`
 5. `backtest_stations_within_limit`：三次回溯中至少兩次 `stations_within_limit = true`
-6. `candidate_fresh`：`data_max_date` 不早於最新官方資料日期前 180 天
+6. `candidate_fresh`：`data_max_date` 不早於最新官方資料日期前 180 天。訓練當下必然成立，真正的把關在發布預覽：若最新市場資料已比候選資料晚超過 180 天，`preview_publish` 會拒絕發布。
 7. `parking_price_consistency`：模型特徵不含車位欄位，且 artifact 帶有有效的車位價格政策（全體中位價 > 0）
 
 七項全部通過，`recommended` 才會是 `true`，管理端才允許發布；未通過時不會發布任何模型（包含基準線），正式模型維持原版本。

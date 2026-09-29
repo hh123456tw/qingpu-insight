@@ -221,7 +221,7 @@ class FakeJobRepository:
 class TestModelReleaseService:
 
     def _create_service(
-        self, tmp_path: Path, market: str = "resale",
+        self, tmp_path: Path, market: str = "resale", latest_data_date=None,
     ) -> tuple[ModelReleaseService, OfficialModelStore, Path]:
         artifact_dir = tmp_path / "artifacts"
         artifact_dir.mkdir()
@@ -251,8 +251,35 @@ class TestModelReleaseService:
             job_service=job_service,
             candidate_store=candidate_store,
             artifact_dir=artifact_dir,
+            latest_data_date=latest_data_date,
         )
         return service, official_store, candidate_dir
+
+    def _install_candidate(self, tmp_path: Path, candidate_dir: Path) -> str:
+        candidate_root, manifest, _ = _setup_candidate(tmp_path / "src", "resale")
+        run_id = str(manifest.run_id)
+        candidate_root.rename(candidate_dir / run_id)
+        return run_id
+
+    def test_preview_publish_rejects_candidate_older_than_latest_data(
+        self, tmp_path: Path
+    ) -> None:
+        # Candidate data ends 2024-12-31; newer official data makes it stale.
+        service, _, candidate_dir = self._create_service(
+            tmp_path, latest_data_date=lambda: pd.Timestamp("2025-12-31")
+        )
+        run_id = self._install_candidate(tmp_path, candidate_dir)
+        with pytest.raises(ValueError, match="stale"):
+            service.preview_publish(run_id, "resale")
+
+    def test_preview_publish_accepts_candidate_within_freshness_window(
+        self, tmp_path: Path
+    ) -> None:
+        service, _, candidate_dir = self._create_service(
+            tmp_path, latest_data_date=lambda: pd.Timestamp("2025-03-31")
+        )
+        run_id = self._install_candidate(tmp_path, candidate_dir)
+        assert service.preview_publish(run_id, "resale").operation == "model_publish"
 
     def test_preview_publish_creates_preview_with_correct_text(
         self, tmp_path: Path
