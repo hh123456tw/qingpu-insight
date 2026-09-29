@@ -587,6 +587,7 @@ def test_market_build_command_creates_clean_dataset_and_quality_report(
 
     assert exit_code == 0
     assert (tmp_path / "data" / "processed" / "market_transactions.parquet").exists()
+    assert (tmp_path / "data" / "processed" / "precompletion_transfers.parquet").exists()
     payload = json.loads(
         (tmp_path / "outputs" / "reports" / "m1-market-quality.json").read_text("utf-8")
     )

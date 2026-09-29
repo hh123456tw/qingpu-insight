@@ -52,7 +52,10 @@ def _key(row: pd.Series) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def build_market_dataset(frame: pd.DataFrame) -> tuple[pd.DataFrame, MarketQuality]:
+PRECOMPLETION_TRANSFERS_FILE = "precompletion_transfers.parquet"
+
+
+def _annotate_market_rows(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, pd.Series]]:
     missing = REQUIRED_COLUMNS - set(frame.columns)
     if missing:
         raise ValueError(f"Missing required columns: {sorted(missing)}")
@@ -104,6 +107,46 @@ def build_market_dataset(frame: pd.DataFrame) -> tuple[pd.DataFrame, MarketQuali
     output["analysis_eligible"] = eligible_before_completion & ~(
         missing_completion_date | future_completion_transfer
     )
+
+    masks = {
+        "residential": residential,
+        "in_circle": in_circle,
+        "valid_price": valid_price,
+        "valid_area": valid_area,
+        "valid_date": valid_date,
+        "base_eligible": base_eligible,
+        "market_subject": market_subject,
+        "special_relationship": special_relationship,
+        "missing_completion_date": missing_completion_date,
+        "future_completion_transfer": future_completion_transfer,
+    }
+    return output, masks
+
+
+def build_precompletion_transfers(frame: pd.DataFrame) -> pd.DataFrame:
+    """Market-eligible resale-labelled transfers recorded before the building was completed.
+
+    They are excluded from resale targets (they are presale deals) but remain the price
+    history of their building, which the anchor model uses for new projects.
+    """
+    output, masks = _annotate_market_rows(frame)
+    transfers = output.loc[masks["future_completion_transfer"]].copy()
+    transfers["building_age_years"] = pd.NA
+    return transfers.drop_duplicates("transaction_key").reset_index(drop=True)
+
+
+def build_market_dataset(frame: pd.DataFrame) -> tuple[pd.DataFrame, MarketQuality]:
+    output, masks = _annotate_market_rows(frame)
+    residential = masks["residential"]
+    in_circle = masks["in_circle"]
+    valid_price = masks["valid_price"]
+    valid_area = masks["valid_area"]
+    valid_date = masks["valid_date"]
+    base_eligible = masks["base_eligible"]
+    market_subject = masks["market_subject"]
+    special_relationship = masks["special_relationship"]
+    missing_completion_date = masks["missing_completion_date"]
+    future_completion_transfer = masks["future_completion_transfer"]
 
     reasons = {
         "non_residential": int((~residential).sum()),

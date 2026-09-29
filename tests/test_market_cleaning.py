@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from qingpu_insight.market_cleaning import build_market_dataset
+from qingpu_insight.market_cleaning import build_market_dataset, build_precompletion_transfers
 
 
 def sample_rows() -> pd.DataFrame:
@@ -41,6 +41,23 @@ def test_build_market_dataset_keeps_only_eligible_residential_rows() -> None:
     assert quality.input_records == 4
     assert quality.output_records == 2
     assert quality.exclusion_reasons == {"non_residential": 1, "outside_life_circle": 1}
+
+
+def test_build_precompletion_transfers_keeps_only_eligible_resale_before_completion() -> None:
+    normal = sample_rows().iloc[[0]].copy()
+    rows = pd.concat([normal] * 4, ignore_index=True)
+    rows["record_id"] = ["completed", "before_completion", "shop_before", "duplicate"]
+    rows["completion_date"] = pd.to_datetime(
+        ["2026-01-10", "2026-06-01", "2026-06-01", "2026-06-01"]
+    )
+    rows.loc[2, "main_use"] = "店鋪"
+    rows.loc[3, "record_id"] = "before_completion"
+
+    transfers = build_precompletion_transfers(rows)
+
+    # Excluded from resale targets, kept as price history for the same building.
+    assert transfers["record_id"].tolist() == ["before_completion"]
+    assert transfers["building_age_years"].isna().all()
 
 
 def test_build_market_dataset_derives_ping_price_age_and_stable_key() -> None:

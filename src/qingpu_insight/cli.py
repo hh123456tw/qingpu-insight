@@ -68,7 +68,11 @@ from qingpu_insight.listing_update import (
 from qingpu_insight.listing_valuation import compare_listing_to_model
 from qingpu_insight.llm_benchmark import run_benchmark
 from qingpu_insight.location_evidence import LocationEvidence
-from qingpu_insight.market_cleaning import build_market_dataset
+from qingpu_insight.market_cleaning import (
+    PRECOMPLETION_TRANSFERS_FILE,
+    build_market_dataset,
+    build_precompletion_transfers,
+)
 from qingpu_insight.model_artifacts import CandidateArtifactStore
 from qingpu_insight.model_training_service import (
     ModelTrainingRequest,
@@ -126,6 +130,9 @@ def market_build(root: Path, input_path: str, output_path: str, quality_output_p
     output_resolved.parent.mkdir(parents=True, exist_ok=True)
     quality_resolved.parent.mkdir(parents=True, exist_ok=True)
     clean.to_parquet(output_resolved, index=False)
+    build_precompletion_transfers(frame).to_parquet(
+        output_resolved.with_name(PRECOMPLETION_TRANSFERS_FILE), index=False
+    )
     quality_resolved.write_text(
         json.dumps(quality.to_dict(), indent=2, ensure_ascii=False),
         encoding="utf-8",
