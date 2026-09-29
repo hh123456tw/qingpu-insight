@@ -421,6 +421,9 @@ NUMERIC_FEATURES = [
     "transaction_month_index",
     "twd97_x",
     "twd97_y",
+    # Anchor-offset inputs, only present in AnchorBlendRegressor's offset model.
+    "log_prior",
+    "knn_distance",
 ]
 CATEGORICAL_FEATURES = [
     "station_code",
@@ -430,6 +433,7 @@ CATEGORICAL_FEATURES = [
     "area_band",
     "floor_band",
     "location_known",
+    "prior_source",
 ]
 
 
