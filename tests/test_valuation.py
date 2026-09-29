@@ -206,6 +206,30 @@ def test_prediction_interval_symmetric():
     assert high == 510_000
 
 
+def test_prediction_interval_uses_relative_log_radius_when_present():
+    dummy = DummyRegressor()
+    dummy.fit(np.zeros((5, 5)), np.ones(5))
+    bundle = ValuationBundle(
+        transaction_type="resale",
+        model_name="test",
+        model_version="v1",
+        pipeline=dummy,
+        interval_abs_residual_twd_per_ping=10000,
+        feature_ranges={},
+        feature_hard_ranges={},
+        feature_medians={},
+        global_importance=[],
+        reference_rows=pd.DataFrame(),
+        data_min_date="",
+        data_max_date="",
+        metrics={},
+        interval_log_radius=float(np.log(1.2)),
+    )
+    low, high = prediction_interval(bundle, 600_000)
+    assert low == pytest.approx(500_000)
+    assert high == pytest.approx(720_000)
+
+
 def test_prediction_interval_low_floor():
     dummy = DummyRegressor()
     dummy.fit(np.zeros((5, 5)), np.ones(5))
@@ -932,6 +956,11 @@ def test_train_artifact_uses_calibration_and_does_not_refit(tmp_path):
     loaded: ValuationBundle = joblib.load(result_path)
     assert loaded.transaction_type == "resale"
     assert loaded.model_name == "baseline"
+    # Split-conformal radius in log space from calibration residuals.
+    log_residuals = np.abs(np.log(calibration["target_unit_price_twd"].to_numpy() / 500_000))
+    level = min(1.0, np.ceil((len(log_residuals) + 1) * 0.90) / len(log_residuals))
+    expected = float(np.quantile(log_residuals, level, method="higher"))
+    assert loaded.interval_log_radius == pytest.approx(expected)
 
 
 def test_train_artifact_round_trip(tmp_path):

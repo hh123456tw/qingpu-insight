@@ -10,7 +10,7 @@ from qingpu_insight.model_training import (
     leakage_audit,
 )
 from qingpu_insight.model_tuning import TrainingProfile
-from qingpu_insight.valuation import ValuationBundle
+from qingpu_insight.valuation import ValuationBundle, interval_bounds
 
 MODEL_DISPLAY_NAMES = {
     "hist_gradient_boosting_log": "HGB（對數價格）",
@@ -30,9 +30,7 @@ def compute_interval_summary(
         split.test[list(bundle.feature_columns)]
     )
     actual = split.test["target_unit_price_twd"].to_numpy()
-    radius = bundle.interval_abs_residual_twd_per_ping
-    lows = np.maximum(0, test_pred - radius)
-    highs = test_pred + radius
+    lows, highs = interval_bounds(bundle, test_pred)
     return {
         "test_coverage": float(((actual >= lows) & (actual <= highs)).mean()),
         "average_interval_width_twd_per_ping": float(np.mean(highs - lows)),
@@ -116,6 +114,7 @@ def write_evaluation(
         "calibration_quantile_twd_per_ping": (
             bundle.interval_abs_residual_twd_per_ping
         ),
+        "calibration_log_radius": bundle.interval_log_radius,
         "test_coverage": round(interval_summary["test_coverage"], 4),
         "average_interval_width_twd_per_ping": round(
             interval_summary["average_interval_width_twd_per_ping"],
@@ -301,8 +300,13 @@ def write_model_card(
         [
             "",
             "## 區間覆蓋率",
-            f"- 校準分位數：{bundle.interval_abs_residual_twd_per_ping:,.0f} 元/坪",
-            "- 測試集覆蓋率依校準分位數計算",
+            (
+                f"- 相對區間：預估單價 ÷／× {np.exp(bundle.interval_log_radius):.3f}"
+                "（log 空間 split-conformal，名目 90%）"
+                if bundle.interval_log_radius is not None
+                else f"- 校準分位數：{bundle.interval_abs_residual_twd_per_ping:,.0f} 元/坪"
+            ),
+            "- 測試集覆蓋率依同一區間規則計算",
             "",
             "## 限制",
         ]

@@ -44,8 +44,12 @@ class ValuationBundle:
     diagnostics: dict[str, Any] | None = None
     feature_columns: tuple[str, ...] = BASE_FEATURE_COLUMNS
     parking_price_policy: ParkingPricePolicy | None = None
+    # Relative (log-space) conformal radius; None on bundles built before it existed.
+    interval_log_radius: float | None = None
 
     def __getattr__(self, name):
+        if name == "interval_log_radius":
+            return None
         if name == "feature_columns":
             return BASE_FEATURE_COLUMNS
         if name == "parking_price_policy":
@@ -141,9 +145,28 @@ def model_age_days(bundle: ValuationBundle, latest_data_date: pd.Timestamp) -> i
     return (latest_data_date.normalize() - data_date).days
 
 
-def prediction_interval(bundle: ValuationBundle, unit_price: float) -> tuple[float, float]:
+INTERVAL_COVERAGE = 0.90
+
+
+def conformal_log_radius(actual: np.ndarray, predicted: np.ndarray) -> float:
+    """Split-conformal radius on |log(actual / predicted)| at INTERVAL_COVERAGE."""
+    residuals = np.abs(np.log(np.asarray(actual, float) / np.maximum(predicted, 1.0)))
+    level = min(1.0, np.ceil((len(residuals) + 1) * INTERVAL_COVERAGE) / len(residuals))
+    return float(np.quantile(residuals, level, method="higher"))
+
+
+def interval_bounds(bundle: ValuationBundle, unit_price):
+    """Lower/upper unit-price bounds; accepts a scalar or an array of predictions."""
+    if bundle.interval_log_radius is not None:
+        factor = np.exp(bundle.interval_log_radius)
+        return np.divide(unit_price, factor), np.multiply(unit_price, factor)
     radius = bundle.interval_abs_residual_twd_per_ping
-    return max(0.0, unit_price - radius), unit_price + radius
+    return np.maximum(0.0, np.subtract(unit_price, radius)), np.add(unit_price, radius)
+
+
+def prediction_interval(bundle: ValuationBundle, unit_price: float) -> tuple[float, float]:
+    low, high = interval_bounds(bundle, unit_price)
+    return float(low), float(high)
 
 
 def compose_total_price(
@@ -675,6 +698,9 @@ def train_artifact(
             0.90,
         )
     )
+    log_radius = conformal_log_radius(
+        split.calibration["target_unit_price_twd"].to_numpy(), calibration_pred
+    )
 
     imp = permutation_importance(
         selected.estimator,
@@ -765,6 +791,7 @@ def train_artifact(
         diagnostics=deepcopy(reporting_diagnostics),
         feature_columns=feature_columns,
         parking_price_policy=parking_policy,
+        interval_log_radius=log_radius,
     )
 
     artifact_dir.mkdir(parents=True, exist_ok=True)
