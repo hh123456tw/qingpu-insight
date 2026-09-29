@@ -98,6 +98,93 @@ def parking_adjusted_target(row: pd.Series) -> tuple[float, str]:
     return float(row["unit_price_per_ping_twd"]), "official_unit_price"
 
 
+SQM_PER_PING = 3.305785
+PARKING_ESTIMATE_MONTHS = 24
+PARKING_ESTIMATE_MIN_SAMPLES = 20
+
+
+def _normalized_parking_type(value: object) -> str:
+    return " ".join(value.split()) if isinstance(value, str) else ""
+
+
+def estimate_bundled_parking_prices(rows: pd.DataFrame, pool: pd.DataFrame) -> np.ndarray:
+    """Point-in-time parking value for sales whose parking was not priced separately.
+
+    Uses the median price of separately priced parking of the same type sold in the
+    PARKING_ESTIMATE_MONTHS before each row, falling back to all types; NaN when fewer
+    than PARKING_ESTIMATE_MIN_SAMPLES such sales exist.
+    """
+    priced = pool.loc[
+        pd.to_numeric(pool["parking_price_twd"], errors="coerce").gt(0)
+        & pd.to_numeric(pool["parking_area_sqm"], errors="coerce").gt(0)
+    ].sort_values("transaction_date", kind="stable")
+    pool_dates = priced["transaction_date"].to_numpy("datetime64[ns]")
+    pool_prices = priced["parking_price_twd"].to_numpy(float)
+    pool_types = priced["parking_type"].map(_normalized_parking_type).to_numpy()
+
+    estimates = np.full(len(rows), np.nan)
+    row_types = rows["parking_type"].map(_normalized_parking_type).to_numpy()
+    for i, (date, parking_type) in enumerate(zip(rows["transaction_date"], row_types, strict=True)):
+        date = pd.Timestamp(date)
+        high = np.searchsorted(pool_dates, np.datetime64(date), "left")
+        low = np.searchsorted(
+            pool_dates,
+            np.datetime64(date - pd.DateOffset(months=PARKING_ESTIMATE_MONTHS)),
+            "left",
+        )
+        window_prices = pool_prices[low:high]
+        same_type = window_prices[pool_types[low:high] == parking_type]
+        if len(same_type) >= PARKING_ESTIMATE_MIN_SAMPLES:
+            estimates[i] = np.median(same_type)
+        elif len(window_prices) >= PARKING_ESTIMATE_MIN_SAMPLES:
+            estimates[i] = np.median(window_prices)
+    return estimates
+
+
+def _numeric(frame: pd.DataFrame, column: str) -> np.ndarray:
+    if column not in frame:
+        return np.zeros(len(frame))
+    return pd.to_numeric(frame[column], errors="coerce").fillna(0).to_numpy(float)
+
+
+def _area_ping(frame: pd.DataFrame) -> np.ndarray:
+    if "building_area_ping" in frame:
+        return pd.to_numeric(frame["building_area_ping"], errors="coerce").to_numpy(float)
+    return pd.to_numeric(frame["building_area_sqm"], errors="coerce").to_numpy(float) / SQM_PER_PING
+
+
+def bundled_parking_mask(frame: pd.DataFrame) -> np.ndarray:
+    """Sales with parking area included but no separate parking price."""
+    parking = _numeric(frame, "parking_area_sqm") / SQM_PER_PING
+    price = _numeric(frame, "parking_price_twd")
+    return (parking > 0) & (price <= 0) & (parking < _area_ping(frame))
+
+
+def net_unit_prices(frame: pd.DataFrame, pool: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """Building price per ping net of parking, matching how valuations compose a total.
+
+    Returns (unit_price, bundled_estimated) where bundled rows have estimated parking
+    removed from both price and area; other rows keep the parking_adjusted_target rule.
+    """
+    area = _area_ping(frame)
+    parking = _numeric(frame, "parking_area_sqm") / SQM_PER_PING
+    parking_price = _numeric(frame, "parking_price_twd")
+    total = pd.to_numeric(frame["total_price_twd"], errors="coerce").to_numpy(float)
+    split = (parking_price > 0) & (parking > 0) & (parking < area)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        unit = np.where(split, (total - parking_price) / (area - parking), total / area)
+    estimated = np.zeros(len(frame), dtype=bool)
+    bundled = np.flatnonzero(bundled_parking_mask(frame))
+    if len(bundled):
+        parking_value = estimate_bundled_parking_prices(frame.iloc[bundled], pool)
+        with np.errstate(invalid="ignore"):
+            net = (total[bundled] - parking_value) / (area[bundled] - parking[bundled])
+        usable = np.isfinite(net) & (net > 0)
+        unit[bundled[usable]] = net[usable]
+        estimated[bundled[usable]] = True
+    return unit, estimated
+
+
 def add_derived_features(frame: pd.DataFrame) -> pd.DataFrame:
     result = frame.copy()
     for coordinate in ("twd97_x", "twd97_y"):
@@ -179,6 +266,20 @@ def build_model_frame(frame: pd.DataFrame, transaction_type: str) -> pd.DataFram
     result[["target_unit_price_twd", "target_policy"]] = pd.DataFrame(
         targets.tolist(), index=result.index
     )
+    if len(result):
+        # Bundled parking would otherwise be priced into the per-ping target of the building.
+        bundled = np.flatnonzero(bundled_parking_mask(result))
+        if len(bundled):
+            estimates = estimate_bundled_parking_prices(result.iloc[bundled], result)
+            area = result["building_area_ping"].to_numpy(float)[bundled]
+            parking = result["parking_area_ping"].to_numpy(float)[bundled]
+            total = result["total_price_twd"].to_numpy(float)[bundled]
+            with np.errstate(invalid="ignore"):
+                net = (total - estimates) / (area - parking)
+            usable = np.isfinite(net) & (net > 0)
+            rows = result.index[bundled[usable]]
+            result.loc[rows, "target_unit_price_twd"] = net[usable]
+            result.loc[rows, "target_policy"] = "bundled_estimated"
     return add_derived_features(result)
 
 

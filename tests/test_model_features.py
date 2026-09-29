@@ -241,3 +241,54 @@ def test_derived_feature_boundaries_and_missing_values():
     assert result["building_age_band"].tolist() == ["0_5", "5_10", "20_plus", "missing"]
     assert result["area_band"].tolist() == ["small", "standard", "standard", "large"]
     assert result["floor_band"].tolist() == ["low", "middle", "middle", "unknown"]
+
+
+def _parking_rows(dates, *, parking_price, parking_type="坡道平面", total=10_000_000):
+    return pd.DataFrame(
+        {
+            "transaction_date": pd.to_datetime(dates),
+            "parking_type": parking_type,
+            "parking_price_twd": parking_price,
+            "parking_area_sqm": 10 * 3.305785,
+            "building_area_sqm": 40 * 3.305785,
+            "total_price_twd": total,
+        }
+    )
+
+
+def test_bundled_parking_estimates_use_trailing_same_type_median():
+    from qingpu_insight.model_features import estimate_bundled_parking_prices
+
+    pool = _parking_rows(
+        pd.date_range("2023-01-01", periods=25, freq="15D"), parking_price=2_000_000
+    )
+    later = _parking_rows(["2024-12-01"] * 30, parking_price=9_000_000)
+    bundled = _parking_rows(["2024-06-01", "2022-01-01"], parking_price=0)
+    estimates = estimate_bundled_parking_prices(bundled, pd.concat([pool, later]))
+    # Only split-priced sales dated before each row, within 24 months, are used.
+    assert estimates[0] == pytest.approx(2_000_000)
+    assert np.isnan(estimates[1])
+
+
+def test_build_model_frame_nets_estimated_parking_out_of_bundled_rows():
+    split_rows = _parking_rows(
+        pd.date_range("2023-01-01", periods=25, freq="15D"), parking_price=2_000_000
+    )
+    bundled = _parking_rows(["2024-06-01"], parking_price=0)
+    frame = pd.concat([split_rows, bundled], ignore_index=True)
+    frame["transaction_type"] = "resale"
+    frame["analysis_eligible"] = True
+    frame["building_age_years"] = 3.0
+    frame["floor"] = 5
+    frame["total_floors"] = 10
+    frame["building_area_ping"] = 40.0
+    frame["unit_price_per_ping_twd"] = frame["total_price_twd"] / 40.0
+    frame["station_code"] = "A18"
+    frame["building_type"] = "住宅大樓"
+    frame["twd97_x"] = np.nan
+    frame["twd97_y"] = np.nan
+
+    model_frame = build_model_frame(frame, "resale")
+    row = model_frame.loc[model_frame["transaction_date"].eq("2024-06-01")].iloc[0]
+    assert row["target_policy"] == "bundled_estimated"
+    assert row["target_unit_price_twd"] == pytest.approx((10_000_000 - 2_000_000) / 30)
