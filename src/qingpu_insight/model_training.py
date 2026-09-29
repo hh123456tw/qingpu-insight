@@ -477,8 +477,9 @@ def candidate_estimators(
     feature_columns=FEATURE_COLUMNS,
     seed: int = 42,
     profile: TrainingProfile = BALANCED_PROFILE,
-) -> dict[str, Pipeline]:
-    return {
+    anchor_table: pd.DataFrame | None = None,
+) -> dict[str, Any]:
+    estimators: dict[str, Any] = {
         "ridge": Pipeline(
             [
                 ("features", make_preprocessor(feature_columns)),
@@ -536,6 +537,17 @@ def candidate_estimators(
             ]
         ),
     }
+    if anchor_table is not None:
+        # Only callers that supply building price history get the anchor blend.
+        from qingpu_insight.anchor_model import AnchorBlendRegressor
+
+        estimators["anchor_blend"] = AnchorBlendRegressor(
+            anchor_table=anchor_table,
+            learning_rate=profile.hgb_learning_rate,
+            max_iter=profile.hgb_max_iter,
+            random_state=seed,
+        )
+    return estimators
 
 
 def passes_release_gate(
@@ -664,6 +676,7 @@ def run_tuned_model_experiment(
     use_recency_weights: bool = False,
     baseline_months: int = 24,
     candidate_names: tuple[str, ...] | None = None,
+    anchor_table: pd.DataFrame | None = None,
     on_profile_start: Callable[[str], None] | None = None,
 ) -> TunedModelExperiment:
     baseline = RecentMedianBaseline(months=baseline_months)
@@ -692,6 +705,8 @@ def run_tuned_model_experiment(
         estimator_kwargs: dict[str, Any] = {"profile": profile}
         if "feature_columns" in estimator_parameters:
             estimator_kwargs["feature_columns"] = feature_columns
+        if "anchor_table" in estimator_parameters:
+            estimator_kwargs["anchor_table"] = anchor_table
         estimators = candidate_estimators(**estimator_kwargs)
         if candidate_names is not None:
             unknown = set(candidate_names) - set(estimators)

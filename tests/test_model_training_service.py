@@ -365,6 +365,7 @@ def test_execute_runs_tuned_model_experiment_with_profiles_and_recency_weighting
         use_recency_weights,
         baseline_months,
         candidate_names=None,
+        anchor_table=None,
         on_profile_start=None,
     ):
         captured.append(
@@ -373,6 +374,7 @@ def test_execute_runs_tuned_model_experiment_with_profiles_and_recency_weighting
                 "use_recency_weights": use_recency_weights,
                 "profile_names": [p.name for p in profiles],
                 "candidate_names": candidate_names,
+                "anchor_table": anchor_table,
             }
         )
         from qingpu_insight.model_training import (
@@ -425,10 +427,10 @@ def test_execute_runs_tuned_model_experiment_with_profiles_and_recency_weighting
     assert len(captured) == 1
     assert captured[0]["use_recency_weights"] is True
     assert captured[0]["candidate_names"] == (
-        "ridge",
-        "random_forest",
         "hist_gradient_boosting_log",
+        "anchor_blend",
     )
+    assert isinstance(captured[0]["anchor_table"], pd.DataFrame)
     for cap in captured:
         assert cap["profile_count"] == 3
         assert cap["profile_names"] == ["quick", "balanced", "thorough"]

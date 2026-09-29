@@ -812,3 +812,15 @@ def test_tuned_model_profile_failure(monkeypatch) -> None:
             use_recency_weights=False,
         )
     assert exc.value.profile_name == "balanced"
+
+
+def test_candidate_estimators_builds_anchor_blend_from_profile_and_table() -> None:
+    from qingpu_insight.anchor_model import AnchorBlendRegressor, build_anchor_table
+
+    table = build_anchor_table(None, None)
+    profile = PRESET_PROFILES[2]
+    estimator = candidate_estimators(profile=profile, anchor_table=table)["anchor_blend"]
+    assert isinstance(estimator, AnchorBlendRegressor)
+    assert estimator.anchor_table is table
+    assert estimator.learning_rate == profile.hgb_learning_rate
+    assert estimator.max_iter == profile.hgb_max_iter

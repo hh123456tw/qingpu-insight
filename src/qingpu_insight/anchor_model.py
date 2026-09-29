@@ -49,8 +49,8 @@ def build_anchor_table(
     """Anchor rows priced on the same net-of-parking basis as resale targets."""
     parts = []
     for frame, source in ((precompletion, "precompletion"), (presale, "presale")):
-        if frame is None or frame.empty:
-            continue
+        if frame is None or frame.empty or not {"twd97_x", "twd97_y"} <= set(frame.columns):
+            continue  # anchors need coordinates to identify the building
         unit, _ = net_unit_prices(frame, parking_pool if parking_pool is not None else frame)
         part = pd.DataFrame(
             {

@@ -10,11 +10,13 @@ from uuid import UUID
 import joblib
 import pandas as pd
 
+from qingpu_insight.anchor_model import build_anchor_table
 from qingpu_insight.automl_control import AutoMLControlRegistry
 from qingpu_insight.automl_outputs import AutoMLRunOutputStore
 from qingpu_insight.automl_search import run_automl_search
 from qingpu_insight.job_executor import LocalJobExecutor
 from qingpu_insight.jobs import JobService, JobSubmission
+from qingpu_insight.market_cleaning import PRECOMPLETION_TRANSFERS_FILE
 from qingpu_insight.model_analysis import (
     build_resale_diagnostics,
     evaluate_release_checks,
@@ -60,10 +62,10 @@ from qingpu_insight.valuation_reporting import (
     write_model_card,
 )
 
-# Resale guided training compares HGB on a log target only. Pre-test rolling backtests put it
-# level with the identity target (mean MAPE 10.3% vs 10.4%), and it optimises the relative
-# error the release gate measures, so it degrades less when a project's price level shifts.
-RESALE_GUIDED_CANDIDATES = ("ridge", "random_forest", "hist_gradient_boosting_log")
+# Resale guided training compares the log-price HGB with the same-building anchor blend.
+# The blend was chosen on pre-test rolling backtests (total-price MAPE 11.6% vs 12.3% for
+# the log HGB and 13.0% before the bundled-parking target fix); see issue log §19.
+RESALE_GUIDED_CANDIDATES = ("hist_gradient_boosting_log", "anchor_blend")
 
 
 class ModelTrainingError(Exception):
@@ -360,6 +362,7 @@ class ModelTrainingService:
         automl_info: dict[str, object] | None = None,
         fit_spec: ModelFitSpec | None = None,
         feature_contract_version: int = 0,
+        anchor_table: pd.DataFrame | None = None,
     ) -> MarketTrainingResult:
         diagnostics = diagnostics or {}
         analysis_experiments = analysis_experiments or []
@@ -409,11 +412,17 @@ class ModelTrainingService:
         release_checks: dict[str, bool] = {}
         if is_resale:
             try:
+                backtest_kwargs: dict[str, Any] = {
+                    "fit_spec": fit_spec,
+                    "anchor_table": anchor_table,
+                }
+                if selected_profile is not None and fit_spec is None:
+                    backtest_kwargs["profile"] = selected_profile
                 raw_backtests = run_annual_backtests(
                     model_frame,
                     model_name,
                     enhanced_features,
-                    fit_spec=fit_spec,
+                    **backtest_kwargs,
                 )
                 serialized_backtests = []
                 for bt in raw_backtests:
@@ -540,6 +549,7 @@ class ModelTrainingService:
         is_resale = market == "resale"
         model_frame = build_model_frame(frame, market)
         split = split_by_time(model_frame)
+        anchor_table = self._anchor_table(frame, model_frame) if is_resale else None
 
         diagnostics: dict[str, object] = {}
         analysis_experiments: list[dict[str, object]] = []
@@ -569,6 +579,7 @@ class ModelTrainingService:
                 use_recency_weights=is_resale,
                 baseline_months=12 if is_resale else 24,
                 candidate_names=RESALE_GUIDED_CANDIDATES if is_resale else None,
+                anchor_table=anchor_table,
                 on_profile_start=lambda pn, _m=market: self._jobs.progress(
                     run_id,
                     {
@@ -655,7 +666,16 @@ class ModelTrainingService:
             selected_profile=selected_profile_obj,
             profile_results=profile_results,
             feature_contract_version=feature_contract_ver,
+            anchor_table=anchor_table,
         )
+
+    def _anchor_table(self, frame: pd.DataFrame, model_frame: pd.DataFrame) -> pd.DataFrame:
+        transfers_path = self._input_path.with_name(PRECOMPLETION_TRANSFERS_FILE)
+        precompletion = pd.read_parquet(transfers_path) if transfers_path.exists() else None
+        presale = frame.loc[
+            frame["transaction_type"].eq("presale") & frame["analysis_eligible"].fillna(False)
+        ]
+        return build_anchor_table(precompletion, presale, parking_pool=model_frame)
 
     def _execute_automl_market(
         self,

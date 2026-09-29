@@ -165,3 +165,16 @@ def test_blend_clones_and_pickles(fitted_model):
     restored = pickle.loads(pickle.dumps(model))
     np.testing.assert_allclose(restored.predict(X), model.predict(X))
     assert clone(model).get_params()["max_iter"] == 60
+
+
+def test_anchor_table_skips_sources_without_coordinates():
+    frame = pd.DataFrame(
+        {
+            "transaction_date": pd.to_datetime(["2024-01-01"]),
+            "total_price_twd": [10_000_000],
+            "building_area_sqm": [99.0],
+            "parking_area_sqm": [0.0],
+            "parking_price_twd": [0],
+        }
+    )
+    assert build_anchor_table(frame, frame).empty

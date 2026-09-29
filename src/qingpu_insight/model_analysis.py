@@ -303,6 +303,7 @@ def run_annual_backtests(
     feature_columns=FEATURE_COLUMNS,
     profile: TrainingProfile = BALANCED_PROFILE,
     fit_spec: ModelFitSpec | None = None,
+    anchor_table=None,
 ):
     max_date = frame["transaction_date"].max()
     max_year = max_date.year
@@ -343,6 +344,7 @@ def run_annual_backtests(
             estimators = candidate_estimators(
                 feature_columns=feature_columns,
                 profile=profile,
+                anchor_table=anchor_table,
             )
             candidate_est = estimators[selected_model_name]
 
