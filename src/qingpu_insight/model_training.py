@@ -77,19 +77,19 @@ class RecentMedianBaseline(BaseEstimator):
     def predict(self, X) -> np.ndarray:
         if isinstance(X, np.ndarray):
             X = pd.DataFrame(X, columns=list(FEATURE_COLUMNS))
-        result = []
-        for _, row in X.iterrows():
-            key = (row["station_code"], row["building_type"])
-            if key in self._group_medians.index and self._group_counts.get(key, 0) >= 20:
-                result.append(self._group_medians[key])
-            elif (
-                row["station_code"] in self._station_medians.index
-                and self._station_counts.get(row["station_code"], 0) >= 20
-            ):
-                result.append(self._station_medians[row["station_code"]])
-            else:
-                result.append(self._global_median)
-        return np.array(result)
+        # Station/type median when that group has >= 20 recent rows, else the
+        # station median when the station has >= 20, else the global median.
+        group_medians = self._group_medians[self._group_counts >= 20]
+        station_medians = self._station_medians[self._station_counts >= 20]
+        keys = pd.MultiIndex.from_arrays(
+            [X["station_code"].to_numpy(), X["building_type"].to_numpy()]
+        )
+        by_group = group_medians.reindex(keys).to_numpy(dtype=float)
+        by_station = (
+            pd.Series(X["station_code"].to_numpy()).map(station_medians).to_numpy(dtype=float)
+        )
+        result = np.where(np.isnan(by_group), by_station, by_group)
+        return np.where(np.isnan(result), float(self._global_median), result)
 
 
 def recency_weights(
