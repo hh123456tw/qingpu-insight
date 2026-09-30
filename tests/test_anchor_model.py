@@ -120,6 +120,52 @@ def test_presale_anchors_only_apply_to_young_buildings():
     assert old["prior_source"].iloc[0] == "baseline"
 
 
+def _index_sales(prices_by_month: dict[str, float], per_month: int = 40):
+    dates, prices = [], []
+    for month, price in prices_by_month.items():
+        dates += [pd.Timestamp(month)] * per_month
+        prices += [price] * per_month
+    return np.array(dates, dtype="datetime64[ns]"), np.array(prices)
+
+
+def test_local_price_index_only_uses_sales_before_the_month():
+    from qingpu_insight.anchor_model import LocalPriceIndex
+
+    dates, prices = _index_sales(
+        {"2024-01-01": 100.0, "2024-02-01": 100.0, "2024-03-01": 200.0}
+    )
+    index = LocalPriceIndex(dates, prices, window_months=1)
+    levels = index.level(np.array(["2024-02-10", "2024-03-10", "2024-04-10"], "datetime64[ns]"))
+    np.testing.assert_allclose(np.exp(levels), [100.0, 100.0, 200.0])
+    # A sale's own month is priced by the level including that month.
+    after = index.level_after(np.array(["2024-03-05"], "datetime64[ns]"))
+    np.testing.assert_allclose(np.exp(after), [200.0])
+
+
+def test_price_index_restates_anchors_to_the_row_month():
+    from qingpu_insight.anchor_model import LocalPriceIndex
+
+    anchors = _anchor_rows(
+        ["2024-01-05", "2024-01-06", "2024-01-07"],
+        x=300_000.0,
+        completion="2024-06-01",
+        price=160_000.0,
+        source="precompletion",
+    )
+    dates, prices = _index_sales(
+        {"2023-12-01": 400_000.0, "2024-01-01": 400_000.0, "2024-05-01": 500_000.0}
+    )
+    index = LocalPriceIndex(dates, prices, window_months=1)
+    query = _query("2024-06-20", x=300_020.0, age=0.05)
+
+    plain = anchor_priors(query, anchors, anchors.iloc[0:0])
+    restated = anchor_priors(query, anchors, anchors.iloc[0:0], price_index=index)
+
+    assert plain["prior"].iloc[0] == pytest.approx(160_000.0)
+    # Local prices rose 25% between the anchors' month and the month before the row.
+    assert restated["prior"].iloc[0] == pytest.approx(200_000.0)
+
+
 def test_rows_without_coordinates_fall_back_to_baseline():
     query = _query("2026-01-10", x=np.nan, age=5.0)
     query["twd97_y"] = np.nan
@@ -165,6 +211,18 @@ def test_blend_clones_and_pickles(fitted_model):
     restored = pickle.loads(pickle.dumps(model))
     np.testing.assert_allclose(restored.predict(X), model.predict(X))
     assert clone(model).get_params()["max_iter"] == 60
+
+
+def test_blend_uses_the_model_feature_columns_it_is_given(fitted_model):
+    _, train = fitted_model
+    columns = [*FEATURE_COLUMNS, "top_floor", "road_key"]
+    X = train.assign(road_key="r1")[columns]
+    model = AnchorBlendRegressor(max_iter=20, learning_rate=0.1)
+    model.fit(X, train["target_unit_price_twd"].to_numpy())
+    assert "top_floor" in model.feature_columns_
+    # Columns the preprocessors do not know are never used as features.
+    assert "road_key" not in model.feature_columns_
+    assert np.all(model.predict(X.iloc[-3:]) > 0)
 
 
 def test_anchor_table_skips_sources_without_coordinates():

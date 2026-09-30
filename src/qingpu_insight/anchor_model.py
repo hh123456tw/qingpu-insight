@@ -19,7 +19,7 @@ from scipy.spatial import cKDTree
 from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.ensemble import HistGradientBoostingRegressor
 
-from qingpu_insight.model_features import FEATURE_COLUMNS, net_unit_prices
+from qingpu_insight.model_features import net_unit_prices
 
 ANCHOR_RADIUS_M = 80.0
 COMPLETION_TOLERANCE = pd.Timedelta(days=round(1.5 * 365.25))
@@ -99,8 +99,57 @@ def implied_completion(X: pd.DataFrame) -> np.ndarray:
     return completion  # days since epoch; NaN when age is unknown
 
 
+PRICE_INDEX_MIN_ROWS = 30
+
+
+def _month_ordinals(dates) -> np.ndarray:
+    stamps = pd.DatetimeIndex(pd.to_datetime(np.asarray(dates, "datetime64[ns]")))
+    return (stamps.year * 12 + stamps.month - 1).to_numpy(int)
+
+
+class LocalPriceIndex:
+    """Point-in-time local log price level by month.
+
+    level(m) is the median log unit price of the sales in the `window_months` months
+    before month m, so it never uses sales from month m or later. Months without
+    PRICE_INDEX_MIN_ROWS sales carry the nearest earlier level (or the first level).
+    """
+
+    def __init__(self, dates, prices, window_months: int = 6) -> None:
+        months = _month_ordinals(dates)
+        logs = np.log(np.asarray(prices, float))
+        usable = np.isfinite(logs)
+        months, logs = months[usable], logs[usable]
+        self.first_ = int(months.min()) + 1 if len(months) else 0
+        last = int(months.max()) + 1 if len(months) else 0
+        levels = np.full(last - self.first_ + 1, np.nan)
+        for offset, month in enumerate(range(self.first_, last + 1)):
+            window = logs[(months >= month - window_months) & (months < month)]
+            if len(window) >= PRICE_INDEX_MIN_ROWS:
+                levels[offset] = np.median(window)
+        levels = pd.Series(levels).ffill().bfill().to_numpy(float)
+        self.levels_ = np.nan_to_num(levels, nan=0.0)
+
+    def level(self, dates) -> np.ndarray:
+        """Log level for the month containing each date, from sales before that month."""
+        if not len(self.levels_):
+            return np.zeros(len(dates))
+        offsets = np.clip(_month_ordinals(dates) - self.first_, 0, len(self.levels_) - 1)
+        return self.levels_[offsets]
+
+    def level_after(self, dates) -> np.ndarray:
+        """Log level at the end of each date's month (includes that month's sales)."""
+        next_month = (
+            pd.DatetimeIndex(pd.to_datetime(np.asarray(dates, "datetime64[ns]")))
+            .to_period("M")
+            .to_timestamp()
+            + pd.DateOffset(months=1)
+        )
+        return self.level(next_month.to_numpy("datetime64[ns]"))
+
+
 class _Pool:
-    def __init__(self, table: pd.DataFrame) -> None:
+    def __init__(self, table: pd.DataFrame, index: LocalPriceIndex | None = None) -> None:
         self.x = table["twd97_x"].to_numpy(float)
         self.y = table["twd97_y"].to_numpy(float)
         self.dates = table["transaction_date"].to_numpy("datetime64[ns]")
@@ -111,6 +160,13 @@ class _Pool:
         self.price = table["unit_price_twd"].to_numpy(float)
         self.source = table["source"].to_numpy(object)
         self.tree = cKDTree(np.c_[self.x, self.y]) if len(table) else None
+        # Local price level just after each sale, for restating it to a later month.
+        self.level = index.level_after(self.dates) if index is not None and len(table) else None
+
+    def prices(self, idx: np.ndarray, row_level: float | None) -> np.ndarray:
+        if self.level is None or row_level is None:
+            return self.price[idx]
+        return self.price[idx] * np.exp(row_level - self.level[idx])
 
 
 def anchor_priors(
@@ -118,6 +174,7 @@ def anchor_priors(
     anchors: pd.DataFrame,
     history: pd.DataFrame,
     cutoff: np.datetime64 | None = None,
+    price_index: LocalPriceIndex | None = None,
 ) -> pd.DataFrame:
     """Per-row prior price, its source, anchor count and distance to the 10th neighbour.
 
@@ -126,6 +183,8 @@ def anchor_priors(
     completion date within COMPLETION_TOLERANCE of the row's implied completion, and
     presale anchors (no completion date) only count for buildings at most
     PRESALE_MAX_AGE_YEARS old. prior is NaN where the station baseline should be used.
+    With a price_index, every anchor price is first restated from its sale month to that
+    limit month by the change in the local price level, all from sales before the limit.
     """
     n = len(X)
     limits = month_starts(X)
@@ -136,9 +195,10 @@ def anchor_priors(
     ages = pd.to_numeric(X["building_age_years"], errors="coerce").to_numpy(float)
     completions = implied_completion(X)
     tolerance = COMPLETION_TOLERANCE.days
+    row_levels = price_index.level(limits) if price_index is not None and n else None
 
-    anchor_pool = _Pool(anchors)
-    history_pool = _Pool(history)
+    anchor_pool = _Pool(anchors, price_index)
+    history_pool = _Pool(history, price_index)
     history_order = np.argsort(history_pool.dates, kind="stable")
     history_dates = history_pool.dates[history_order]
 
@@ -163,17 +223,18 @@ def anchor_priors(
     for i in range(n):
         if not (np.isfinite(xs[i]) and np.isfinite(ys[i])):
             continue
+        row_level = row_levels[i] if row_levels is not None else None
         if np.isfinite(completions[i]) or np.isfinite(ages[i]):
             pre = building_matches(anchor_pool, i)
             if len(pre) >= MIN_ANCHORS:
-                prior[i] = np.median(anchor_pool.price[pre])
+                prior[i] = np.median(anchor_pool.prices(pre, row_level))
                 labels = anchor_pool.source[pre]
                 source[i] = "precompletion" if np.any(labels == "precompletion") else "presale"
                 count[i] = len(pre)
             else:
                 same = building_matches(history_pool, i)
                 if len(same) >= MIN_ANCHORS:
-                    prior[i] = np.median(history_pool.price[same])
+                    prior[i] = np.median(history_pool.prices(same, row_level))
                     source[i] = "resale"
                     count[i] = len(same)
         earlier = history_order[: np.searchsorted(history_dates, limits[i], "left")]
@@ -183,7 +244,7 @@ def anchor_priors(
             knn_distance[i] = distances[nearest].max()
             close = earlier[nearest][distances[nearest] <= KNN_MAX_DISTANCE_M]
             if source[i] == "baseline" and len(close):
-                prior[i] = np.median(history_pool.price[close])
+                prior[i] = np.median(history_pool.prices(close, row_level))
                 source[i] = "knn"
     return pd.DataFrame(
         {
@@ -229,6 +290,7 @@ class AnchorBlendRegressor(RegressorMixin, BaseEstimator):
         max_leaf_nodes: int = 31,
         l2_regularization: float = 1.0,
         random_state: int = 42,
+        anchor_index_months: int | None = None,
     ) -> None:
         self.anchor_table = anchor_table
         self.learning_rate = learning_rate
@@ -236,6 +298,7 @@ class AnchorBlendRegressor(RegressorMixin, BaseEstimator):
         self.max_leaf_nodes = max_leaf_nodes
         self.l2_regularization = l2_regularization
         self.random_state = random_state
+        self.anchor_index_months = anchor_index_months
 
     def _hgb(self, preprocessor) -> HistGradientBoostingRegressor:
         names = preprocessor.get_feature_names_out()
@@ -254,7 +317,9 @@ class AnchorBlendRegressor(RegressorMixin, BaseEstimator):
         return self.anchor_table
 
     def _priors(self, X: pd.DataFrame, cutoff: np.datetime64 | None) -> pd.DataFrame:
-        priors = anchor_priors(X, self._anchors(), self.history_, cutoff)
+        # Artifacts pickled before the index existed have no price_index_ attribute.
+        index = getattr(self, "price_index_", None)
+        priors = anchor_priors(X, self._anchors(), self.history_, cutoff, price_index=index)
         missing = priors["prior"].isna().to_numpy()
         if missing.any():
             baseline_rows = X.loc[missing, ["station_code", "building_type"]]
@@ -269,14 +334,26 @@ class AnchorBlendRegressor(RegressorMixin, BaseEstimator):
         return frame
 
     def fit(self, X: pd.DataFrame, y, sample_weight=None) -> AnchorBlendRegressor:
-        from qingpu_insight.model_training import RecentMedianBaseline, make_preprocessor
+        from qingpu_insight.model_training import (
+            CATEGORICAL_FEATURES,
+            NUMERIC_FEATURES,
+            RecentMedianBaseline,
+            make_preprocessor,
+        )
 
         X = X.reset_index(drop=True)
         y = np.asarray(y, float)
-        self.feature_columns_ = tuple(c for c in FEATURE_COLUMNS if c in X.columns)
+        # Every column the caller passes that the preprocessors know is a model feature.
+        known = (set(NUMERIC_FEATURES) | set(CATEGORICAL_FEATURES)) - set(OFFSET_FEATURES)
+        self.feature_columns_ = tuple(c for c in X.columns if c in known)
         dates = month_starts(X)
         self.fit_until_ = (pd.Timestamp(dates.max()) + pd.DateOffset(months=1)).to_datetime64()
         self.history_ = _history_table(X, y)
+        self.price_index_ = (
+            LocalPriceIndex(dates, y, window_months=self.anchor_index_months)
+            if self.anchor_index_months
+            else None
+        )
         self.baseline_ = RecentMedianBaseline(months=12).fit(
             pd.DataFrame(
                 {
