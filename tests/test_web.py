@@ -332,37 +332,51 @@ def test_conversation_valuation_nets_verified_parking_before_computing_ratio(mon
     assert ratio == pytest.approx(1 - 20 / 30)
 
 
-def test_conversation_valuation_skips_ratio_when_parking_area_is_unknown(monkeypatch):
+def test_conversation_valuation_prefers_591_common_area_breakdown(monkeypatch):
+    # Live 591 pages list 主建物 + 附屬建物 + 共用部分 + 車位 = 權狀坪數, so the ratio
+    # needs no parking information: 11.12 / (24.12 + 2.98 + 11.12).
+    ratio, result = _conversation_common_area(
+        monkeypatch,
+        area_ping="47.49",
+        parking_type="坡道平面",
+        main_building_area_ping="24.12",
+        auxiliary_building_area_ping="2.98",
+        common_area_ping="11.12",
+        listed_common_area_percent="29",
+    )
+    assert ratio == pytest.approx(11.12 / 38.22)
+    assert result["common_area"]["source"] == "591_areas"
+
+
+def test_conversation_valuation_skips_deed_ratio_when_parking_area_is_unknown(monkeypatch):
     ratio, result = _conversation_common_area(
         monkeypatch,
         area_ping="40",
         parking_type="坡道平面",
         main_building_area_ping="18",
         auxiliary_building_area_ping="2",
-        listed_common_area_percent="35",
     )
     assert ratio is None
     assert result["common_area"]["provided"] is False
     assert any("車位" in note and "公設比" in note for note in result["limitations"])
 
 
-def test_conversation_valuation_uses_listed_ratio_only_without_parking(monkeypatch):
+def test_conversation_valuation_uses_listed_ratio_without_parking(monkeypatch):
     ratio, result = _conversation_common_area(monkeypatch, listed_common_area_percent="34")
     assert ratio == pytest.approx(0.34)
     assert result["common_area"]["source"] == "591_listed"
 
 
-def test_conversation_valuation_converts_listed_ratio_with_known_parking(monkeypatch):
-    # 591 counts parking as common area: private = (1 - 0.5) × 40.32 = 20.16 of 30 net.
+def test_conversation_valuation_uses_listed_ratio_as_is_with_parking(monkeypatch):
+    # 591's listed 公設比 already excludes parking (verified on live pages, 2026-10).
     ratio, result = _conversation_common_area(
         monkeypatch,
-        area_ping="40.32",
-        parking_type="10. 32坪，平面式，已含售金內",
-        listed_common_area_percent="50",
+        area_ping="47.49",
+        parking_type="坡道平面",
+        listed_common_area_percent="29",
     )
-    assert ratio == pytest.approx(1 - 0.5 * 40.32 / 30)
-    assert result["common_area"]["source"] == "591_listed_converted"
-    assert any("扣除車位" in note for note in result["limitations"])
+    assert ratio == pytest.approx(0.29)
+    assert result["common_area"]["source"] == "591_listed"
 
 
 @pytest.mark.parametrize(

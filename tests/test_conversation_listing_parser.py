@@ -136,6 +136,38 @@ class TestParseSaleDetail:
         assert result.auxiliary_building_area_ping == Decimal("2.1")
         assert result.listed_common_area_percent == Decimal("33.9")
 
+    def test_sale_dom_decoy_tags_do_not_split_numbers(self) -> None:
+        # 591 injects empty decoy tags inside values (seen on live pages, 2026-10).
+        html = """<html><head><title>青埔測試中古屋 - 591售屋網</title></head><body>
+<span class="info-price-num-2">2,298</span>
+<div class="detail-house-item">
+  <div class="detail-house-key">車位</div>
+  <div class="detail-house-value"><jsu></jsu>9.2<jsu></jsu>7坪<jsu></jsu>，平面式，已含售金內</div>
+</div>
+<div class="detail-house-item">
+  <div class="detail-house-key"><bibbvn></bibbvn>公設比</div>
+  <div class="detail-house-value">2<u></u><u></u>9%<!-- --></div>
+</div>
+<div class="detail-house-item">
+  <div class="detail-house-key">主建物</div>
+  <div class="detail-house-value"><span>24.12坪</span></div>
+</div>
+<div class="detail-house-item">
+  <div class="detail-house-key">附屬建物</div>
+  <div class="detail-house-value"><span>2.98坪</span></div>
+</div>
+<div class="detail-house-item">
+  <div class="detail-house-key">共用部分</div>
+  <div class="detail-house-value"><span>11.12坪</span></div>
+</div>
+</body></html>"""
+        result = parse_listing_detail(html, canonical_url=SALE_URL, listing_type="sale")
+        assert result.listed_common_area_percent == Decimal("29")
+        assert result.parking_type == "9.27坪，平面式，已含售金內"
+        assert result.main_building_area_ping == Decimal("24.12")
+        assert result.auxiliary_building_area_ping == Decimal("2.98")
+        assert result.common_area_ping == Decimal("11.12")
+
     def test_sale_dom_without_area_breakdown_leaves_fields_empty(self) -> None:
         html = _load("591_sale_detail.html")
         result = parse_listing_detail(html, canonical_url=SALE_URL, listing_type="sale")

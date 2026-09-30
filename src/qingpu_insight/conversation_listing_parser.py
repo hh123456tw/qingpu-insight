@@ -74,7 +74,8 @@ class ParsedListingDetail:
     # 權狀 area breakdown shown on sale pages; 591's 附屬建物 already includes balconies.
     main_building_area_ping: Decimal | None = None
     auxiliary_building_area_ping: Decimal | None = None
-    # 公設比 as listed (percent); its parking treatment is not stated on the page.
+    common_area_ping: Decimal | None = None
+    # 公設比 as listed (percent); on live pages it equals 共用部分 ÷ (權狀 − 車位).
     listed_common_area_percent: Decimal | None = None
 
 
@@ -191,7 +192,8 @@ def _labeled_value(
             continue
         value_element = row.select_one(value_selector)
         if value_element is not None:
-            value = value_element.get_text(" ", strip=True)
+            # No separator: 591 splits numbers with empty decoy tags ("2<u></u>9%").
+            value = value_element.get_text("", strip=True)
             if value:
                 return value
     return None
@@ -607,15 +609,18 @@ def parse_listing_detail(
 
     main_building_area_ping = None
     auxiliary_building_area_ping = None
+    common_area_ping = None
     listed_common_area_percent = None
     if listing_type == "sale":
         main_text = _house_detail_value(soup, "主建物")
         auxiliary_text = _house_detail_value(soup, "附屬建物")
+        common_text = _house_detail_value(soup, "共用部分")
         ratio_text = _house_detail_value(soup, "公設比")
         main_building_area_ping = _extract_ping(main_text) if main_text else None
         auxiliary_building_area_ping = (
             _extract_ping(auxiliary_text) if auxiliary_text else None
         )
+        common_area_ping = _extract_ping(common_text) if common_text else None
         percent_match = _PERCENT_RE.search(ratio_text or "")
         if percent_match:
             listed_common_area_percent = Decimal(percent_match.group(1))
@@ -625,6 +630,7 @@ def parse_listing_detail(
     auxiliary_building_area_ping = _validate_positive_decimal(
         auxiliary_building_area_ping, "auxiliary_building_area_ping"
     )
+    common_area_ping = _validate_positive_decimal(common_area_ping, "common_area_ping")
 
     latitude = jsonld_fields.get("latitude")
     longitude = jsonld_fields.get("longitude")
@@ -728,5 +734,6 @@ def parse_listing_detail(
         area_high_ping=area_high_ping,
         main_building_area_ping=main_building_area_ping,
         auxiliary_building_area_ping=auxiliary_building_area_ping,
+        common_area_ping=common_area_ping,
         listed_common_area_percent=listed_common_area_percent,
     )

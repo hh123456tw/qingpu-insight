@@ -172,22 +172,35 @@ def listing_common_area(
 ) -> tuple[float | None, dict[str, Any], str]:
     """公設比 net of parking from a 591 listing, or None when it cannot match the model.
 
-    Uses the deed breakdown (主建物 + 附屬建物, where 591's 附屬建物 includes balconies)
-    first. A listed 公設比 is taken as is only without parking; with a known parking area
-    it is converted assuming 591 counts parking as common area. Never guesses otherwise.
+    Live 591 sale pages (checked 2026-10) list 主建物 + 附屬建物 + 共用部分 + 車位 = 權狀坪數,
+    with balconies inside 附屬建物, and a listed 公設比 = 共用部分 ÷ (權狀 − 車位). Both match
+    the model's parking-free definition. Preference: the full breakdown (needs no parking
+    data), then 主建物 + 附屬建物 over the parking-free area, then the listed percentage.
     """
     unused = {"provided": False, "source": None, "ratio": None}
     skipped = "591 未提供可換算的主建物／附屬建物坪數，本次未使用公設比，估價區間較寬"
-    if parking_unverified:
-        return (
-            None,
-            unused,
-            "591 車位坪數無法確認，公設比無法扣除車位，本次未使用公設比，估價區間較寬",
-        )
 
     main = _positive_listing_number(payload.get("main_building_area_ping"))
     auxiliary = _positive_listing_number(payload.get("auxiliary_building_area_ping"))
+    common = _positive_listing_number(payload.get("common_area_ping"))
+    if main is not None and main > 0 and auxiliary is not None and common is not None:
+        ratio = common / (main + auxiliary + common)
+        if ratio <= MAX_COMMON_AREA_RATIO:
+            return (
+                ratio,
+                {"provided": True, "source": "591_areas", "ratio": round(ratio, 4)},
+                f"公設比（不含車位）由 591 主建物 {main:g}＋附屬建物 {auxiliary:g}＋共用部分"
+                f" {common:g} 坪換算為 {ratio:.1%}，已納入估價",
+            )
+
     if main is not None and main > 0 and auxiliary is not None:
+        if parking_unverified:
+            return (
+                None,
+                unused,
+                "591 車位坪數無法確認，無法由主建物／附屬建物換算公設比，"
+                "本次未使用公設比，估價區間較寬",
+            )
         ratio = common_area_ratio(main, auxiliary, 0.0, net_area)
         if ratio is None:
             return (
@@ -204,20 +217,13 @@ def listing_common_area(
 
     percent = _positive_listing_number(payload.get("listed_common_area_percent"))
     if percent is not None:
-        listed = percent / 100
-        if parking_area > 0:
-            ratio = 1 - (1 - listed) * total_area / net_area
-            source = "591_listed_converted"
-            note = (
-                f"591 標示公設比 {percent:g}%（假設含車位），扣除車位 {parking_area:g} 坪後"
-                f"換算為不含車位的 {ratio:.1%}，已納入估價"
-            )
-        else:
-            ratio = listed
-            source = "591_listed"
-            note = f"採用 591 標示的公設比 {percent:g}%（無車位，與模型算法相同），已納入估價"
+        ratio = percent / 100
         if 0 <= ratio <= MAX_COMMON_AREA_RATIO:
-            return ratio, {"provided": True, "source": source, "ratio": round(ratio, 4)}, note
+            return (
+                ratio,
+                {"provided": True, "source": "591_listed", "ratio": round(ratio, 4)},
+                f"採用 591 標示的公設比 {percent:g}%（不含車位，與模型算法相同），已納入估價",
+            )
     return None, unused, skipped
 
 
