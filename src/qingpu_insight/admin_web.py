@@ -5,10 +5,8 @@ import os
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from ipaddress import ip_address
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 from flask import Blueprint, current_app, jsonify, render_template, request, session
 
@@ -16,6 +14,7 @@ from qingpu_insight.local_secrets import SecretValidationError
 from qingpu_insight.official_data import _season_key
 from qingpu_insight.operation_previews import OperationPreview
 from qingpu_insight.provider_ops import BenchmarkRequest
+from qingpu_insight.web_routes.guards import LOCAL_ONLY, guarded_blueprint
 
 
 @dataclass(frozen=True)
@@ -116,23 +115,12 @@ def _complete_llm_benchmark_job(
 
 
 def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
-    bp = Blueprint("admin", __name__, url_prefix="")
+    # Every admin route is trusted-local; unsafe methods also need the CSRF token.
+    bp = guarded_blueprint("admin", __name__, default_policy=LOCAL_ONLY, url_prefix="")
 
     @bp.record_once
     def _store_runtime(state):
         state.app.extensions["qingpu_admin_runtime"] = runtime
-
-    @bp.before_request
-    def _restrict_to_local():
-        try:
-            remote_is_loopback = ip_address(request.remote_addr or "").is_loopback
-            hostname = urlsplit(f"//{request.host}").hostname
-        except ValueError:
-            return jsonify({"error": {"code": "forbidden", "message": "僅允許本機存取。"}}), 403
-        if not (remote_is_loopback and (hostname or "").lower() in {
-            "localhost", "127.0.0.1", "::1",
-        }):
-            return jsonify({"error": {"code": "forbidden", "message": "僅允許本機存取。"}}), 403
 
     @bp.get("/admin/", strict_slashes=False)
     def admin_index():
@@ -192,9 +180,6 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
 
     @bp.post("/api/admin/official-data-updates")
     def admin_official_data_update():
-        if request.headers.get("X-Qingpu-CSRF", "") != session.get("_csrf_token", ""):
-            return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
-
         rt = current_app.extensions.get("qingpu_admin_runtime")
         if rt is None or rt.official_data_service is None:
             err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
@@ -339,9 +324,6 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
 
     @bp.post("/api/admin/model-release-previews")
     def admin_model_release_preview():
-        if request.headers.get("X-Qingpu-CSRF", "") != session.get("_csrf_token", ""):
-            return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
-
         rt = current_app.extensions.get("qingpu_admin_runtime")
         if rt is None or rt.model_release_service is None:
             err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
@@ -413,9 +395,6 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
 
     @bp.post("/api/admin/model-releases")
     def admin_model_release():
-        if request.headers.get("X-Qingpu-CSRF", "") != session.get("_csrf_token", ""):
-            return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
-
         rt = current_app.extensions.get("qingpu_admin_runtime")
         if rt is None or rt.model_release_service is None:
             err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
@@ -551,9 +530,6 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
 
     @bp.post("/api/admin/backups")
     def admin_backup_create():
-        if request.headers.get("X-Qingpu-CSRF", "") != session.get("_csrf_token", ""):
-            return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
-
         rt = current_app.extensions.get("qingpu_admin_runtime")
         if rt is None or rt.backup_service is None or rt.executor is None:
             err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
@@ -581,9 +557,6 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
 
     @bp.post("/api/admin/backups/<backup_id>/restore-drills")
     def admin_backup_restore_drill(backup_id: str):
-        if request.headers.get("X-Qingpu-CSRF", "") != session.get("_csrf_token", ""):
-            return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
-
         rt = current_app.extensions.get("qingpu_admin_runtime")
         if rt is None or rt.backup_service is None or rt.executor is None:
             err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
@@ -620,9 +593,6 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
 
     @bp.post("/api/ops/restore-previews")
     def ops_restore_previews():
-        if request.headers.get("X-Qingpu-CSRF", "") != session.get("_csrf_token", ""):
-            return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
-
         rt = current_app.extensions.get("qingpu_admin_runtime")
         if rt is None or rt.restore_service is None:
             err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
@@ -675,9 +645,6 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
 
     @bp.post("/api/ops/restores")
     def ops_restores():
-        if request.headers.get("X-Qingpu-CSRF", "") != session.get("_csrf_token", ""):
-            return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
-
         rt = current_app.extensions.get("qingpu_admin_runtime")
         if rt is None or rt.restore_service is None or rt.executor is None:
             err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
@@ -774,9 +741,6 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
 
     @bp.put("/api/admin/providers/gemini-key")
     def admin_gemini_key_set():
-        if request.headers.get("X-Qingpu-CSRF", "") != session.get("_csrf_token", ""):
-            return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
-
         if request.mimetype != "application/json":
             err = {"code": "invalid_request", "message": "Request body must be JSON.",
                    "fields": {"body": "application_json"}}
@@ -816,9 +780,6 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
 
     @bp.delete("/api/admin/providers/gemini-key")
     def admin_gemini_key_delete():
-        if request.headers.get("X-Qingpu-CSRF", "") != session.get("_csrf_token", ""):
-            return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
-
         rt = current_app.extensions.get("qingpu_admin_runtime")
         if rt is None or rt.secrets_store is None:
             err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
@@ -829,9 +790,6 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
 
     @bp.post("/api/admin/provider-smoke-runs")
     def admin_provider_smoke():
-        if request.headers.get("X-Qingpu-CSRF", "") != session.get("_csrf_token", ""):
-            return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
-
         if request.mimetype != "application/json":
             err = {"code": "invalid_request", "message": "Request body must be JSON.",
                    "fields": {"body": "application_json"}}
@@ -914,9 +872,6 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
 
     @bp.post("/api/admin/llm-benchmark-runs")
     def admin_llm_benchmark():
-        if request.headers.get("X-Qingpu-CSRF", "") != session.get("_csrf_token", ""):
-            return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
-
         if request.mimetype != "application/json":
             err = {"code": "invalid_request", "message": "Request body must be JSON.",
                    "fields": {"body": "application_json"}}

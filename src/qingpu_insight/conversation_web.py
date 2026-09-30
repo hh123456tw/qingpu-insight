@@ -5,12 +5,10 @@ import re
 import uuid
 from collections.abc import Callable
 from datetime import datetime
-from ipaddress import ip_address
 from typing import Any
 from urllib.parse import urlsplit
 
 from flask import (
-    Blueprint,
     current_app,
     jsonify,
     render_template,
@@ -32,29 +30,9 @@ from qingpu_insight.conversation_urls import (
     Unsupported591Url,
     parse_initial_591_url,
 )
+from qingpu_insight.web_routes.guards import LOCAL_ONLY, guarded_blueprint
 
 _IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9._:-]{8,128}$")
-
-
-def _is_trusted_local_request() -> bool:
-    try:
-        remote_is_loopback = ip_address(request.remote_addr or "").is_loopback
-        hostname = urlsplit(f"//{request.host}").hostname
-    except ValueError:
-        return False
-    return remote_is_loopback and (hostname or "").lower() in {
-        "localhost",
-        "127.0.0.1",
-        "::1",
-    }
-
-
-def _require_mutation_auth() -> tuple | None:
-    if not _is_trusted_local_request():
-        return jsonify({"error": {"code": "forbidden", "message": "僅允許本機存取。"}}), 403
-    if request.headers.get("X-Qingpu-CSRF", "") != session.get("_csrf_token", ""):
-        return jsonify({"error": {"code": "csrf_mismatch", "message": "CSRF 驗證失敗。"}}), 403
-    return None
 
 
 def _command_idempotency_key(command: str, conversation_id: str) -> str:
@@ -134,7 +112,10 @@ def create_conversation_blueprint(
     *,
     catalog_getter: Callable[[], dict[str, Any]] | None = None,
 ):
-    bp = Blueprint("conversation", __name__, url_prefix="")
+    # Every conversation route is trusted-local; unsafe methods also need the CSRF token.
+    bp = guarded_blueprint(
+        "conversation", __name__, default_policy=LOCAL_ONLY, url_prefix=""
+    )
     get_catalog = catalog_getter or (
         lambda: {
             "default_model": "",
@@ -155,22 +136,8 @@ def create_conversation_blueprint(
             }
         }), 503
 
-    @bp.before_request
-    def require_trusted_local_request():
-        if not _is_trusted_local_request():
-            return jsonify({
-                "error": {
-                    "code": "forbidden",
-                    "message": "僅允許本機存取。",
-                }
-            }), 403
-        return None
-
     @bp.route("/api/conversations", methods=["POST"])
     def create_conversation():
-        auth_error = _require_mutation_auth()
-        if auth_error:
-            return auth_error
         if service is None:
             return jsonify({
                 "error": {"code": "service_unavailable", "message": "對話功能未啟用。"}
@@ -276,9 +243,6 @@ def create_conversation_blueprint(
 
     @bp.route("/api/conversations/<conversation_id>", methods=["DELETE"])
     def delete_conversation(conversation_id):
-        auth_error = _require_mutation_auth()
-        if auth_error:
-            return auth_error
         if service is None:
             return jsonify({
                 "error": {"code": "service_unavailable", "message": "對話功能未啟用。"}
@@ -312,9 +276,6 @@ def create_conversation_blueprint(
 
     @bp.route("/api/conversations/<conversation_id>/listing", methods=["POST"])
     def import_listing(conversation_id):
-        auth_error = _require_mutation_auth()
-        if auth_error:
-            return auth_error
         if service is None:
             return jsonify({
                 "error": {"code": "service_unavailable", "message": "對話功能未啟用。"}
@@ -357,9 +318,6 @@ def create_conversation_blueprint(
 
     @bp.route("/api/conversations/<conversation_id>/refresh", methods=["POST"])
     def refresh_listing(conversation_id):
-        auth_error = _require_mutation_auth()
-        if auth_error:
-            return auth_error
         if service is None:
             return jsonify({
                 "error": {"code": "service_unavailable", "message": "對話功能未啟用。"}
@@ -464,9 +422,6 @@ def create_conversation_blueprint(
 
     @bp.route("/api/conversations/<conversation_id>/replies", methods=["POST"])
     def create_reply(conversation_id):
-        auth_error = _require_mutation_auth()
-        if auth_error:
-            return auth_error
         if service is None:
             return jsonify({
                 "error": {"code": "service_unavailable", "message": "對話功能未啟用。"}
