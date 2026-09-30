@@ -1079,6 +1079,73 @@ def _conversation_parking(
     return parking_type, area
 
 
+def _positive_listing_number(value: object) -> float | None:
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) and number >= 0 else None
+
+
+def _conversation_common_area(
+    payload: dict[str, Any],
+    *,
+    total_area: float,
+    net_area: float,
+    parking_area: float,
+    parking_unverified: bool,
+) -> tuple[float | None, dict[str, Any], str]:
+    """公設比 net of parking from a 591 listing, or None when it cannot match the model.
+
+    Uses the deed breakdown (主建物 + 附屬建物, where 591's 附屬建物 includes balconies)
+    first. A listed 公設比 is taken as is only without parking; with a known parking area
+    it is converted assuming 591 counts parking as common area. Never guesses otherwise.
+    """
+    unused = {"provided": False, "source": None, "ratio": None}
+    skipped = "591 未提供可換算的主建物／附屬建物坪數，本次未使用公設比，估價區間較寬"
+    if parking_unverified:
+        return (
+            None,
+            unused,
+            "591 車位坪數無法確認，公設比無法扣除車位，本次未使用公設比，估價區間較寬",
+        )
+
+    main = _positive_listing_number(payload.get("main_building_area_ping"))
+    auxiliary = _positive_listing_number(payload.get("auxiliary_building_area_ping"))
+    if main is not None and main > 0 and auxiliary is not None:
+        ratio = common_area_ratio(main, auxiliary, 0.0, net_area)
+        if ratio is None:
+            return (
+                None,
+                unused,
+                "591 主建物／附屬建物坪數換算出的公設比不合理，本次未使用公設比，估價區間較寬",
+            )
+        return (
+            ratio,
+            {"provided": True, "source": "591_areas", "ratio": round(ratio, 4)},
+            f"公設比（不含車位）由 591 主建物 {main:g} 坪＋附屬建物 {auxiliary:g} 坪"
+            f"換算為 {ratio:.1%}，已納入估價",
+        )
+
+    percent = _positive_listing_number(payload.get("listed_common_area_percent"))
+    if percent is not None:
+        listed = percent / 100
+        if parking_area > 0:
+            ratio = 1 - (1 - listed) * total_area / net_area
+            source = "591_listed_converted"
+            note = (
+                f"591 標示公設比 {percent:g}%（假設含車位），扣除車位 {parking_area:g} 坪後"
+                f"換算為不含車位的 {ratio:.1%}，已納入估價"
+            )
+        else:
+            ratio = listed
+            source = "591_listed"
+            note = f"採用 591 標示的公設比 {percent:g}%（無車位，與模型算法相同），已納入估價"
+        if 0 <= ratio <= MAX_COMMON_AREA_RATIO:
+            return ratio, {"provided": True, "source": source, "ratio": round(ratio, 4)}, note
+    return None, unused, skipped
+
+
 def _conversation_valuation(
     data_source: MarketDataSource,
     registry: ModelRegistry,
@@ -1112,6 +1179,14 @@ def _conversation_valuation(
         total_floors,
     )
     age = None if transaction_type == "presale" else float(payload["age_years"])
+    raw_parking = str(payload.get("parking_type") or "").strip()
+    ratio, common_area, common_area_note = _conversation_common_area(
+        payload,
+        total_area=total_area,
+        net_area=area,
+        parking_area=parking_area,
+        parking_unverified=bool(raw_parking) and "無車位" not in raw_parking and not parking_type,
+    )
     longitude = payload.get("longitude")
     latitude = payload.get("latitude")
     coordinates = (
@@ -1138,6 +1213,7 @@ def _conversation_valuation(
         ),
         twd97_x=coordinates[0],
         twd97_y=coordinates[1],
+        common_area_ratio=ratio,
     )
     market = data_source.load(MarketFilters(transaction_type=transaction_type))
     if market.empty:
@@ -1163,7 +1239,9 @@ def _conversation_valuation(
         limitations.append(
             f"房屋坪數已從建物總坪數扣除車位 {parking_area:g} 坪"
         )
+    limitations.append(common_area_note)
     return {
+        "common_area": common_area,
         "point_estimate_twd": result["estimated_total_price_twd"],
         "estimated_building_price_twd": result.get("estimated_building_price_twd"),
         "estimated_parking_price_twd": result.get("estimated_parking_price_twd"),

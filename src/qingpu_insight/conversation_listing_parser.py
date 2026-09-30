@@ -71,6 +71,11 @@ class ParsedListingDetail:
     unit_price_high_twd_per_ping: int | None = None
     area_low_ping: Decimal | None = None
     area_high_ping: Decimal | None = None
+    # 權狀 area breakdown shown on sale pages; 591's 附屬建物 already includes balconies.
+    main_building_area_ping: Decimal | None = None
+    auxiliary_building_area_ping: Decimal | None = None
+    # 公設比 as listed (percent); its parking treatment is not stated on the page.
+    listed_common_area_percent: Decimal | None = None
 
 
 _PING_RE = re.compile(r"(-?[\d,.]+)\s*坪")
@@ -190,6 +195,29 @@ def _labeled_value(
             if value:
                 return value
     return None
+
+
+_PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
+
+
+def _house_detail_value(soup: BeautifulSoup, label: str) -> str | None:
+    """A labelled value from the sale page's 房屋資料 or address rows."""
+    value = _labeled_value(
+        soup,
+        row_selector=".detail-house-item",
+        label_selector=".detail-house-key",
+        value_selector=".detail-house-value",
+        label=label,
+    )
+    if value is None:
+        value = _labeled_value(
+            soup,
+            row_selector=".info-addr-content",
+            label_selector=".info-addr-key",
+            value_selector=".info-addr-value-text, .info-addr-value",
+            label=label,
+        )
+    return value
 
 
 def _price_text(soup: BeautifulSoup) -> str | None:
@@ -577,6 +605,27 @@ def parse_listing_detail(
             soup, ".info-parking", "[class*='parking']", "[class*='車位']"
         )
 
+    main_building_area_ping = None
+    auxiliary_building_area_ping = None
+    listed_common_area_percent = None
+    if listing_type == "sale":
+        main_text = _house_detail_value(soup, "主建物")
+        auxiliary_text = _house_detail_value(soup, "附屬建物")
+        ratio_text = _house_detail_value(soup, "公設比")
+        main_building_area_ping = _extract_ping(main_text) if main_text else None
+        auxiliary_building_area_ping = (
+            _extract_ping(auxiliary_text) if auxiliary_text else None
+        )
+        percent_match = _PERCENT_RE.search(ratio_text or "")
+        if percent_match:
+            listed_common_area_percent = Decimal(percent_match.group(1))
+    main_building_area_ping = _validate_positive_decimal(
+        main_building_area_ping, "main_building_area_ping"
+    )
+    auxiliary_building_area_ping = _validate_positive_decimal(
+        auxiliary_building_area_ping, "auxiliary_building_area_ping"
+    )
+
     latitude = jsonld_fields.get("latitude")
     longitude = jsonld_fields.get("longitude")
     if latitude is None or longitude is None:
@@ -677,4 +726,7 @@ def parse_listing_detail(
         unit_price_high_twd_per_ping=unit_price_high_twd_per_ping,
         area_low_ping=area_low_ping,
         area_high_ping=area_high_ping,
+        main_building_area_ping=main_building_area_ping,
+        auxiliary_building_area_ping=auxiliary_building_area_ping,
+        listed_common_area_percent=listed_common_area_percent,
     )

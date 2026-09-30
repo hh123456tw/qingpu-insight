@@ -262,6 +262,122 @@ def test_conversation_valuation_maps_591_elevator_building_type(
     assert captured["building_type"] == "華廈(10層含以下有電梯)"
 
 
+def _conversation_common_area(
+    monkeypatch: pytest.MonkeyPatch, **listing: Any
+) -> tuple[Any, dict[str, Any]]:
+    from qingpu_insight import web
+
+    captured: dict[str, Any] = {}
+    market = pd.DataFrame(
+        [{"transaction_type": "resale", "transaction_date": pd.Timestamp("2026-06-13")}]
+    )
+    monkeypatch.setattr(web, "build_model_frame", lambda frame, transaction_type: frame)
+
+    def fake_valuate(input_, registry, frame, latest_data_date):
+        captured["input"] = input_
+        return {
+            "estimated_total_price_twd": 12000000,
+            "interval_total_price_twd": (10000000, 14000000),
+            "confidence": "medium",
+            "confidence_reasons": [],
+            "data_date": "2026-06-13",
+            "model": {"version": "official-v3"},
+        }
+
+    monkeypatch.setattr(web, "valuate", fake_valuate)
+    payload = {
+        "listing_type": "sale",
+        "area_ping": "30",
+        "layout": "3房2廳2衛",
+        "building_type": "住宅大樓",
+        "floor": "12F/15F",
+        "total_floors": 15,
+        "age_years": "5",
+        "latitude": 25.01,
+        "longitude": 121.21,
+        **listing,
+    }
+    result = web._conversation_valuation(
+        InMemoryMarketDataSource(market),
+        object(),  # type: ignore[arg-type]
+        payload,
+    )
+    return captured["input"].common_area_ratio, result
+
+
+def test_conversation_valuation_uses_591_deed_areas_for_common_area_ratio(monkeypatch):
+    ratio, result = _conversation_common_area(
+        monkeypatch, main_building_area_ping="18", auxiliary_building_area_ping="2"
+    )
+    assert ratio == pytest.approx(1 - 20 / 30)
+    assert result["common_area"] == {
+        "provided": True,
+        "source": "591_areas",
+        "ratio": pytest.approx(1 - 20 / 30, abs=1e-4),
+    }
+    assert any("主建物" in note and "33.3%" in note for note in result["limitations"])
+
+
+def test_conversation_valuation_nets_verified_parking_before_computing_ratio(monkeypatch):
+    ratio, _ = _conversation_common_area(
+        monkeypatch,
+        area_ping="40.32",
+        parking_type="10. 32坪，平面式，已含售金內",
+        main_building_area_ping="18",
+        auxiliary_building_area_ping="2",
+    )
+    assert ratio == pytest.approx(1 - 20 / 30)
+
+
+def test_conversation_valuation_skips_ratio_when_parking_area_is_unknown(monkeypatch):
+    ratio, result = _conversation_common_area(
+        monkeypatch,
+        area_ping="40",
+        parking_type="坡道平面",
+        main_building_area_ping="18",
+        auxiliary_building_area_ping="2",
+        listed_common_area_percent="35",
+    )
+    assert ratio is None
+    assert result["common_area"]["provided"] is False
+    assert any("車位" in note and "公設比" in note for note in result["limitations"])
+
+
+def test_conversation_valuation_uses_listed_ratio_only_without_parking(monkeypatch):
+    ratio, result = _conversation_common_area(monkeypatch, listed_common_area_percent="34")
+    assert ratio == pytest.approx(0.34)
+    assert result["common_area"]["source"] == "591_listed"
+
+
+def test_conversation_valuation_converts_listed_ratio_with_known_parking(monkeypatch):
+    # 591 counts parking as common area: private = (1 - 0.5) × 40.32 = 20.16 of 30 net.
+    ratio, result = _conversation_common_area(
+        monkeypatch,
+        area_ping="40.32",
+        parking_type="10. 32坪，平面式，已含售金內",
+        listed_common_area_percent="50",
+    )
+    assert ratio == pytest.approx(1 - 0.5 * 40.32 / 30)
+    assert result["common_area"]["source"] == "591_listed_converted"
+    assert any("扣除車位" in note for note in result["limitations"])
+
+
+@pytest.mark.parametrize(
+    "listing",
+    [
+        {},
+        {"main_building_area_ping": "29.5", "auxiliary_building_area_ping": "2"},
+        {"main_building_area_ping": "18"},
+        {"listed_common_area_percent": "85"},
+    ],
+)
+def test_conversation_valuation_leaves_ratio_unset_without_usable_data(monkeypatch, listing):
+    ratio, result = _conversation_common_area(monkeypatch, **listing)
+    assert ratio is None
+    assert result["common_area"] == {"provided": False, "source": None, "ratio": None}
+    assert any("未使用公設比" in note for note in result["limitations"])
+
+
 @pytest.mark.parametrize(
     ("raw", "expected_type", "expected_area"),
     [

@@ -111,6 +111,38 @@ class TestParseSaleDetail:
         assert result.latitude == Decimal("25.0094795")
         assert result.longitude == Decimal("121.2187076")
 
+    def test_sale_dom_area_breakdown_and_listed_common_ratio(self) -> None:
+        html = """<html><head><title>青埔測試中古屋 - 591售屋網</title></head><body>
+<span class="info-price-num-2">2,298</span>
+<div class="detail-house-item">
+  <div class="detail-house-key">權狀坪數</div>
+  <div class="detail-house-value">41.12坪</div>
+</div>
+<div class="detail-house-item">
+  <div class="detail-house-key">主<duncak></duncak>建物</div>
+  <div class="detail-house-value">25.5坪</div>
+</div>
+<div class="detail-house-item">
+  <div class="detail-house-key">附屬建物</div>
+  <div class="detail-house-value">2.1 坪</div>
+</div>
+<div class="detail-house-item">
+  <div class="detail-house-key">公設比</div>
+  <div class="detail-house-value">33.9%</div>
+</div>
+</body></html>"""
+        result = parse_listing_detail(html, canonical_url=SALE_URL, listing_type="sale")
+        assert result.main_building_area_ping == Decimal("25.5")
+        assert result.auxiliary_building_area_ping == Decimal("2.1")
+        assert result.listed_common_area_percent == Decimal("33.9")
+
+    def test_sale_dom_without_area_breakdown_leaves_fields_empty(self) -> None:
+        html = _load("591_sale_detail.html")
+        result = parse_listing_detail(html, canonical_url=SALE_URL, listing_type="sale")
+        assert result.main_building_area_ping is None
+        assert result.auxiliary_building_area_ping is None
+        assert result.listed_common_area_percent is None
+
     def test_current_sale_dom_layout_wins_over_community_jsonld(self) -> None:
         html = """<html><head>
 <title>青埔測試中古屋 - 591售屋網</title>
