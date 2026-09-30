@@ -31,6 +31,9 @@ from qingpu_insight.model_tuning import (
     parse_tuning_plan,
 )
 
+# End-to-end training paths run for real, with shrunken tree ensembles for speed.
+pytestmark = pytest.mark.usefixtures("fast_estimators")
+
 
 class FakeJobRepository:
     def __init__(self) -> None:

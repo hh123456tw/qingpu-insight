@@ -12,6 +12,9 @@ from qingpu_insight.parking_valuation import ParkingPricePolicy, ParkingPriceSta
 from qingpu_insight.valuation import ValuationBundle
 from qingpu_insight.valuation_reporting import write_evaluation, write_model_card
 
+# Experiments run for real, with shrunken tree ensembles for speed.
+pytestmark = pytest.mark.usefixtures("fast_estimators")
+
 
 @pytest.fixture
 def trained_bundle():

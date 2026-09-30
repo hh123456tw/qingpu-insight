@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
+from qingpu_insight import conversation_listing_capture
 from qingpu_insight.conversation_listing_capture import (
     CapturedListing,
     DetailPageBrowser,
@@ -47,6 +50,21 @@ SALE_URL = "https://sale.591.com.tw/home/house/detail/1/2.html"
 
 def _resolved_sale(_: Initial591Url):
     return validate_final_591_url(SALE_URL)
+
+
+class _SimulatedClock:
+    """Clock advanced by the patched ``time.sleep`` instead of wall time."""
+
+    def __init__(self) -> None:
+        self.current = datetime(2025, 1, 1, tzinfo=UTC)
+        self.sleeps: list[float] = []
+
+    def now(self) -> datetime:
+        return self.current
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.current += timedelta(seconds=seconds)
 
 
 class _Response:
@@ -231,21 +249,26 @@ class TestDetailPageBrowser:
             browser.capture(initial)
         assert "quit" in driver.calls
 
-    def test_parser_failure(self) -> None:
+    def test_parser_failure(self, monkeypatch) -> None:
         bad_html = (
             '<html><script type="application/ld+json">'
             '{"invalid":true}</script><body>No data</body></html>'
         )
+        clock = _SimulatedClock()
+        monkeypatch.setattr(conversation_listing_capture.time, "sleep", clock.sleep)
         driver = FakeBrowser(pages=[bad_html])
         browser = DetailPageBrowser(
             driver_factory=lambda: driver,
             parser=parse_listing_detail,
+            clock=clock,
             redirect_resolver=_resolved_sale,
         )
         initial = Initial591Url(request_url=SALE_URL, kind="direct")
         with pytest.raises(ListingDetailParseError):
             browser.capture(initial)
         assert "quit" in driver.calls
+        # The sale page still waits out the 3 s content-settle window before parsing.
+        assert sum(clock.sleeps) >= 3
 
     def test_driver_cleanup_on_success(self) -> None:
         driver = FakeBrowser(pages=[SALE_DETAIL_HTML])

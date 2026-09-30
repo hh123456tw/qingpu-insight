@@ -532,18 +532,31 @@ def test_explicit_wait_timeout(tmp_path):
     assert batch.errors[0].code == "page_failed"
 
 
-def test_three_retries(tmp_path):
+def _record_sleeps(monkeypatch) -> list[float]:
+    # Record backoff/politeness delays instead of waiting on the wall clock.
+    import qingpu_insight.listing_capture as listing_capture
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(listing_capture.time, "sleep", sleeps.append)
+    return sleeps
+
+
+def test_three_retries(tmp_path, monkeypatch):
+    sleeps = _record_sleeps(monkeypatch)
     browser = FakeBrowser(pages=[SALE_HTML], fail_page_source=3)
     source = Selenium591Source(browser=browser, writer=RawBatchWriter(tmp_path, "sale"))
     batch = source.capture("sale", max_pages=1)
     assert len(batch.pages) == 1
     assert len(batch.errors) == 0
+    assert sleeps[:3] == [1, 2, 4]
 
 
-def test_checkpoint_records_diagnostic_progress(tmp_path):
+def test_checkpoint_records_diagnostic_progress(tmp_path, monkeypatch):
+    sleeps = _record_sleeps(monkeypatch)
     browser = FakeBrowser(pages=[SALE_HTML, SALE_HTML])
     source = Selenium591Source(browser=browser, writer=RawBatchWriter(tmp_path, "sale"))
     source.capture("sale", max_pages=2)
+    assert sleeps and all(2.0 <= delay <= 5.0 for delay in sleeps)
     checkpoint = source._writer.batch_dir / "checkpoint.json"
     assert checkpoint.exists()
     data = json.loads(checkpoint.read_text(encoding="utf-8"))

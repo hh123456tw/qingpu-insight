@@ -20,6 +20,9 @@ from qingpu_insight.model_features import (
 from qingpu_insight.model_training import run_model_experiment, split_by_time
 from qingpu_insight.model_tuning import TrainingProfile
 
+# Experiments and backtests run for real, with shrunken tree ensembles for speed.
+pytestmark = pytest.mark.usefixtures("fast_estimators")
+
 
 @pytest.fixture
 def large_model_frame():

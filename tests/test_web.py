@@ -2436,6 +2436,12 @@ def test_admin_composition_error_returns_fixed_safe_message(
             RuntimeError("mysql://admin:password@localhost/db SELECT secret")
         ),
     )
+
+    def refuse_connection():
+        # Fail fast instead of waiting on a DNS lookup for the placeholder host.
+        raise pymysql.err.OperationalError(2003, "database unavailable in test")
+
+    monkeypatch.setattr(cli, "create_mysql_connection_factory", lambda: refuse_connection)
     app = web.create_app(root=tmp_path, data_source=InMemoryMarketDataSource(market_frame))
     with app.test_client() as client:
         with client.session_transaction() as sess:
