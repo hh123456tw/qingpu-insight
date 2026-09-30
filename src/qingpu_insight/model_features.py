@@ -32,7 +32,12 @@ DERIVED_FEATURE_COLUMNS = (
     "twd97_y",
     "location_known",
 )
-FEATURE_COLUMNS = BASE_FEATURE_COLUMNS + DERIVED_FEATURE_COLUMNS
+# Inputs a valuation may omit; missing values go through the preprocessors' imputation.
+# common_area_ratio: common (公設) share of the building area net of parking, from the
+# official main-building / auxiliary / balcony areas (market_cleaning.add_area_share_features).
+OPTIONAL_FEATURE_COLUMNS = ("common_area_ratio",)
+FEATURE_COLUMNS = BASE_FEATURE_COLUMNS + DERIVED_FEATURE_COLUMNS + OPTIONAL_FEATURE_COLUMNS
+MAX_COMMON_AREA_RATIO = 0.70
 
 _CHINESE_DIGITS = {
     "一": 1,
@@ -185,6 +190,47 @@ def net_unit_prices(frame: pd.DataFrame, pool: pd.DataFrame) -> tuple[np.ndarray
     return unit, estimated
 
 
+# Central bank selective credit controls on housing loans: (effective date, step).
+# Tightening rounds add a step and easings remove one.
+CREDIT_CONTROL_STEPS = (
+    ("2020-12-08", 1),
+    ("2021-03-19", 1),
+    ("2021-09-24", 1),
+    ("2021-12-17", 1),
+    ("2023-06-16", 1),
+    ("2024-06-14", 1),
+    ("2024-09-20", 1),
+    ("2026-03-20", -1),
+)
+FLOOR_POSITION_COLUMNS = ("first_floor", "low_floor", "top_floor")
+
+
+def credit_control_rounds(month_starts: pd.Series) -> np.ndarray:
+    """Net credit-control rounds in force at any time during each transaction month."""
+    months = pd.to_datetime(month_starts).dt.to_period("M")
+    rounds = np.zeros(len(months), dtype=float)
+    for effective, step in CREDIT_CONTROL_STEPS:
+        rounds += np.where(months >= pd.Period(effective, "M"), step, 0)
+    return rounds
+
+
+def _floor_position_flags(frame: pd.DataFrame) -> dict[str, np.ndarray]:
+    def column(name: str) -> np.ndarray:
+        if name not in frame:
+            return np.full(len(frame), np.nan)
+        return pd.to_numeric(frame[name], errors="coerce").to_numpy(float)
+
+    floor = column("floor")
+    total = column("total_floors")
+    known = np.isfinite(floor)
+    top_known = known & np.isfinite(total)
+    return {
+        "first_floor": np.where(known, (floor == 1).astype(float), np.nan),
+        "low_floor": np.where(known, ((floor >= 2) & (floor <= 3)).astype(float), np.nan),
+        "top_floor": np.where(top_known, ((floor == total) & (total > 1)).astype(float), np.nan),
+    }
+
+
 def add_derived_features(frame: pd.DataFrame) -> pd.DataFrame:
     result = frame.copy()
     for coordinate in ("twd97_x", "twd97_y"):
@@ -196,6 +242,11 @@ def add_derived_features(frame: pd.DataFrame) -> pd.DataFrame:
         & np.isfinite(result["twd97_y"].to_numpy(dtype=float))
     )
     result["location_known"] = np.where(coordinates_known, "known", "missing")
+    for column in OPTIONAL_FEATURE_COLUMNS:
+        # Market files built before a column existed simply leave it missing.
+        result[column] = (
+            pd.to_numeric(result[column], errors="coerce") if column in result else np.nan
+        )
     if "transaction_date" in result:
         dates = pd.to_datetime(result["transaction_date"])
     else:
@@ -207,6 +258,9 @@ def add_derived_features(frame: pd.DataFrame) -> pd.DataFrame:
             }
         )
     result["transaction_month_index"] = dates.dt.year * 12 + dates.dt.month
+    result["credit_control_rounds"] = credit_control_rounds(dates)
+    for column, values in _floor_position_flags(result).items():
+        result[column] = values
     result["station_building_type"] = (
         result["station_code"].fillna("unknown").astype(str)
         + "|"
@@ -301,8 +355,15 @@ class ValuationInput:
     asking_total_price_twd: int | None = None
     twd97_x: float | None = None
     twd97_y: float | None = None
+    # Optional 公設比 net of parking (0-0.70); None when the user does not know it.
+    common_area_ratio: float | None = None
 
     def __post_init__(self):
+        if self.common_area_ratio is not None and not (
+            math.isfinite(self.common_area_ratio)
+            and 0 <= self.common_area_ratio <= MAX_COMMON_AREA_RATIO
+        ):
+            raise ValueError("common_area_ratio must be between 0 and 0.70")
         if not self.parking_type:
             object.__setattr__(self, "parking_area_ping", 0)
         elif self.parking_area_ping <= 0:
@@ -380,5 +441,8 @@ def input_frame(value: ValuationInput, data_date: pd.Timestamp) -> pd.DataFrame:
         "transaction_month": [data_date.month],
         "twd97_x": [value.twd97_x],
         "twd97_y": [value.twd97_y],
+        "common_area_ratio": [
+            value.common_area_ratio if value.common_area_ratio is not None else np.nan
+        ],
     }
     return add_derived_features(pd.DataFrame(data)).loc[:, list(FEATURE_COLUMNS)]

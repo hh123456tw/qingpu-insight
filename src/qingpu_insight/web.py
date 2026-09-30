@@ -664,6 +664,9 @@ def parse_valuation_payload(
             else None,
             twd97_x=location.twd97_x if location is not None else None,
             twd97_y=location.twd97_y if location is not None else None,
+            common_area_ratio=float(payload["common_area_ratio"])
+            if payload.get("common_area_ratio") not in (None, "")
+            else None,
         )
     except (KeyError, TypeError, ValueError):
         raise ApiInputError("估價條件格式不正確。", {"valuation": "invalid"}) from None

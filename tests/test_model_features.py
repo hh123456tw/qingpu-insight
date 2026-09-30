@@ -243,6 +243,142 @@ def test_derived_feature_boundaries_and_missing_values():
     assert result["floor_band"].tolist() == ["low", "middle", "middle", "unknown"]
 
 
+def test_common_area_ratio_is_an_optional_model_input(valid_resale_input):
+    assert "common_area_ratio" in FEATURE_COLUMNS
+    missing = input_frame(valid_resale_input, pd.Timestamp("2026-06-12"))
+    assert np.isnan(missing.at[0, "common_area_ratio"])
+    given = input_frame(
+        replace(valid_resale_input, common_area_ratio=0.34), pd.Timestamp("2026-06-12")
+    )
+    assert given.at[0, "common_area_ratio"] == pytest.approx(0.34)
+
+
+@pytest.mark.parametrize("ratio", [-0.01, 0.71, float("nan")])
+def test_valuation_input_rejects_impossible_common_area_ratio(valid_resale_input, ratio):
+    with pytest.raises(ValueError, match="common_area_ratio"):
+        replace(valid_resale_input, common_area_ratio=ratio)
+
+
+def test_build_model_frame_without_area_components_leaves_ratio_missing(fixture_frame):
+    source = fixture_frame.drop(columns="common_area_ratio", errors="ignore")
+    frame = build_model_frame(source, "resale")
+    assert frame["common_area_ratio"].isna().all()
+
+
+def test_floor_position_flags_mark_first_low_and_top_floors():
+    frame = pd.DataFrame(
+        {
+            "transaction_date": pd.to_datetime(["2026-01-01"] * 6),
+            "station_code": ["A18"] * 6,
+            "building_type": ["住宅大樓"] * 6,
+            "building_age_years": [5.0] * 6,
+            "building_area_ping": [30.0] * 6,
+            "floor": [1, 2, 3, 4, 15, np.nan],
+            "total_floors": [15, 15, 15, 15, 15, 15],
+            "floor_ratio": [1 / 15, 2 / 15, 3 / 15, 4 / 15, 1.0, np.nan],
+        }
+    )
+    result = add_derived_features(frame)
+    assert result["first_floor"].tolist()[:5] == [1.0, 0.0, 0.0, 0.0, 0.0]
+    assert result["low_floor"].tolist()[:5] == [0.0, 1.0, 1.0, 0.0, 0.0]
+    assert result["top_floor"].tolist()[:5] == [0.0, 0.0, 0.0, 0.0, 1.0]
+    assert result[["first_floor", "low_floor", "top_floor"]].iloc[5].isna().all()
+
+
+def test_single_storey_building_is_first_floor_not_top_floor():
+    frame = pd.DataFrame(
+        {
+            "transaction_date": pd.to_datetime(["2026-01-01"]),
+            "station_code": ["A18"],
+            "building_type": ["透天厝"],
+            "building_age_years": [5.0],
+            "building_area_ping": [30.0],
+            "floor": [1],
+            "total_floors": [1],
+            "floor_ratio": [1.0],
+        }
+    )
+    result = add_derived_features(frame).iloc[0]
+    assert (result["first_floor"], result["top_floor"]) == (1.0, 0.0)
+
+
+@pytest.mark.parametrize(
+    ("month", "rounds"),
+    [
+        ("2020-11-01", 0),
+        ("2020-12-01", 1),
+        ("2021-03-01", 2),
+        ("2021-09-01", 3),
+        ("2021-12-01", 4),
+        ("2023-05-01", 4),
+        ("2023-06-01", 5),
+        ("2024-06-01", 6),
+        ("2024-09-01", 7),
+        ("2026-02-01", 7),
+        ("2026-03-01", 6),
+    ],
+)
+def test_credit_control_rounds_count_steps_in_force_during_the_month(month, rounds):
+    stamp = pd.Timestamp(month)
+    frame = pd.DataFrame(
+        {
+            "transaction_year": [stamp.year],
+            "transaction_month": [stamp.month],
+            "station_code": ["A18"],
+            "building_type": ["住宅大樓"],
+            "building_age_years": [5.0],
+            "building_area_ping": [30.0],
+            "floor_ratio": [0.5],
+        }
+    )
+    assert add_derived_features(frame)["credit_control_rounds"].iloc[0] == rounds
+
+
+def test_floor_and_credit_features_match_between_training_and_inference(valid_resale_input):
+    raw = pd.DataFrame(
+        [
+            {
+                "analysis_eligible": True,
+                "transaction_type": "resale",
+                "transaction_date": pd.Timestamp("2024-10-02"),
+                "station_code": "A17",
+                "station_distance_m": 500.0,
+                "building_area_ping": 30.0,
+                "building_type": "住宅大樓",
+                "bedrooms": 3,
+                "living_rooms": 2,
+                "bathrooms": 2,
+                "building_age_years": 6.0,
+                "floor": "十五層",
+                "total_floors": "十五層",
+                "parking_type": "",
+                "parking_area_sqm": 0.0,
+                "parking_price_twd": 0.0,
+                "total_price_twd": 12_000_000,
+                "unit_price_per_ping_twd": 400_000.0,
+            }
+        ]
+    )
+    trained = build_model_frame(raw, "resale").iloc[0]
+    value = replace(valid_resale_input, floor=15, total_floors=15)
+    inferred = add_derived_features(
+        input_frame(value, pd.Timestamp("2024-10-31")).loc[:, ["floor", "total_floors"]]
+        .assign(
+            transaction_year=2024,
+            transaction_month=10,
+            station_code="A17",
+            building_type="住宅大樓",
+            building_age_years=6.0,
+            building_area_ping=30.0,
+            floor_ratio=1.0,
+        )
+    ).iloc[0]
+    for column in ("first_floor", "low_floor", "top_floor", "credit_control_rounds"):
+        assert trained[column] == inferred[column]
+    assert trained["top_floor"] == 1.0
+    assert trained["credit_control_rounds"] == 7
+
+
 def _parking_rows(dates, *, parking_price, parking_type="坡道平面", total=10_000_000):
     return pd.DataFrame(
         {

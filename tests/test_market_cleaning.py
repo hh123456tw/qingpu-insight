@@ -141,3 +141,43 @@ def test_build_market_dataset_applies_completion_checks_to_resale_only() -> None
         "missing_completion_date": 1,
         "future_completion_transfer": 1,
     }
+
+
+def test_common_area_ratio_is_net_of_parking_and_counts_balconies_as_private() -> None:
+    from qingpu_insight.market_cleaning import add_area_share_features
+
+    frame = pd.DataFrame(
+        {
+            "building_area_sqm": [110.0, 100.0, 100.0, 20.0, 50.0],
+            "parking_area_sqm": [25.0, 0.0, None, 25.0, 0.0],
+            "main_building_area_sqm": [50.0, 52.0, 52.0, 10.0, None],
+            "auxiliary_building_area_sqm": [2.0, 0.0, 0.0, 0.0, 1.0],
+            "balcony_area_sqm": [4.1, 4.0, 4.0, 1.0, 2.0],
+        }
+    )
+
+    result = add_area_share_features(frame)
+
+    assert result is not frame
+    # 110 - 25 parking = 85 of which 56.1 private (main + auxiliary + balcony).
+    assert result.loc[0, "common_area_ratio"] == pytest.approx(1 - 56.1 / 85)
+    assert result.loc[1, "common_area_ratio"] == pytest.approx(0.44)
+    assert result.loc[2, "common_area_ratio"] == pytest.approx(0.44)
+    # Parking larger than the building area or missing components are not usable.
+    assert result.loc[[3, 4], "common_area_ratio"].isna().all()
+
+
+def test_build_market_dataset_carries_common_area_ratio() -> None:
+    frame = sample_rows().assign(
+        parking_area_sqm=0.0,
+        main_building_area_sqm=60.0,
+        auxiliary_building_area_sqm=0.0,
+        balcony_area_sqm=4.46,
+    )
+    clean, _ = build_market_dataset(frame)
+    assert clean["common_area_ratio"].notna().all()
+
+
+def test_build_market_dataset_without_area_components_has_empty_ratio() -> None:
+    clean, _ = build_market_dataset(sample_rows())
+    assert clean["common_area_ratio"].isna().all()

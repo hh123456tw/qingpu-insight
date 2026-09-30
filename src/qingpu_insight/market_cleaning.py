@@ -44,6 +44,39 @@ class MarketQuality:
         return asdict(self)
 
 
+AREA_COMPONENT_COLUMNS = (
+    "main_building_area_sqm",
+    "auxiliary_building_area_sqm",
+    "balcony_area_sqm",
+)
+MAX_COMMON_AREA_RATIO = 0.70
+
+
+def add_area_share_features(frame: pd.DataFrame) -> pd.DataFrame:
+    """Share of the non-parking building area that is common (公設), from official areas.
+
+    Parking area is removed from the denominator because registered parking spaces sit in
+    the common area; balconies are private area, not common area. Ratios outside
+    [0, MAX_COMMON_AREA_RATIO] or with missing components are left empty.
+    """
+    result = frame.copy()
+    for column in AREA_COMPONENT_COLUMNS:
+        if column not in result:
+            result[column] = pd.NA
+        result[column] = pd.to_numeric(result[column], errors="coerce")
+    parking = (
+        pd.to_numeric(result["parking_area_sqm"], errors="coerce").fillna(0)
+        if "parking_area_sqm" in result
+        else 0.0
+    )
+    non_parking = pd.to_numeric(result["building_area_sqm"], errors="coerce") - parking
+    components = list(AREA_COMPONENT_COLUMNS)
+    private = result[components].sum(axis=1, min_count=len(components))
+    ratio = 1 - private / non_parking.where(non_parking > 0)
+    result["common_area_ratio"] = ratio.where(ratio.between(0, MAX_COMMON_AREA_RATIO)).astype(float)
+    return result
+
+
 def _key(row: pd.Series) -> str:
     payload = "|".join(
         str(row.get(name, ""))
@@ -64,7 +97,7 @@ def _annotate_market_rows(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, 
     if invalid:
         raise ValueError(f"Invalid transaction_type values: {sorted(invalid)}")
 
-    output = frame.copy()
+    output = add_area_share_features(frame)
     output["building_area_ping"] = output["building_area_sqm"] / SQM_PER_PING
     output["unit_price_per_ping_twd"] = output["unit_price_sqm_twd"] * SQM_PER_PING
     output["building_age_years"] = (

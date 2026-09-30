@@ -70,6 +70,30 @@ def test_resale_parser_exposes_residential_analysis_fields() -> None:
     assert row["has_management"] == "有"
 
 
+def test_resale_parser_keeps_official_area_components(tmp_path: Path) -> None:
+    source = tmp_path / "resale.csv"
+    source.write_text(
+        "鄉鎮市區,土地位置建物門牌,交易年月日,建物移轉總面積平方公尺,"
+        "主建物面積,附屬建物面積,陽台面積,車位移轉總面積平方公尺,總價元\n"
+        "中壢區,高鐵北路一段5號,1150615,110.0,61.2,4.8,4.8,25.0,20000000\n"
+        "中壢區,高鐵北路一段6號,1150615,,,,,,18000000\n",
+        encoding="utf-8-sig",
+    )
+
+    frame = read_moi_csv(source, "resale")
+
+    row = frame.iloc[0]
+    assert row["main_building_area_sqm"] == 61.2
+    assert row["auxiliary_building_area_sqm"] == 4.8
+    assert row["balcony_area_sqm"] == 4.8
+    assert frame.loc[1, ["main_building_area_sqm", "balcony_area_sqm"]].isna().all()
+
+
+def test_presale_parser_has_empty_area_components() -> None:
+    frame = read_moi_csv(FIXTURES / "moi_presale.csv", "presale")
+    assert frame["main_building_area_sqm"].isna().all()
+
+
 def test_presale_parser_allows_missing_completion_date() -> None:
     frame = read_moi_csv(FIXTURES / "moi_presale.csv", "presale")
     assert pd.isna(frame.loc[0, "completion_date"])

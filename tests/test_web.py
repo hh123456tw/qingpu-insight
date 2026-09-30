@@ -1318,6 +1318,18 @@ def valid_payload():
     return dict(VALID_RESALE_PAYLOAD)
 
 
+def test_valuation_payload_accepts_optional_common_area_ratio(valid_payload):
+    from qingpu_insight.web import ApiInputError, parse_valuation_payload
+
+    assert parse_valuation_payload(valid_payload).common_area_ratio is None
+    blank = parse_valuation_payload(dict(valid_payload, common_area_ratio=""))
+    assert blank.common_area_ratio is None
+    parsed = parse_valuation_payload(dict(valid_payload, common_area_ratio=0.34))
+    assert parsed.common_area_ratio == pytest.approx(0.34)
+    with pytest.raises(ApiInputError):
+        parse_valuation_payload(dict(valid_payload, common_area_ratio=0.9))
+
+
 def test_valuation_rejects_selected_parking_with_zero_area(client, valid_payload):
     valid_payload.update(parking_type="坡道平面", parking_area_ping=0)
     response = client.post("/api/valuations", json=valid_payload)
