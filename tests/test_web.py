@@ -3779,6 +3779,9 @@ class TestModelAdminPage:
 
         response = model_admin_client.get("/admin")
         html = response.get_data(as_text=True)
+        # The page controller lives in static/admin_page.js (formerly inline).
+        script = _admin_page_script(model_admin_client)
+        page_source = html + script
         assert response.status_code == 200
         assert 'name="csrf-token"' in html
         assert 'id="mr-official-cards"' in html
@@ -3787,21 +3790,27 @@ class TestModelAdminPage:
         assert 'value="resale"' in html
         assert 'value="presale"' not in html
         assert 'value="all"' not in html
-        assert "預售屋" not in html
+        assert "預售屋" not in page_source
         assert "不會自動發布" in html
         assert 'id="ma-history-table"' in html
         assert 'id="ma-detail-content"' in html
         assert "job_polling.js" in html
         assert "models_admin.js" in html
-        assert "查看詳細數據" in html
-        assert "誤差診斷（前 20 筆）" in html
-        assert "平均每坪估錯多少元" in html
-        assert "重要特徵（前五項）" in html
-        assert "renderTrainingDetail(detailRun, true)" in html
-        assert 'var detailSection = document.getElementById("ma-detail-content")' in html
+        assert "查看詳細數據" in script
+        assert "誤差診斷（前 20 筆）" in script
+        assert "平均每坪估錯多少元" in script
+        assert "重要特徵（前五項）" in script
+        assert "renderTrainingDetail(detailRun, true)" in script
+        assert 'var detailSection = document.getElementById("ma-detail-content")' in script
         js_pos = html.index("job_polling.js")
         ma_pos = html.index("models_admin.js")
         assert js_pos < ma_pos, "job_polling.js must load before models_admin.js"
+        load_order = [
+            html.index(name)
+            for name in ("feature_labels.js", "models_admin.js", "admin.js", "admin_page.js")
+        ]
+        assert load_order == sorted(load_order), "admin_page.js must load last"
+        assert "<script>" not in html, "admin page scripts live in static/"
         assert 'id="ma-active-status"' in html
         assert 'id="ma-submit-btn"' in html
 
@@ -3818,7 +3827,7 @@ class TestModelAdminPage:
 
     def test_model_admin_page_no_freeform_inputs(self, model_admin_client) -> None:
         response = model_admin_client.get("/admin")
-        html = response.get_data(as_text=True)
+        html = response.get_data(as_text=True) + _admin_page_script(model_admin_client)
         forbidden = (
             'name="path"',
             'name="command"',
@@ -3834,6 +3843,15 @@ class TestModelAdminPage:
         response = model_admin_client.get("/admin")
         html = response.get_data(as_text=True)
         assert "不會自動發布" in html
+
+
+def _admin_page_script(client: FlaskClient) -> str:
+    response = client.get("/static/admin_page.js")
+    assert response.status_code == 200
+    try:
+        return response.get_data(as_text=True)
+    finally:
+        response.close()
 
 
 def test_admin_page_is_local_only(model_admin_client):
