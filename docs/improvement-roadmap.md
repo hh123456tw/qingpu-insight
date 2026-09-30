@@ -37,8 +37,10 @@
 | # | 項目 | 內容 |
 |---|---|---|
 | 3.1 | 測試加速 | ✅ 完成：全套由約 3.5 分鐘降到 74 秒；訓練測試縮小迭代、移除 DNS 等待與真實 sleep、Baseline 預測向量化 |
-| 3.2 | 拆分 `web.py` | 依領域拆成 blueprint，統一本機／CSRF 防護 decorator（使用 `hmac.compare_digest`） |
-| 3.3 | 合併管理 API | `/api/ops/*` 與 `/api/admin/*` 收斂為一套 |
-| 3.4 | 清理預售屋殘留 | 產品只支援中古屋，移除不再使用的 presale 程式路徑（保留歷史 artifact 的載入相容性） |
+| 3.2 | 拆分 `web.py` | ✅ 完成：`web.py` 由 2,295 行降到約 210 行，只負責組裝；路由拆到 `web_routes/`（pages、market、valuation、jobs、reports、ops），服務組裝在 `web_composition.py`，591 助理估價與表單解析移到 `conversation_valuation.py`、`valuation_request.py`。本機＋CSRF 防護統一由 `web_routes/guards.py` 的 before_request 執行（`hmac.compare_digest`），取代 web.py／admin_web.py／conversation_web.py 內約 15 處重複檢查；`tests/test_web_guards.py` 列舉 `app.url_map` 確認所有管理、維運、工作、報告與對話路由都受防護 |
+| 3.3 | 合併管理 API | ✅ 完成：`/api/admin/*` 為正式命名空間（新增 `/api/admin/health`、`GET /api/admin/backups`、`/api/admin/restore-previews`、`/api/admin/restores`），`/api/ops/*` 保留為同一實作的別名；管理頁已改用 `/api/admin/*`，說明見 README「Web 管理與維運端點」 |
+| 3.4 | 清理預售屋殘留 | ✅ 完成（保守）：移除訓練服務中不可能執行的 presale 分支（`is_resale` 為假時的特徵、基準月數、錨點、診斷與回測）、AutoML 依 `use_recency_weights` 推論 presale 的邏輯與發布 smoke 的 presale 輸入。保留：預售屋成交資料（`build_anchor_table` 的價格錨點）、歷史 presale 候選／AutoML 輸出／報告的讀取、MySQL schema、CLI 與 591 助理的新建案擷取、API 的「僅支援中古屋」檢查；`model_tuning` 的 presale 驗證仍有測試覆蓋，暫不移除 |
+
+程式品質修正（2026-10）：未預期錯誤改回 500 `internal_error`（只有市場／刊登資料讀取失敗仍回 503）；估價依資料版本快取模型資料表，估價紀錄最多保留 5,000 筆；「主要影響因素」改顯示中文特徵名稱（共用 `static/feature_labels.js`）；管理頁備份表改用 `textContent`；AI 助理 API 不再回傳 pydantic 例外文字，改回欄位代碼；`run_tuned_model_experiment` 移除不可能的 baseline 分支並共用 `evaluate_fitted_candidate`；`admin.html` 內嵌的約 1,400 行 JavaScript 移到 `static/admin_page.js`。
 
 注意：joblib 模型檔綁定模組路徑（`qingpu_insight.valuation`、`qingpu_insight.anchor_model`），搬移模組時必須保留原路徑。

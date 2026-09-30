@@ -112,6 +112,34 @@ flowchart LR
 - 訓練只建立候選模型，不會自動覆蓋正式模型。
 - 資料與模型發布採版本化流程，失敗時保留上一個可用版本。
 
+### Web 程式結構
+
+`web.py` 的 `create_app` 只負責組裝：服務由 `web_composition.py` 建立（或由測試注入），路由依領域拆成 Flask blueprint。
+
+| 模組 | 內容 |
+|------|------|
+| `web.py` | `create_app`、`qingpu-web` 進入點 |
+| `web_composition.py` | 管理工作、LLM 提供者、AI 助理、維運、報告與總覽服務的組裝 |
+| `web_routes/pages.py` | 首頁 `/` |
+| `web_routes/market.py` | `/api/market/*`、`/api/transactions`、`/api/listings*`（公開） |
+| `web_routes/valuation.py` | `/api/valuations`（公開） |
+| `web_routes/jobs.py` | 刊登更新、`/api/jobs*`、模型訓練 API（限本機） |
+| `web_routes/reports.py` | `/api/reports*`（限本機） |
+| `web_routes/ops.py` | `/api/admin/health`、`GET /api/admin/backups` 與 `/api/ops/*` 別名（限本機） |
+| `admin_web.py` | 管理頁 `/admin` 與其餘 `/api/admin/*`（限本機） |
+| `conversation_web.py` | AI 助理頁面與 `/api/conversations*`（限本機） |
+| `web_routes/guards.py` | 唯一的本機＋CSRF 防護 |
+| `web_routes/errors.py` | 錯誤回應格式 |
+| `valuation_request.py` | 估價表單／API 欄位、地址定位與公設比解析 |
+| `conversation_valuation.py` | 591 刊登轉成估價輸入（建物型態、車位、公設比）與附近成交 |
+| `market_snapshot.py` | 依資料版本快取估價用的模型資料表 |
+
+防護規則：限本機的路由只接受 loopback 位址且 Host 為 `localhost`／`127.0.0.1`／`::1`；POST／PUT／PATCH／DELETE 另需 `X-Qingpu-CSRF` 與頁面 CSRF token 相符（以 `hmac.compare_digest` 比對）。`tests/test_web_guards.py` 會列舉所有路由，確認管理、維運、工作、報告與對話路由都受到防護。
+
+錯誤回應：無法讀取市場或刊登資料時回 503 `market_data_unavailable`；其他未預期錯誤回 500 `internal_error`，不會回傳例外內容。
+
+估價紀錄：`outputs/valuations/*.json` 最多保留最新 5,000 筆，超過時刪除最舊的紀錄（舊的結果連結會失效）。
+
 ## 技術棧
 
 | 層級 | 技術 |
@@ -616,7 +644,7 @@ Remove-Item Env:MYSQL_PWD
 
 ### 密碼 URL 編碼
 
-`QINGPU_DATABASE_URL` 的密碼含特殊字元（`@`、`:`、`/` 等）時必須做 URL 編碼（例如 `p@ssw0rd` → `p%40ssw0rd`）。程式端（`cli.py`、`market_repository.py`、`web.py`）都會以 `urllib.parse.unquote` 解碼。密碼不含特殊字元時可直接填寫。
+`QINGPU_DATABASE_URL` 的密碼含特殊字元（`@`、`:`、`/` 等）時必須做 URL 編碼（例如 `p@ssw0rd` → `p%40ssw0rd`）。程式端（`cli.py`、`market_repository.py`、`web_composition.py`）都會以 `urllib.parse.unquote` 解碼。密碼不含特殊字元時可直接填寫。
 
 ### 完整管理功能的必要設定
 
