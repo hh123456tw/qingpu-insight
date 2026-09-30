@@ -46,3 +46,4 @@ outputs/*.log
 outputs/admin/
 outputs/m42-acceptance/
 outputs/m44-repair-smoke/
+.claude/worktrees/
