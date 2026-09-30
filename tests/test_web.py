@@ -5379,3 +5379,17 @@ def test_latest_market_date_reads_parquet_or_returns_none(tmp_path) -> None:
         {"transaction_date": pd.to_datetime(["2025-01-02", "2026-06-13"])}
     ).to_parquet(path)
     assert _latest_market_date(path) == pd.Timestamp("2026-06-13")
+
+
+def test_valuation_area_inputs_accept_deed_precision(client) -> None:
+    # 權狀面積 are recorded to two decimals; a 0.1 step silently blocks submission.
+    html = client.get("/").get_data(as_text=True)
+    for control_id in (
+        "valuation-area",
+        "valuation-parking-area",
+        "valuation-main-area",
+        "valuation-auxiliary-area",
+        "valuation-balcony-area",
+    ):
+        tag = html[html.index(f'id="{control_id}"') :].split(">", 1)[0]
+        assert 'step="0.01"' in tag, control_id
