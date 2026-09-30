@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   createMapLoader,
+  hasVisibleArea,
   mapStatusText,
   markerRadius,
   transactionItemsToMapPayload,

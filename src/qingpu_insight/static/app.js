@@ -243,6 +243,17 @@ document.addEventListener("DOMContentLoaded", async function () {
         }, 200);
       });
       mapMoveHandlerRegistered = true;
+      // Maps first laid out while hidden have no size; resize and reload once shown.
+      var refreshMapSize = function () {
+        if (document.visibilityState !== "visible") return;
+        map.invalidateSize();
+        loadMap(buildParams(), currentMapView());
+      };
+      document.addEventListener("visibilitychange", refreshMapSize);
+      window.addEventListener("resize", function () {
+        if (mapMoveTimer !== null) clearTimeout(mapMoveTimer);
+        mapMoveTimer = setTimeout(refreshMapSize, 200);
+      });
     }
 
     display = typeof QingpuDisplayFormat !== "undefined" ? QingpuDisplayFormat : null;

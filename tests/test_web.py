@@ -5542,3 +5542,26 @@ def test_valuation_area_inputs_accept_deed_precision(client) -> None:
     ):
         tag = html[html.index(f'id="{control_id}"') :].split(">", 1)[0]
         assert 'step="0.01"' in tag, control_id
+
+
+def test_post_report_schema_errors_return_field_codes_not_exception_text(
+    report_app: FlaskClient, monkeypatch
+) -> None:
+    import pydantic
+
+    from qingpu_insight import report_contracts
+
+    class StrictRequest(pydantic.BaseModel):
+        candidate_ids: tuple[int, ...]
+
+    def reject(**kwargs):
+        return StrictRequest(candidate_ids=("not-a-number",))
+
+    monkeypatch.setattr(report_contracts, "ReportRequest", reject)
+    response = _report_post(
+        report_app,
+        {"candidate_ids": ["id-1"], "intended_use": "self_use", "provider": "rule"},
+    )
+    assert response.status_code == 400
+    fields = response.get_json()["error"]["fields"]
+    assert fields == {"candidate_ids.0": "invalid"}

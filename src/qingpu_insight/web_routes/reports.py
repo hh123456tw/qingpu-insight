@@ -5,6 +5,7 @@ from __future__ import annotations
 from threading import BoundedSemaphore
 
 from flask import Blueprint, jsonify, request
+from pydantic import ValidationError
 
 from qingpu_insight.api_errors import ApiInputError
 from qingpu_insight.evidence import UnknownCandidateError
@@ -96,13 +97,18 @@ def create_reports_blueprint(report_services: ReportServices | None) -> Blueprin
 
         try:
             report_request = ReportRequest(**parsed)
-        except Exception as exc:
+        except ValidationError as exc:
+            # Field codes only; pydantic's message text echoes internals and input.
+            fields = {
+                ".".join(str(part) for part in item.get("loc", ())) or "body": "invalid"
+                for item in exc.errors()
+            }
             return jsonify(
                 {
                     "error": {
                         "code": "invalid_request",
                         "message": "Request validation failed.",
-                        "fields": {"_schema": str(exc)},
+                        "fields": fields,
                     }
                 }
             ), 400

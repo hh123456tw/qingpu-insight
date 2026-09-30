@@ -81,9 +81,15 @@ export function markerRadius(recordCount) {
   return Math.min(16, Math.max(5, 4 + Math.log2(Math.max(1, recordCount))));
 }
 
+// A map inside a hidden tab or collapsed pane has zero size, so its bounds collapse.
+export function hasVisibleArea(view) {
+  return view.east > view.west && view.north > view.south;
+}
+
 export function createMapLoader({ fetchImpl, render, showError }) {
   let controller = null;
   return async function load(baseParams, view) {
+    if (!hasVisibleArea(view)) return null;
     if (controller !== null) controller.abort();
     controller = new AbortController();
     const params = withMapView(baseParams, view);
