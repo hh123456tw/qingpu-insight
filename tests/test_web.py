@@ -19,6 +19,7 @@ from bs4 import BeautifulSoup
 from flask.testing import FlaskClient
 from sklearn.dummy import DummyRegressor
 
+from qingpu_insight.address_location import AddressLocatorUnavailable
 from qingpu_insight.jobs import JobRun, JobSubmission
 from qingpu_insight.market_metrics import MarketFilters
 from qingpu_insight.valuation import ModelRegistry, ValuationBundle
@@ -78,7 +79,7 @@ def test_conversation_model_catalog_tracks_secret_changes(
 def test_conversation_schema_applies_fallback_metadata_migration(
     tmp_path: Path,
 ) -> None:
-    from qingpu_insight.web import _ensure_conversation_schema
+    from qingpu_insight.web_composition import _ensure_conversation_schema
 
     database = tmp_path / "database"
     database.mkdir()
@@ -124,7 +125,7 @@ def test_conversation_schema_applies_fallback_metadata_migration(
 def test_conversation_valuation_uses_official_model_adapter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from qingpu_insight import web
+    from qingpu_insight import conversation_valuation
 
     market = pd.DataFrame(
         [
@@ -144,7 +145,7 @@ def test_conversation_valuation_uses_official_model_adapter(
     captured: dict[str, Any] = {}
 
     monkeypatch.setattr(
-        web,
+        conversation_valuation,
         "build_model_frame",
         lambda frame, transaction_type: frame,
     )
@@ -170,8 +171,8 @@ def test_conversation_valuation_uses_official_model_adapter(
             "model": {"version": "official-v3"},
         }
 
-    monkeypatch.setattr(web, "valuate", fake_valuate)
-    result = web._conversation_valuation(
+    monkeypatch.setattr(conversation_valuation, "valuate", fake_valuate)
+    result = conversation_valuation.valuate_listing(
         InMemoryMarketDataSource(market),
         object(),  # type: ignore[arg-type]
         {
@@ -206,7 +207,7 @@ def test_conversation_valuation_uses_official_model_adapter(
 def test_conversation_valuation_maps_591_elevator_building_type(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from qingpu_insight import web
+    from qingpu_insight import conversation_valuation
 
     captured: dict[str, Any] = {}
     market = pd.DataFrame(
@@ -225,7 +226,7 @@ def test_conversation_valuation_maps_591_elevator_building_type(
         ]
     )
     monkeypatch.setattr(
-        web,
+        conversation_valuation,
         "build_model_frame",
         lambda frame, transaction_type: frame,
     )
@@ -241,8 +242,8 @@ def test_conversation_valuation_maps_591_elevator_building_type(
             "model": {"version": "official-v3"},
         }
 
-    monkeypatch.setattr(web, "valuate", fake_valuate)
-    web._conversation_valuation(
+    monkeypatch.setattr(conversation_valuation, "valuate", fake_valuate)
+    conversation_valuation.valuate_listing(
         InMemoryMarketDataSource(market),
         object(),  # type: ignore[arg-type]
         {
@@ -265,13 +266,15 @@ def test_conversation_valuation_maps_591_elevator_building_type(
 def _conversation_common_area(
     monkeypatch: pytest.MonkeyPatch, **listing: Any
 ) -> tuple[Any, dict[str, Any]]:
-    from qingpu_insight import web
+    from qingpu_insight import conversation_valuation
 
     captured: dict[str, Any] = {}
     market = pd.DataFrame(
         [{"transaction_type": "resale", "transaction_date": pd.Timestamp("2026-06-13")}]
     )
-    monkeypatch.setattr(web, "build_model_frame", lambda frame, transaction_type: frame)
+    monkeypatch.setattr(
+        conversation_valuation, "build_model_frame", lambda frame, transaction_type: frame
+    )
 
     def fake_valuate(input_, registry, frame, latest_data_date):
         captured["input"] = input_
@@ -284,7 +287,7 @@ def _conversation_common_area(
             "model": {"version": "official-v3"},
         }
 
-    monkeypatch.setattr(web, "valuate", fake_valuate)
+    monkeypatch.setattr(conversation_valuation, "valuate", fake_valuate)
     payload = {
         "listing_type": "sale",
         "area_ping": "30",
@@ -297,7 +300,7 @@ def _conversation_common_area(
         "longitude": 121.21,
         **listing,
     }
-    result = web._conversation_valuation(
+    result = conversation_valuation.valuate_listing(
         InMemoryMarketDataSource(market),
         object(),  # type: ignore[arg-type]
         payload,
@@ -398,9 +401,9 @@ def test_conversation_parking_parses_space_split_area(
     expected_type: str,
     expected_area: float,
 ) -> None:
-    from qingpu_insight import web
+    from qingpu_insight import conversation_valuation
 
-    parking_type, area = web._conversation_parking(raw)
+    parking_type, area = conversation_valuation.parse_listing_parking(raw)
     assert parking_type == expected_type
     assert area == pytest.approx(expected_area)
 
@@ -1435,7 +1438,8 @@ def valid_payload():
 
 
 def test_valuation_payload_accepts_optional_common_area_ratio(valid_payload):
-    from qingpu_insight.web import ApiInputError, parse_valuation_payload
+    from qingpu_insight.api_errors import ApiInputError
+    from qingpu_insight.valuation_request import parse_valuation_payload
 
     assert parse_valuation_payload(valid_payload).common_area_ratio is None
     blank = parse_valuation_payload(dict(valid_payload, common_area_ratio=""))
@@ -1447,7 +1451,7 @@ def test_valuation_payload_accepts_optional_common_area_ratio(valid_payload):
 
 
 def test_valuation_payload_computes_common_area_ratio_from_deed_areas(valid_payload):
-    from qingpu_insight.web import parse_valuation_payload
+    from qingpu_insight.valuation_request import parse_valuation_payload
 
     # building_area_ping (30) is already net of parking, as in training.
     payload = dict(
@@ -1463,7 +1467,7 @@ def test_valuation_payload_computes_common_area_ratio_from_deed_areas(valid_payl
 
 
 def test_valuation_payload_accepts_matching_ratio_and_areas(valid_payload):
-    from qingpu_insight.web import parse_valuation_payload
+    from qingpu_insight.valuation_request import parse_valuation_payload
 
     payload = dict(valid_payload, main_building_area_ping=20, common_area_ratio=0.335)
     assert parse_valuation_payload(payload).common_area_ratio == pytest.approx(1 / 3)
@@ -1490,7 +1494,8 @@ def test_valuation_payload_accepts_matching_ratio_and_areas(valid_payload):
     ],
 )
 def test_valuation_payload_rejects_bad_common_area_inputs(valid_payload, extra, field, code):
-    from qingpu_insight.web import ApiInputError, parse_valuation_payload
+    from qingpu_insight.api_errors import ApiInputError
+    from qingpu_insight.valuation_request import parse_valuation_payload
 
     with pytest.raises(ApiInputError) as error:
         parse_valuation_payload(dict(valid_payload, **extra))
@@ -1612,16 +1617,17 @@ def _a18_match():
 @pytest.fixture
 def location_app(market_frame: pd.DataFrame, trained_registry, tmp_path, monkeypatch):
     import qingpu_insight.web as web
+    import qingpu_insight.web_routes.valuation as valuation_routes
     from qingpu_insight.valuation_store import FileValuationStore
 
     captured: list[Any] = []
-    original = web.valuate
+    original = valuation_routes.valuate
 
     def spy(input_, *args, **kwargs):
         captured.append(input_)
         return original(input_, *args, **kwargs)
 
-    monkeypatch.setattr(web, "valuate", spy)
+    monkeypatch.setattr(valuation_routes, "valuate", spy)
     mf = market_frame.copy()
     mf["floor"] = "五層"
     mf["total_floors"] = 15
@@ -1999,6 +2005,7 @@ def test_conversation_runtime_owns_executor_separate_from_admin(
 ) -> None:
     import qingpu_insight.cli as cli
     import qingpu_insight.web as web
+    import qingpu_insight.web_composition as web_composition
     from qingpu_insight.jobs import JobService
 
     jobs = JobService(MemoryAdminJobRepository())
@@ -2018,9 +2025,11 @@ def test_conversation_runtime_owns_executor_separate_from_admin(
         "create_mysql_connection_factory",
         lambda: object(),
     )
-    monkeypatch.setattr(web, "_ensure_conversation_schema", lambda root, factory: None)
     monkeypatch.setattr(
-        web,
+        web_composition, "_ensure_conversation_schema", lambda root, factory: None
+    )
+    monkeypatch.setattr(
+        web_composition,
         "LocalJobExecutor",
         lambda job_service: conversation_executor,
     )
@@ -2511,7 +2520,7 @@ def test_runtime_app_loads_dotenv_and_wires_listing_repository(
     locator = runtime.pop("address_locator")
     assert runtime == {"root": tmp_path, "listing_repo": listing_repo}
     assert isinstance(locator, web.LazyDoorplateIndex)
-    with pytest.raises(web.AddressLocatorUnavailable):
+    with pytest.raises(AddressLocatorUnavailable):
         locator.resolve("中壢區青埔路二段289號")  # no doorplate data under tmp_path
 
 
@@ -2522,6 +2531,7 @@ def test_production_admin_composition_requires_database_and_strong_secret(
 ) -> None:
     import qingpu_insight.cli as cli
     import qingpu_insight.web as web
+    import qingpu_insight.web_composition as web_composition
     from qingpu_insight.jobs import JobService
 
     repo = MemoryAdminJobRepository()
@@ -2532,7 +2542,7 @@ def test_production_admin_composition_requires_database_and_strong_secret(
         "_create_listing_update_service",
         lambda root, **kwargs: service,
     )
-    monkeypatch.setattr(web, "LocalJobExecutor", lambda job_service: executor)
+    monkeypatch.setattr(web_composition, "LocalJobExecutor", lambda job_service: executor)
     monkeypatch.setenv(
         "QINGPU_DATABASE_URL",
         "mysql+pymysql://<user>:<password>@127.0.0.1:3306/<database>",
@@ -2586,10 +2596,11 @@ def test_production_admin_fails_closed_without_strong_secret(
     secret: str | None,
 ) -> None:
     import qingpu_insight.web as web
+    import qingpu_insight.web_composition as web_composition
 
     composition_calls = []
     monkeypatch.setattr(
-        web,
+        web_composition,
         "_create_production_admin_services",
         lambda root: composition_calls.append(root),
     )
@@ -2621,11 +2632,11 @@ def test_production_admin_fails_closed_without_strong_secret(
 
 
 def test_production_admin_accepts_generated_secret_formats() -> None:
-    import qingpu_insight.web as web
+    import qingpu_insight.web_composition as web_composition
 
     generated = (secrets.token_hex(32), secrets.token_urlsafe(32) + "Aa1!")
 
-    assert all(web._strong_admin_secret(value) for value in generated)
+    assert all(web_composition._strong_admin_secret(value) for value in generated)
 
 
 # --- M4.3 Ops API tests ---
@@ -5371,7 +5382,7 @@ def test_main_reads_port_and_debug_from_dotenv(tmp_path, monkeypatch) -> None:
 
 
 def test_latest_market_date_reads_parquet_or_returns_none(tmp_path) -> None:
-    from qingpu_insight.web import _latest_market_date
+    from qingpu_insight.web_composition import _latest_market_date
 
     path = tmp_path / "market.parquet"
     assert _latest_market_date(path) is None

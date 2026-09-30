@@ -21,7 +21,7 @@ from qingpu_insight.web import create_app
 
 def test_production_composer_exposes_only_external_boundary_seams() -> None:
     import qingpu_insight.cli as cli
-    import qingpu_insight.web as web
+    import qingpu_insight.web_composition as web
 
     cli_parameters = inspect.signature(cli._create_listing_update_service).parameters
     web_parameters = inspect.signature(web._create_production_admin_services).parameters
@@ -405,7 +405,7 @@ def test_m3_runner_resolves_default_source_at_prepare_time(
     tmp_path: Path, monkeypatch,
 ) -> None:
     import qingpu_insight.cli as cli
-    import qingpu_insight.web as web
+    import qingpu_insight.web_composition as web
 
     _prepare_release_root(tmp_path)
     database = ProductionFakeDatabase()
@@ -446,7 +446,7 @@ def test_m42_atomic_release_gate(
     tmp_path: Path, monkeypatch, boundary: str, expected_code: str,
 ) -> None:
     import qingpu_insight.cli as cli
-    import qingpu_insight.web as web
+    import qingpu_insight.web_composition as web
 
     _prepare_release_root(tmp_path)
     database = ProductionFakeDatabase()
