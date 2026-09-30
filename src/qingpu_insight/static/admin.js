@@ -424,6 +424,18 @@
     });
   }
 
+  // Text of the backup table cells (ID, created, size, SHA-256, restore status);
+  // rendered with textContent so server values are never parsed as HTML.
+  function backupRowCells(bk) {
+    return [
+      String(bk.backup_id || "").slice(0, 8),
+      formatTaipeiDatetime(bk.created_at),
+      bk.size_bytes > 0 ? (bk.size_bytes / 1024).toFixed(1) + " KB" : "",
+      bk.sha256 ? String(bk.sha256).slice(0, 16) : "",
+      bk.restore_status || "—",
+    ];
+  }
+
   function loadBackups() {
     return fetch("/api/admin/backups?limit=20")
       .then(function (r) { if (r.ok) return r.json(); })
@@ -435,10 +447,11 @@
         for (var i = 0; i < data.items.length; i++) {
           var bk = data.items[i];
           var tr = document.createElement("tr");
-          var shortId = bk.backup_id.slice(0, 8);
-          var shortSha = bk.sha256 ? bk.sha256.slice(0, 16) : "";
-          var sizeStr = bk.size_bytes > 0 ? (bk.size_bytes / 1024).toFixed(1) + " KB" : "";
-          var restoreLabel = bk.restore_status || "—";
+          backupRowCells(bk).forEach(function (text) {
+            var td = document.createElement("td");
+            td.textContent = text;
+            tr.appendChild(td);
+          });
           var drillBtn = document.createElement("button");
           drillBtn.className = "mutation-btn admin-btn admin-btn-small";
           drillBtn.textContent = "隔離還原演練";
@@ -448,7 +461,6 @@
           });
           var tdDrill = document.createElement("td");
           tdDrill.appendChild(drillBtn);
-          tr.innerHTML = "<td>" + shortId + "</td><td>" + formatTaipeiDatetime(bk.created_at) + "</td><td>" + sizeStr + "</td><td>" + shortSha + "</td><td>" + restoreLabel + "</td>";
           tr.appendChild(tdDrill);
           tbody.appendChild(tr);
         }
@@ -988,5 +1000,6 @@
     benchmarkModelHelp: benchmarkModelHelp,
     canRunBenchmark: canRunBenchmark,
     benchmarkProgressLabel: benchmarkProgressLabel,
+    backupRowCells: backupRowCells,
   };
 });

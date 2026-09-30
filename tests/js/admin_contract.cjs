@@ -33,6 +33,28 @@ assert.match(
 );
 assert.equal(admin.formatTaipeiDatetime(null), "—");
 
+const backupCells = admin.backupRowCells({
+  backup_id: "<img src=x onerror=alert(1)>-0000",
+  created_at: null,
+  size_bytes: 2048,
+  sha256: "<b>abcdef</b>0123456789",
+  restore_status: null,
+});
+assert.deepEqual(backupCells, [
+  "<img src",
+  "—",
+  "2.0 KB",
+  "<b>abcdef</b>012",
+  "—",
+]);
+{
+  const fs = require("node:fs");
+  const source = fs.readFileSync("src/qingpu_insight/static/admin.js", "utf8");
+  // Table rows are built with textContent; innerHTML is only used to clear containers.
+  const assignments = source.match(/\.innerHTML\s*=\s*[^;]+;/g) || [];
+  assert.deepEqual(assignments.filter((line) => !/=\s*""\s*;$/.test(line)), []);
+}
+
 assert.deepEqual(admin.buildOfficialUpdatePayload("110S3", "115S2", "acquire"), {
   start_season: "110S3",
   end_season: "115S2",
