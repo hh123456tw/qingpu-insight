@@ -1047,6 +1047,7 @@ def test_train_artifact_round_trip(tmp_path):
     loaded: ValuationBundle = joblib.load(result_path)
     assert loaded.transaction_type == "resale"
     assert loaded.model_name == "baseline"
+    assert loaded.model_version.startswith("resale-baseline-")
     assert loaded.metrics == final_test_metrics
     assert loaded.metrics_split == "final_test"
 
@@ -1316,3 +1317,39 @@ def test_valuation_uses_anchor_group_interval_and_flags_new_projects(
     bundle.pipeline = AnchoredStubModel("resale")
     established = valuate(valid_resale_input, FakeRegistry(bundle), market)
     assert not any("新建案" in reason for reason in established["confidence_reasons"])
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("precompletion", "same_building"),
+        ("presale", "same_building"),
+        ("resale", "same_building"),
+        ("knn", "nearby_sales"),
+        ("baseline", "station_baseline"),
+    ],
+)
+def test_valuation_exposes_price_anchor_for_anchor_models(
+    bundle, market, valid_resale_input, source, expected
+):
+    bundle.pipeline = AnchoredStubModel(source)
+
+    result = valuate(valid_resale_input, FakeRegistry(bundle), market)
+
+    assert result["model"]["price_anchor"] == expected
+
+
+def test_valuation_omits_price_anchor_for_other_pipelines(bundle, market, valid_resale_input):
+    result = valuate(valid_resale_input, FakeRegistry(bundle), market)
+
+    assert "price_anchor" not in result["model"]
+
+
+def test_model_version_includes_model_name():
+    from qingpu_insight.valuation import _model_version
+
+    anchor = _model_version("resale", "anchor_blend", "2026-06-01", "a1b2c3d4e5f6")
+    hgb = _model_version("resale", "hgb_log", "2026-06-01", "a1b2c3d4e5f6")
+
+    assert anchor == "resale-anchor_blend-2026-06-01-a1b2c3d4"
+    assert anchor != hgb

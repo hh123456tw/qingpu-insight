@@ -160,6 +160,14 @@ def conformal_log_radius(actual: np.ndarray, predicted: np.ndarray) -> float:
 MIN_INTERVAL_GROUP_ROWS = 30
 NEW_PROJECT_MAX_AGE_YEARS = 2.0
 _PRESALE_PRIOR_SOURCES = ("precompletion", "presale")
+# Public name of the price level an anchor-blend valuation started from.
+_PRICE_ANCHORS = {
+    "precompletion": "same_building",
+    "presale": "same_building",
+    "resale": "same_building",
+    "knn": "nearby_sales",
+    "baseline": "station_baseline",
+}
 
 
 def anchor_log_radii(
@@ -699,6 +707,8 @@ def valuate(
             "transaction_type": bundle.transaction_type,
         },
     }
+    if prior_source in _PRICE_ANCHORS:
+        result["model"]["price_anchor"] = _PRICE_ANCHORS[prior_source]
 
     if input_.asking_total_price_twd is not None and input_.asking_total_price_twd > 0:
         low, high = result["interval_total_price_twd"]
@@ -715,8 +725,11 @@ def valuate(
     return result
 
 
-def _model_version(transaction_type: str, max_date: str, contract_hash: str) -> str:
-    return f"{transaction_type}-{max_date}-{contract_hash[:8]}"
+def _model_version(
+    transaction_type: str, model_name: str, max_date: str, contract_hash: str
+) -> str:
+    # Bundles saved before the model name was added keep their stored version string.
+    return f"{transaction_type}-{model_name}-{max_date}-{contract_hash[:8]}"
 
 
 def train_artifact(
@@ -776,7 +789,9 @@ def train_artifact(
 
     contract_str = json.dumps(list(feature_columns), sort_keys=True)
     contract_hash = hashlib.sha256(contract_str.encode()).hexdigest()
-    version = _model_version(transaction_type, bundle.data_max_date, contract_hash)
+    version = _model_version(
+        transaction_type, selected.name, bundle.data_max_date, contract_hash
+    )
 
     train_frame = training_frame if training_frame is not None else split.train
     deployed_estimator = selected.estimator
