@@ -44,6 +44,8 @@
 3. 最近 10 筆中古成交（800 公尺內）中位數
 4. 站點 × 建物類型的近期中位數
 
+`AnchorBlendRegressor(anchor_index_months=N)` 可以先用在地價格指數（前 N 個月成交的 log 單價中位數，只用估價月份之前的資料）把錨點價調整到估價月份再取中位數；回測沒有改善，正式配方維持關閉。
+
 「同棟」只用估價輸入可得的資訊判斷：座標 80 公尺內，且完工日與「交易月份 − 屋齡」相差 1.5 年內；預售資料沒有完工日，只用於屋齡 5 年內的建物。錨點表存在模型 artifact 內，所以估價時不需要另外查資料庫。首頁估價表單沒有座標，只能走第 3、4 步以外的一般路徑；591 助理會帶入物件座標。
 
 Ridge、Random Forest 與原始目標 HGB 仍存在於程式中，但不再列入中古屋引導訓練（原因見[問題紀錄 §18、§19](project-issue-log.md)）；AutoML 模式仍會在 Random Forest 與原始目標 HGB 的參數空間中搜尋。
@@ -119,10 +121,12 @@ Schema v2（及更早）的訓練不會有調參快照；頁面上會標示「�
 
 ## 特徵工程
 
-中古屋 v3 特徵契約共 21 欄（`model_features.FEATURE_COLUMNS`）：
+中古屋 v3 特徵契約共 22 欄（`model_features.FEATURE_COLUMNS`）：
 
 - 數值特徵：station_distance_m, building_area_ping, bedrooms, living_rooms, bathrooms, building_age_years, floor, total_floors, floor_ratio, transaction_year, transaction_month, transaction_month_index, twd97_x, twd97_y
 - 類別特徵：station_code, building_type, station_building_type, building_age_band, area_band, floor_band, location_known
+- 選填特徵（`OPTIONAL_FEATURE_COLUMNS`）：common_area_ratio（公設比，不含車位）= 1 −（主建物 + 附屬建物 + 陽台）÷（建物移轉總面積 − 車位面積），由實價登錄的面積欄位在 `market_cleaning.add_area_share_features` 計算；陽台不在附屬建物內，所以另外加回，車位面積從分母扣除。估價時為選填（`ValuationInput.common_area_ratio`、API 欄位 `common_area_ratio`，0–0.70），未提供時由前處理以訓練中位數補值。舊的市場資料沒有這些面積欄位，需要重跑 `analyse` 與 `market-build`
+- `add_derived_features` 另外產生 1 樓／2–3 樓／頂樓旗標（`first_floor`、`low_floor`、`top_floor`）與央行選擇性信用管制輪數（`credit_control_rounds`，2020-12-08 起七波緊縮、2026-03-20 放寬一波），回測沒有改善，因此不在特徵契約內（見[問題紀錄 §20](project-issue-log.md)）
 - 不含 `parking_type`、`parking_area_ping`：車位由車位價格政策另外計價（見「目標變數」），發布檢查 `parking_price_consistency` 會拒絕把車位欄位當特徵的候選
 - 中位數填補遺漏值（附缺值指示欄）+ 標準化（數值特徵）
 - 眾數填補 + OneHot encoding（類別特徵）
@@ -164,9 +168,15 @@ Schema v2（及更早）的訓練不會有調參快照；頁面上會標示「�
 | RMSE | 均方根誤差 |
 | R² | 決定係數 |
 | count | 測試樣本筆數 |
+| median_ape | 絕對百分比誤差的中位數（百分比） |
+| ppe5／ppe10／ppe20 | 誤差在 ±5%／±10%／±20% 內的樣本比例（百分比），與 IAAO、Zillow 的 PPE 相同 |
 | coverage | 測試覆蓋率（落在估價區間內的樣本比例，目標 90%） |
 
 指標分別輸出「全體」、「各站」（A17/A18/A19）、「主要建物類型」。少於 30 筆的分群不發布個別指標。
+
+評估 JSON 另有 `final_test_total_price_metrics`：以「預測單價 × 淨面積 + 車位估價（以訓練資料建立的車位政策）」對實際總價計算 MAPE、median APE 與 PPE，分全體、各站與各錨點來源（`prior_source:*`）。模型選擇與回測以總價 MAPE 為主要指標（見[改善路線圖](improvement-roadmap.md)）。
+
+中古屋訓練的診斷另含 `leave_project_out`：把 final test 中在訓練期間也有成交的建物（`road_key` + 完工月份）分成 3 組，每次整棟移出訓練資料再預測，比較「看過同棟成交」（warm）與「沒看過」（cold）的誤差，用來估計新建案的真實誤差；只做診斷，不是發布條件。
 
 正式模型卡顯示的指標來自 **final test**；校準集指標只保留在候選比較。舊 artifact 若未保存來源，頁面會標示「舊版指標（來源未記錄）」。
 
@@ -186,13 +196,15 @@ Schema v2（及更早）的訓練不會有調參快照；頁面上會標示「�
 
 - **MAPE**（平均絕對百分比誤差）：越低越好；請與同期基準線的 MAPE 一起判讀。
 - **MAE**（平均絕對誤差，萬元／坪）：反映平均每坪的估價偏差金額。
-- **測試覆蓋率**：目標 90%，代表估價區間涵蓋大部分實際成交價。目前正式模型 final test 實際為 77.6%，未達目標的主因是單一新建案（見「估價區間」）。
+- **測試覆蓋率**：目標 90%，代表估價區間涵蓋大部分實際成交價。目前正式模型 final test 實際為 77.6%，未達目標的主因是單一新建案與 final test 的預測距離較遠（見「估價區間」）。
 
 ## 估價區間
 
-使用 log 空間的 split-conformal 區間：在校準集計算 |log(實際 ÷ 預測)| 的 90% conformal 分位數 r，區間 = [預測 ÷ e^r, 預測 × e^r]，寬度隨價格等比例縮放。有同棟錨點與沒有錨點的估價分別校準（群組少於 30 筆時用合併分位數）。
+使用 log 空間的 split-conformal 區間，直接在**總價**上校準：在校準集計算 |log(實際總價 ÷ 預測總價)| 的 90% conformal 分位數 r，區間 = [預測總價 ÷ e^r, 預測總價 × e^r]，因此車位估價的誤差也包含在內。r 依「有無同棟錨點」×「選填輸入（公設比）是否提供」分四組（`interval_total_log_radius_by_group`，鍵為 `anchored|complete` 等）；「未提供」組用校準資料暫時拿掉公設比後的預測計算，群組少於 30 筆時用同一組可得性的合併分位數。評估 JSON 的 `coverage_basis` 標示覆蓋率是以總價（`total_price`）或舊版單價計算，`test_coverage_without_optional_inputs` 為不提供選填輸入時的覆蓋率。
 
-- 正式模型 `ad50841d` 在 final test 的實際覆蓋率為 77.6%，主要是水源南路新建案幾乎全部落在區間外；研究中扣除該建案約 91%
+- 回測（部署方式：模型訓練到窗口開始）中，單價校準的總價覆蓋率為 85.3%，改為總價校準後 90.3%
+- final test 的報告慣例是用只訓練到校準期之前的模型，預測距離訓練資料 6–18 個月，覆蓋率會系統性偏低；§20 的 final test 中新配方的總價覆蓋率為 78.9%（扣除水源南路 92.1%），正式配方以原本的單價校準重現為 74.5%（扣除水源南路 87.2%；`ad50841d` 模型卡以單價計算為 77.6%）
+- 沒有總價校準半徑的舊版 artifact 仍使用單價 log 半徑（依同棟錨點分組）
 - 屋齡 2 年內、主要依預售價推估的新建案會加註說明，可信度最高為中
 - 舊版 artifact 沒有 log 半徑時，仍使用校準集絕對殘差的 90 百分位數作為固定半徑
 
