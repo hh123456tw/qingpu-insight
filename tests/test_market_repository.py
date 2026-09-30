@@ -188,3 +188,18 @@ def test_build_filter_sql_selects_all_stations_when_all_three() -> None:
     assert "station_code" not in where
     assert where == "transaction_type = %(transaction_type)s"
     assert params == {"transaction_type": "resale"}
+
+
+def test_mysql_data_version_is_a_parameterized_aggregate() -> None:
+    fake = FakeConnection()
+    cursor = fake.cursor_instance
+    cursor.fetchone = lambda: (1234, date(2026, 6, 13), 9_876_543_210)
+    parsed = urlparse("mysql://user:pass@localhost/qingpu_insight")
+    source = MySQLMarketDataSource(parsed, _test_connection=fake)
+
+    version = source.data_version("resale")
+
+    assert version == ("mysql", "1234", "2026-06-13", "9876543210")
+    assert "COUNT(*)" in cursor.executed_sql
+    assert "%(transaction_type)s" in cursor.executed_sql
+    assert cursor.executed_params == {"transaction_type": "resale"}

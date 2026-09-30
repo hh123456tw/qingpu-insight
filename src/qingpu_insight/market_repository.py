@@ -68,6 +68,15 @@ class ParquetMarketDataSource(MarketDataSource):
     def __init__(self, path: Path) -> None:
         self._path = path
 
+    def data_version(self, transaction_type: str) -> tuple[Any, ...] | None:
+        """Cheap change token: the Parquet file's size and modification time."""
+        del transaction_type
+        try:
+            stat = self._path.stat()
+        except OSError:
+            return None
+        return ("parquet", str(self._path), stat.st_size, stat.st_mtime_ns)
+
     def load(self, filters: MarketFilters) -> pd.DataFrame:
         frame = pd.read_parquet(self._path)
         result = frame.copy()
@@ -152,6 +161,22 @@ class MySQLMarketDataSource(MarketDataSource):
             database=self._parsed_url.path.lstrip("/"),
             charset="utf8mb4",
         )
+
+    def data_version(self, transaction_type: str) -> tuple[Any, ...]:
+        """Cheap change token: row count, latest date and price sum for the market."""
+        sql = (
+            "SELECT COUNT(*), MAX(transaction_date), SUM(total_price_twd) "
+            "FROM market_transactions WHERE transaction_type = %(transaction_type)s"
+        )
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(sql, {"transaction_type": transaction_type})
+                row = cursor.fetchone()
+        finally:
+            if self._test_connection is None:
+                conn.close()
+        return ("mysql", *(str(value) for value in (row or ())))
 
     def load(self, filters: MarketFilters) -> pd.DataFrame:
         where_clause, params = _build_filter_sql(filters)

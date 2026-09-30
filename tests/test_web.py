@@ -1579,6 +1579,49 @@ def test_unexpected_valuation_error_is_internal_not_market_outage(
     assert "SELECT" not in body
 
 
+def test_valuations_reuse_the_model_frame_until_the_data_changes(
+    market_frame, trained_registry, tmp_path
+):
+    from qingpu_insight.valuation_store import FileValuationStore
+    from qingpu_insight.web import create_app
+
+    mf = market_frame.copy()
+    mf["floor"] = "五層"
+    mf["total_floors"] = 15
+    mf["parking_type"] = "坡道平面"
+    mf["parking_area_sqm"] = 0
+
+    class VersionedSource(InMemoryMarketDataSource):
+        version = 1
+        loads = 0
+
+        def data_version(self, transaction_type):
+            return ("test", self.version)
+
+        def load(self, filters):
+            type(self).loads += 1
+            return super().load(filters)
+
+    source = VersionedSource(mf)
+    app = create_app(
+        data_source=source,
+        valuation_store=FileValuationStore(tmp_path / "vals"),
+        model_registry=trained_registry,
+    )
+    client = app.test_client()
+    first = client.post("/api/valuations", json=VALID_RESALE_PAYLOAD)
+    second = client.post("/api/valuations", json=VALID_RESALE_PAYLOAD)
+    assert (first.status_code, second.status_code) == (201, 201)
+    assert first.get_json()["estimated_total_price_twd"] == (
+        second.get_json()["estimated_total_price_twd"]
+    )
+    assert VersionedSource.loads == 1
+
+    VersionedSource.version = 2
+    assert client.post("/api/valuations", json=VALID_RESALE_PAYLOAD).status_code == 201
+    assert VersionedSource.loads == 2
+
+
 def test_valuation_market_data_failure_is_503(market_frame, tmp_path):
     from qingpu_insight.valuation_store import FileValuationStore
     from qingpu_insight.web import create_app

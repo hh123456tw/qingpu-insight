@@ -18,6 +18,7 @@ from qingpu_insight.geo import station_from_coords, wgs84_to_twd97
 from qingpu_insight.market_cleaning import MAX_COMMON_AREA_RATIO, common_area_ratio
 from qingpu_insight.market_metrics import MarketFilters
 from qingpu_insight.market_repository import MarketDataSource
+from qingpu_insight.market_snapshot import ModelFrameCache
 from qingpu_insight.model_features import ValuationInput, build_model_frame
 from qingpu_insight.valuation import ModelRegistry, valuate
 
@@ -224,6 +225,8 @@ def valuate_listing(
     data_source: MarketDataSource,
     registry: ModelRegistry,
     payload: dict[str, Any],
+    *,
+    snapshots: ModelFrameCache | None = None,
 ) -> dict[str, Any]:
     transaction_type = "presale" if payload.get("listing_type") == "newhouse" else "resale"
     layout = _LAYOUT_RE.search(str(payload.get("layout") or ""))
@@ -289,11 +292,18 @@ def valuate_listing(
         twd97_y=coordinates[1],
         common_area_ratio=ratio,
     )
-    market = data_source.load(MarketFilters(transaction_type=transaction_type))
-    if market.empty:
-        raise ValueError("market data unavailable")
-    latest_data_date = pd.Timestamp(market["transaction_date"].max())
-    model_frame = build_model_frame(market, transaction_type)
+    if snapshots is not None:
+        snapshot = snapshots.snapshot(transaction_type)
+        if snapshot.row_count == 0:
+            raise ValueError("market data unavailable")
+        latest_data_date = snapshot.latest_data_date
+        model_frame = snapshot.model_frame
+    else:
+        market = data_source.load(MarketFilters(transaction_type=transaction_type))
+        if market.empty:
+            raise ValueError("market data unavailable")
+        latest_data_date = pd.Timestamp(market["transaction_date"].max())
+        model_frame = build_model_frame(market, transaction_type)
     result = valuate(
         valuation_input,
         registry,

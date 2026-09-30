@@ -14,7 +14,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
 
 import pandas as pd
 from flask import Flask
@@ -32,6 +31,7 @@ from qingpu_insight.listing_update import ListingUpdateService
 from qingpu_insight.llm_model_catalog import LlmModelCatalog
 from qingpu_insight.local_secrets import LocalSecretsStore
 from qingpu_insight.market_repository import MarketDataSource
+from qingpu_insight.market_snapshot import ModelFrameCache
 from qingpu_insight.official_data import (
     OfficialDataUpdateService,
     ProductionOfficialDataRunner,
@@ -499,7 +499,8 @@ def compose_conversation_runtime(
     providers_runtime: ProviderRuntime,
     conversation_repository: object | None,
     conversation_service: object | None,
-    listing_valuation: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    *,
+    snapshots: ModelFrameCache | None = None,
 ) -> ConversationRuntime:
     conv_repo = conversation_repository
     conv_service = conversation_service
@@ -547,11 +548,11 @@ def compose_conversation_runtime(
             if data_source is not None
             else None
         )
-        valuation_service = None
-        if data_source is not None:
-            valuation_service = listing_valuation or (
-                lambda payload: valuate_listing(data_source, registry, payload)
-            )
+        valuation_service = (
+            (lambda payload: valuate_listing(data_source, registry, payload, snapshots=snapshots))
+            if data_source is not None
+            else None
+        )
         evidence_builder = ConversationEvidenceBuilder(
             valuation_service=valuation_service,
             market_service=market_service,

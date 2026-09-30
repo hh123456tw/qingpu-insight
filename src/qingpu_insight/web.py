@@ -27,8 +27,9 @@ from qingpu_insight.jobs import JobService
 from qingpu_insight.listing_repository import ListingRepository
 from qingpu_insight.listing_update import ListingUpdateService
 from qingpu_insight.market_repository import MarketDataSource, repository_from_env
+from qingpu_insight.market_snapshot import ModelFrameCache
 from qingpu_insight.valuation import ModelRegistry
-from qingpu_insight.valuation_store import FileValuationStore
+from qingpu_insight.valuation_store import DEFAULT_MAX_VALUATION_RECORDS, FileValuationStore
 from qingpu_insight.web_composition import (
     AdminServices,
     OpsServices,
@@ -82,7 +83,9 @@ def create_app(
             app.logger.error("market data composition unavailable")
             data_source = _UnavailableMarketDataSource()
 
-    store = valuation_store or FileValuationStore(Path.cwd() / "outputs" / "valuations")
+    store = valuation_store or FileValuationStore(
+        Path.cwd() / "outputs" / "valuations", max_records=DEFAULT_MAX_VALUATION_RECORDS
+    )
     registry = model_registry or ModelRegistry(Path.cwd() / "artifacts")
     if address_locator is None:
         address_locator = LazyDoorplateIndex(
@@ -99,6 +102,8 @@ def create_app(
         listing_update_service,
         job_executor,
     )
+    # One model frame per market data version, shared by the form and the assistant.
+    snapshots = ModelFrameCache(data_source)
     providers = compose_provider_runtime(root)
     conversation = compose_conversation_runtime(
         app,
@@ -109,6 +114,7 @@ def create_app(
         providers,
         conversation_repository,
         conversation_service,
+        snapshots=snapshots,
     )
     ops_services = compose_ops_services(app, root, ops_services)
     report_services = compose_report_services(
@@ -179,7 +185,7 @@ def create_app(
     app.register_blueprint(create_pages_blueprint())
     app.register_blueprint(create_market_blueprint(data_source, listing_repo))
     app.register_blueprint(
-        create_valuation_blueprint(data_source, registry, store, address_locator)
+        create_valuation_blueprint(snapshots, registry, store, address_locator)
     )
     app.register_blueprint(create_jobs_blueprint(admin_services))
     app.register_blueprint(create_reports_blueprint(report_services))

@@ -4,14 +4,11 @@ from __future__ import annotations
 
 import uuid
 
-import pandas as pd
 from flask import Blueprint, jsonify, request
 
 from qingpu_insight.address_location import AddressLocator
 from qingpu_insight.api_errors import ApiInputError
-from qingpu_insight.market_metrics import MarketFilters
-from qingpu_insight.market_repository import MarketDataSource
-from qingpu_insight.model_features import build_model_frame
+from qingpu_insight.market_snapshot import ModelFrameCache
 from qingpu_insight.valuation import ModelRegistry, valuate
 from qingpu_insight.valuation_request import (
     common_area_summary,
@@ -29,13 +26,12 @@ from qingpu_insight.web_routes.guards import guarded_blueprint
 
 
 def create_valuation_blueprint(
-    data_source: MarketDataSource | None,
+    snapshots: ModelFrameCache,
     registry: ModelRegistry,
     store: FileValuationStore,
     address_locator: AddressLocator,
 ) -> Blueprint:
     bp = guarded_blueprint("valuation", __name__)
-    ds = data_source
 
     @bp.post("/api/valuations")
     def create_valuation():
@@ -49,15 +45,13 @@ def create_valuation_blueprint(
         except ApiInputError as error:
             return api_input_error_response(error)
 
-        market = read_market_data(
-            lambda: ds.load(MarketFilters(transaction_type=input_.transaction_type))
+        snapshot = read_market_data(lambda: snapshots.snapshot(input_.transaction_type))
+        result = valuate(
+            input_,
+            registry,
+            snapshot.model_frame,
+            latest_data_date=snapshot.latest_data_date,
         )
-        latest_data_date = (
-            pd.Timestamp(market["transaction_date"].max()) if not market.empty else None
-        )
-        market_model = build_model_frame(market, input_.transaction_type)
-
-        result = valuate(input_, registry, market_model, latest_data_date=latest_data_date)
         result["location"] = location_summary
         result["common_area"] = common_area_summary(payload, input_)
         result["valuation_id"] = str(uuid.uuid4())
