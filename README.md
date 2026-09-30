@@ -240,7 +240,20 @@ Rule smoke 成功時，輸出 JSON 的 `success`、`schema_success` 為 `true`�
 - 新建案網址會顯示入口已停用；591 顯示驗證頁時要求人工處理，不繞過驗證。
 - Gemini API Key 由管理中心存入不提交 Git 的 `instance/secrets.env`，更新後下一次請求即生效。
 
+- **聯絡資訊風險**：結構化 schema 沒有聯絡欄位，但標題等 free text 與本機 raw HTML 仍可能含無法完全辨識的 contact-shaped text，因此發布前會執行偵測／清理 gate，原始 HTML 只保留在本機忽略路徑。
+
 操作細節見 [docs/operations/listing-conversation-assistant.md](docs/operations/listing-conversation-assistant.md)。
+
+`listing-build` 的離線、門牌定位及詳情補強模式，都需要完整的 raw batch 與官方門牌檔 `data/raw/doorplates.csv`（可由 `qingpu-data acquire` 取得）。要刻意驗證不連 MySQL 的離線路徑時，可在不改動目前 shell 的 child PowerShell 中執行：
+
+```powershell
+$batchDir = "data/raw/listings/591/<YYYY-MM-DD>/<complete-batch-id>"
+pwsh -NoProfile -Command {
+  param($inputBatch)
+  $env:QINGPU_DATABASE_URL = $null
+  & .\.venv\Scripts\qingpu-data.exe listing-build --batch-dir $inputBatch
+} -args $batchDir
+```
 
 ## 模型訓練與發布
 
