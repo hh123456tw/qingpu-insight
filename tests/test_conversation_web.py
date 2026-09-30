@@ -358,6 +358,63 @@ class TestImportListing:
         assert response.get_json()["error"]["code"] == "unsupported_591_url"
         service.start_import.assert_not_called()
 
+    def test_validation_errors_are_field_codes_not_pydantic_text(
+        self, csrf_client, service
+    ):
+        cases = [
+            ("/api/conversations", {"provider": "gemini"}, {
+                "model": "required", "provider": "not_allowed",
+            }),
+            ("/api/conversations/conv-1/listing", {"url": ""}, {"url": "too_short"}),
+            ("/api/conversations/conv-1/replies", {"content": "hi", "evidence_revision": 0}, {
+                "evidence_revision": "too_small",
+            }),
+            ("/api/conversations/conv-1/replies", ["not", "an", "object"], {"body": "object"}),
+        ]
+        for path, body, fields in cases:
+            response = csrf_client.post(path, json=body, headers={"X-Qingpu-CSRF": "test-token"})
+            text = response.get_data(as_text=True)
+            assert response.status_code == 400, path
+            error = response.get_json()["error"]
+            assert error["code"] == "invalid_request"
+            assert error["fields"] == fields
+            assert "validation error" not in text.lower()
+            assert "pydantic" not in text.lower()
+        service.start_import.assert_not_called()
+        service.start_reply.assert_not_called()
+
+    def test_unsupported_url_message_does_not_echo_input(self, csrf_client, service):
+        response = csrf_client.post(
+            "/api/conversations/conv-1/listing",
+            json={"url": "https://evil.example/<script>"},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+        error = response.get_json()["error"]
+        assert error["code"] == "unsupported_591_url"
+        assert error["fields"] == {"url": "unsupported_591_url"}
+        assert "evil.example" not in response.get_data(as_text=True)
+
+    def test_invalid_idempotency_key_is_a_field_error(self, csrf_client, service):
+        response = csrf_client.post(
+            "/api/conversations/conv-1/refresh",
+            headers={"X-Qingpu-CSRF": "test-token", "Idempotency-Key": "bad key!"},
+        )
+        assert response.status_code == 400
+        assert response.get_json()["error"]["fields"] == {"Idempotency-Key": "invalid"}
+        service.start_refresh.assert_not_called()
+
+    def test_unexpected_reply_rejection_is_not_echoed(self, csrf_client, service):
+        service.start_reply.side_effect = ValueError("SELECT * FROM conversation_messages")
+        response = csrf_client.post(
+            "/api/conversations/conv-1/replies",
+            json={"content": "What is the price?", "evidence_revision": 1},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 400
+        assert response.get_json()["error"]["code"] == "invalid_request"
+        assert "SELECT" not in response.get_data(as_text=True)
+
     def test_import_listing_503_no_service(self, conversation_app_no_service):
         resp = conversation_app_no_service.post(
             "/api/conversations/conv-1/listing", json={"url": "http://example.com"}

@@ -15,6 +15,7 @@ from flask import (
     request,
     session,
 )
+from pydantic import ValidationError
 from werkzeug.exceptions import HTTPException
 
 from qingpu_insight.conversation_contracts import (
@@ -33,6 +34,50 @@ from qingpu_insight.conversation_urls import (
 from qingpu_insight.web_routes.guards import LOCAL_ONLY, guarded_blueprint
 
 _IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9._:-]{8,128}$")
+
+# pydantic error types -> the field codes returned to clients (never pydantic's text).
+_FIELD_ERROR_CODES = {
+    "missing": "required",
+    "extra_forbidden": "not_allowed",
+    "string_type": "string",
+    "string_too_short": "too_short",
+    "string_too_long": "too_long",
+    "int_type": "integer",
+    "int_parsing": "integer",
+    "int_from_float": "integer",
+    "greater_than_equal": "too_small",
+}
+
+
+def _invalid_request(message: str, fields: dict[str, str] | None = None):
+    error: dict[str, Any] = {"code": "invalid_request", "message": message}
+    if fields is not None:
+        error["fields"] = fields
+    return jsonify({"error": error}), 400
+
+
+def _validation_error_response(error: ValidationError):
+    fields: dict[str, str] = {}
+    for item in error.errors():
+        location = ".".join(str(part) for part in item.get("loc", ())) or "body"
+        fields.setdefault(location, _FIELD_ERROR_CODES.get(item.get("type", ""), "invalid"))
+    return _invalid_request("請求內容格式不正確。", fields)
+
+
+def _invalid_idempotency_key():
+    return _invalid_request("Idempotency-Key 格式不正確。", {"Idempotency-Key": "invalid"})
+
+
+def _json_object_body() -> tuple[dict[str, Any] | None, Any]:
+    """The JSON object body, or (None, error response)."""
+    data = request.get_json(silent=True)
+    if not data:
+        return None, (jsonify({
+            "error": {"code": "invalid_request", "message": "JSON required"}
+        }), 400)
+    if not isinstance(data, dict):
+        return None, _invalid_request("請求內容必須是 JSON 物件。", {"body": "object"})
+    return data, None
 
 
 def _command_idempotency_key(command: str, conversation_id: str) -> str:
@@ -142,17 +187,13 @@ def create_conversation_blueprint(
             return jsonify({
                 "error": {"code": "service_unavailable", "message": "對話功能未啟用。"}
             }), 503
-        data = request.get_json(silent=True)
-        if not data:
-            return jsonify({
-                "error": {"code": "invalid_request", "message": "JSON required"}
-            }), 400
+        data, error_response = _json_object_body()
+        if data is None:
+            return error_response
         try:
             req = ConversationCreateRequest(**data)
-        except Exception as e:
-            return jsonify({
-                "error": {"code": "invalid_request", "message": str(e)}
-            }), 400
+        except ValidationError as error:
+            return _validation_error_response(error)
         record = service.create_conversation(model=req.model)
         return jsonify(_conversation_to_json(record)), 201
 
@@ -280,33 +321,34 @@ def create_conversation_blueprint(
             return jsonify({
                 "error": {"code": "service_unavailable", "message": "對話功能未啟用。"}
             }), 503
-        data = request.get_json(silent=True)
-        if not data:
-            return jsonify({
-                "error": {"code": "invalid_request", "message": "JSON required"}
-            }), 400
+        data, error_response = _json_object_body()
+        if data is None:
+            return error_response
         try:
             req = ListingImportRequest(**data)
+        except ValidationError as error:
+            return _validation_error_response(error)
+        try:
             initial_url = parse_initial_591_url(req.url)
             if (
                 initial_url.kind == "direct"
                 and urlsplit(initial_url.request_url).hostname == "newhouse.591.com.tw"
             ):
                 raise Unsupported591Url("only sale listings are supported")
-            idempotency_key = _command_idempotency_key(
-                "import", conversation_id
-            )
-        except Unsupported591Url as error:
+        except Unsupported591Url:
             return jsonify({
                 "error": {
                     "code": "unsupported_591_url",
-                    "message": str(error),
+                    "message": "僅支援 591 中古屋（售屋）物件網址。",
+                    "fields": {"url": "unsupported_591_url"},
                 }
             }), 400
-        except Exception as e:
-            return jsonify({
-                "error": {"code": "invalid_request", "message": str(e)}
-            }), 400
+        except ValueError:
+            return _invalid_request("網址格式不正確。", {"url": "invalid"})
+        try:
+            idempotency_key = _command_idempotency_key("import", conversation_id)
+        except ValueError:
+            return _invalid_idempotency_key()
         cmd = service.start_import(
             conversation_id=conversation_id,
             raw_url=req.url,
@@ -326,13 +368,8 @@ def create_conversation_blueprint(
             idempotency_key = _command_idempotency_key(
                 "refresh", conversation_id
             )
-        except ValueError as error:
-            return jsonify({
-                "error": {
-                    "code": "invalid_request",
-                    "message": str(error),
-                }
-            }), 400
+        except ValueError:
+            return _invalid_idempotency_key()
         cmd = service.start_refresh(
             conversation_id=conversation_id,
             idempotency_key=idempotency_key,
@@ -426,20 +463,17 @@ def create_conversation_blueprint(
             return jsonify({
                 "error": {"code": "service_unavailable", "message": "對話功能未啟用。"}
             }), 503
-        data = request.get_json(silent=True)
-        if not data:
-            return jsonify({
-                "error": {"code": "invalid_request", "message": "JSON required"}
-            }), 400
+        data, error_response = _json_object_body()
+        if data is None:
+            return error_response
         try:
             req = ReplyCreateRequest(**data)
-            idempotency_key = _command_idempotency_key(
-                "reply", conversation_id
-            )
-        except Exception as e:
-            return jsonify({
-                "error": {"code": "invalid_request", "message": str(e)}
-            }), 400
+        except ValidationError as error:
+            return _validation_error_response(error)
+        try:
+            idempotency_key = _command_idempotency_key("reply", conversation_id)
+        except ValueError:
+            return _invalid_idempotency_key()
         try:
             cmd = service.start_reply(
                 conversation_id=conversation_id,
@@ -461,9 +495,8 @@ def create_conversation_blueprint(
                 return jsonify({
                     "error": {"code": "busy", "message": "已有回覆正在生成。"}
                 }), 409
-            return jsonify({
-                "error": {"code": "invalid_request", "message": msg}
-            }), 400
+            current_app.logger.warning("reply rejected by the conversation service")
+            return _invalid_request("無法建立回覆，請重新整理後再試。")
         return jsonify({
             "run_id": cmd.run_id, "conversation_id": cmd.conversation_id
         }), 202
