@@ -776,37 +776,25 @@ def run_tuned_model_experiment(
 
         for model_name, est in estimators.items():
             try:
-                if use_recency_weights and profile.recency_half_life_months is not None:
-                    weights = recency_weights(
+                weights = (
+                    recency_weights(
                         split.train,
                         half_life_months=profile.recency_half_life_months,
                     )
-                    fit_candidate(
-                        est,
-                        split.train[list(feature_columns)],
-                        split.train["target_unit_price_twd"],
-                        sample_weight=weights,
-                    )
-                else:
-                    fit_candidate(
-                        est,
-                        split.train[list(feature_columns)],
-                        split.train["target_unit_price_twd"],
-                    )
-
-                predicted = est.predict(split.calibration[list(feature_columns)])
-                actual = split.calibration["target_unit_price_twd"].to_numpy()
-                metrics = metric_rows(actual, predicted, split.calibration)
-                evaluation = CandidateEvaluation(
-                    name=model_name,
-                    estimator=est,
-                    overall_mae=float(metrics.loc["overall", "mae"]),
-                    station_mape={
-                        idx.split(":", 1)[1]: float(row["mape"])
-                        for idx, row in metrics.iterrows()
-                        if idx.startswith("station:")
-                    },
-                    metrics=metrics,
+                    if use_recency_weights and profile.recency_half_life_months is not None
+                    else None
+                )
+                fit_candidate(
+                    est,
+                    split.train[list(feature_columns)],
+                    split.train["target_unit_price_twd"],
+                    sample_weight=weights,
+                )
+                evaluation = evaluate_fitted_candidate(
+                    model_name,
+                    est,
+                    split.calibration,
+                    feature_columns=feature_columns,
                 )
                 candidates.append(
                     ProfileCandidateEvaluation(
@@ -855,34 +843,17 @@ def run_tuned_model_experiment(
     )
     final_test_results["baseline"] = final_baseline
 
-    if selected_name != "baseline":
-        final_predicted = selected_estimator.predict(split.test[list(feature_columns)])
-        final_actual = split.test["target_unit_price_twd"].to_numpy()
-        final_metrics = metric_rows(final_actual, final_predicted, split.test)
-        final_selected = CandidateEvaluation(
-            name=selected_name,
-            estimator=selected_estimator,
-            overall_mae=float(final_metrics.loc["overall", "mae"]),
-            station_mape={
-                idx.split(":", 1)[1]: float(row["mape"])
-                for idx, row in final_metrics.iterrows()
-                if idx.startswith("station:")
-            },
-            metrics=final_metrics,
-        )
-        final_test_results[selected_name] = final_selected
-    else:
-        final_selected = final_baseline
-
-    if selected_name == "baseline":
-        recommended = False
-        reason_codes: tuple[str, ...] = ("baseline_selected",)
-    elif passes_release_gate(final_selected, final_baseline):
-        recommended = True
-        reason_codes = ()
-    else:
-        recommended = False
-        reason_codes = ("final_gate_failed",)
+    # Tuned candidates come from candidate_estimators, which never includes the
+    # baseline: it is only the release-gate reference here.
+    final_selected = evaluate_fitted_candidate(
+        selected_name,
+        selected_estimator,
+        split.test,
+        feature_columns=feature_columns,
+    )
+    final_test_results[selected_name] = final_selected
+    recommended = passes_release_gate(final_selected, final_baseline)
+    reason_codes: tuple[str, ...] = () if recommended else ("final_gate_failed",)
 
     return TunedModelExperiment(
         profile_results=tuple(profile_results),
