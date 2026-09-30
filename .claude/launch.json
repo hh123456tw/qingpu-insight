@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "qingpu-web",
+      "runtimeExecutable": ".venv/Scripts/qingpu-web.exe",
+      "runtimeArgs": [],
+      "port": 5000
+    }
+  ]
+}
