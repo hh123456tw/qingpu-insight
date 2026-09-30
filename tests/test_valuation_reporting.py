@@ -362,3 +362,41 @@ def test_model_card_with_automl_info(tmp_path, trained_bundle, experiment, leaka
     assert "deep" in text
     assert "55 次" in text
     assert "隨機森林" in text or "random_forest" in text
+
+
+def test_write_evaluation_reports_total_price_and_ppe_metrics(tmp_path, trained_bundle):
+    import json
+    from dataclasses import replace
+
+    split = _build_experiment_frame(300, 100, 200, seed=7)
+    split = TimeSplit(
+        *(
+            part.assign(
+                total_price_twd=part["target_unit_price_twd"] * part["building_area_ping"],
+                parking_price_twd=0.0,
+            )
+            for part in (split.train, split.calibration, split.test)
+        )
+    )
+    exp = replace(run_model_experiment(split), recommended=True, reason_codes=())
+
+    path = write_evaluation(trained_bundle, exp, split, tmp_path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    unit_overall = payload["final_test_metrics"][exp.selected_name]["overall"]
+    assert {"median_ape", "ppe5", "ppe10", "ppe20"} <= set(unit_overall)
+    total = payload["final_test_total_price_metrics"]
+    assert total["overall"]["count"] == 200
+    assert {"mape", "median_ape", "ppe5", "ppe10", "ppe20"} <= set(total["overall"])
+    assert "station:A18" in total
+    # No parking in this frame, so total-price errors equal unit-price errors.
+    assert total["overall"]["mape"] == pytest.approx(unit_overall["mape"], rel=1e-6)
+
+
+def test_model_card_shows_median_error_and_ppe10(tmp_path, trained_bundle, experiment, leakage):
+    trained_bundle.metrics["overall"].update({"median_ape": 6.2, "ppe10": 71.5})
+    text = write_model_card(trained_bundle, experiment, leakage, tmp_path).read_text(
+        encoding="utf-8"
+    )
+    assert "overall：MAE = 45000，MAPE = 8.5%，中位數誤差 = 6.2%，PPE10 = 71.5%，n = 200" in text
+    assert "station:A17：MAE = 42000，MAPE = 7.8%，n = 80" in text

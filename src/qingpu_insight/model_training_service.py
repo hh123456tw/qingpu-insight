@@ -20,6 +20,7 @@ from qingpu_insight.market_cleaning import PRECOMPLETION_TRANSFERS_FILE
 from qingpu_insight.model_analysis import (
     build_resale_diagnostics,
     evaluate_release_checks,
+    leave_project_out_diagnostic,
     release_reason_codes,
     run_annual_backtests,
     run_feature_experiments,
@@ -609,6 +610,9 @@ class ModelTrainingService:
                 source_frame=frame,
             )
             diagnostics = self._merge_market_quality_diagnostics(diagnostics)
+            diagnostics["leave_project_out"] = self._leave_project_out(
+                split, locked.estimator, enhanced_features, winning_profile
+            )
 
         selected_profile_obj = winning_profile
         profile_results = [
@@ -668,6 +672,21 @@ class ModelTrainingService:
             feature_contract_version=feature_contract_ver,
             anchor_table=anchor_table,
         )
+
+    @staticmethod
+    def _leave_project_out(
+        split: Any, estimator: Any, features: tuple[str, ...], profile: Any
+    ) -> dict[str, object]:
+        # Diagnostic only: a failure here must never block a candidate.
+        try:
+            return leave_project_out_diagnostic(
+                split,
+                estimator,
+                features,
+                recency_half_life_months=profile.recency_half_life_months,
+            )
+        except Exception:
+            return {"status": "failed"}
 
     def _anchor_table(self, frame: pd.DataFrame, model_frame: pd.DataFrame) -> pd.DataFrame:
         transfers_path = self._input_path.with_name(PRECOMPLETION_TRANSFERS_FILE)

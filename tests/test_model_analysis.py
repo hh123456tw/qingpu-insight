@@ -275,6 +275,96 @@ def test_backtests_never_train_on_future_rows(model_frame, monkeypatch):
         assert row["source_max_date"] <= row["cutoff_date"]
 
 
+class _BuildingMemory:
+    """Predicts the training mean of the same building (by twd97_x), else the global mean."""
+
+    fitted_buildings: list[set[float]] = []
+
+    def get_params(self, deep=True):
+        return {}
+
+    def set_params(self, **params):
+        return self
+
+    def fit(self, X, y, sample_weight=None):
+        frame = pd.DataFrame({"x": X["twd97_x"].to_numpy(), "y": np.asarray(y, float)})
+        self.means_ = frame.groupby("x")["y"].mean()
+        self.global_ = float(frame["y"].mean())
+        type(self).fitted_buildings.append(set(self.means_.index))
+        return self
+
+    def predict(self, X):
+        return X["twd97_x"].map(self.means_).fillna(self.global_).to_numpy(float)
+
+
+def _building_split():
+    from qingpu_insight.model_training import TimeSplit
+
+    rng = np.random.default_rng(3)
+    rows = []
+    for building in range(8):
+        level = 300_000 + 40_000 * building
+        # Buildings 0-5 trade before and during the test window; 6-7 only in the test window.
+        periods = ("train", "test") if building < 6 else ("test",)
+        for period in periods:
+            start = pd.Timestamp("2023-01-01" if period == "train" else "2025-07-01")
+            for i in range(6):
+                rows.append(
+                    {
+                        "period": period,
+                        "transaction_date": start + pd.Timedelta(days=20 * i),
+                        "road_key": f"路{building % 4}",
+                        "completion_date": pd.Timestamp(f"{2010 + building}-01-01"),
+                        "twd97_x": float(building),
+                        "station_code": "A18",
+                        "target_unit_price_twd": level * rng.uniform(0.98, 1.02),
+                    }
+                )
+    frame = pd.DataFrame(rows)
+    empty = frame.iloc[0:0]
+    return TimeSplit(
+        train=frame[frame["period"].eq("train")],
+        calibration=empty,
+        test=frame[frame["period"].eq("test")],
+    )
+
+
+def test_leave_project_out_holds_whole_buildings_out_of_training():
+    from qingpu_insight.model_analysis import leave_project_out_diagnostic
+
+    split = _building_split()
+    warm = _BuildingMemory().fit(split.train[["twd97_x"]], split.train["target_unit_price_twd"])
+    _BuildingMemory.fitted_buildings = []
+
+    result = leave_project_out_diagnostic(
+        split, warm, ("twd97_x",), folds=3, recency_half_life_months=None
+    )
+
+    assert result["status"] == "ok"
+    assert result["held_out_buildings"] == 6
+    assert result["held_out_rows"] == 36
+    assert len(_BuildingMemory.fitted_buildings) == 3
+    history = set(map(float, range(6)))
+    excluded = [history - fitted for fitted in _BuildingMemory.fitted_buildings]
+    assert set().union(*excluded) == history
+    assert sum(map(len, excluded)) == 6
+    assert result["cold"]["mape"] > result["warm"]["mape"] + 5
+    assert {"median_ape", "ppe10"} <= set(result["cold"])
+
+
+def test_leave_project_out_is_skipped_without_building_identity():
+    from qingpu_insight.model_analysis import leave_project_out_diagnostic
+
+    split = _building_split()
+    split = type(split)(
+        train=split.train.drop(columns="road_key"),
+        calibration=split.calibration.drop(columns="road_key"),
+        test=split.test.drop(columns="road_key"),
+    )
+    result = leave_project_out_diagnostic(split, _BuildingMemory(), ("twd97_x",))
+    assert result == {"status": "skipped", "reason": "missing_building_identity"}
+
+
 def test_release_checks_require_strict_a18_improvement():
     checks = evaluate_release_checks(
         _metrics(98.0),

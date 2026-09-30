@@ -16,10 +16,13 @@ from qingpu_insight.model_training import (
     ModelFitSpec,
     RecentMedianBaseline,
     TimeSplit,
+    _compute_metrics,
     build_estimator,
     candidate_estimators,
     evaluate_candidate,
     evaluate_fitted_candidate,
+    fit_candidate,
+    recency_weights,
     run_model_experiment,
     split_by_time,
 )
@@ -294,6 +297,71 @@ def build_resale_diagnostics(
             "ambiguous_registration_note_count": int(ambiguous_registration.sum()),
         },
         "split_summary": split_summary,
+    }
+
+
+def _building_keys(frame: pd.DataFrame) -> pd.Series:
+    completion = pd.to_datetime(frame["completion_date"], errors="coerce").dt.strftime("%Y-%m")
+    return frame["road_key"].astype("string").fillna("") + "|" + completion.fillna("")
+
+
+def leave_project_out_diagnostic(
+    split: TimeSplit,
+    estimator: Any,
+    feature_columns: tuple[str, ...],
+    folds: int = 3,
+    recency_half_life_months: int | None = 48,
+) -> dict[str, object]:
+    """Cold-start error: final-test buildings are held out of training as a whole.
+
+    A building is road_key + completion month. Test buildings that also trade in the
+    training rows are split into `folds` groups; for each group a clone of the estimator
+    is trained without any row of those buildings and predicts their test rows. `warm`
+    is the fitted estimator on the same rows. Pre-completion and presale anchors held by
+    the estimator itself are kept, so this measures a building without resale history.
+    Diagnostic only; it is not a release check.
+    """
+    if not {"road_key", "completion_date"} <= set(split.train.columns) & set(split.test.columns):
+        return {"status": "skipped", "reason": "missing_building_identity"}
+    train_keys = _building_keys(split.train)
+    test_keys = _building_keys(split.test)
+    valid = ~test_keys.str.startswith("|") & ~test_keys.str.endswith("|")
+    candidates = sorted(set(test_keys[valid]) & set(train_keys))
+    if len(candidates) < folds:
+        return {"status": "skipped", "reason": "too_few_buildings"}
+
+    counts = test_keys.value_counts()
+    ordered = sorted(candidates, key=lambda key: (-int(counts[key]), key))
+    fold_of = {key: index % folds for index, key in enumerate(ordered)}
+    held_out = test_keys.isin(fold_of).to_numpy()
+    test = split.test.loc[held_out]
+    held_keys = test_keys[held_out]
+    actual = test["target_unit_price_twd"].to_numpy(float)
+    warm = np.asarray(estimator.predict(test[list(feature_columns)]), float)
+    cold = np.full(len(test), np.nan)
+    for fold in range(folds):
+        fold_keys = {key for key, value in fold_of.items() if value == fold}
+        train = split.train.loc[~train_keys.isin(fold_keys)]
+        model = clone(estimator)
+        weights = (
+            recency_weights(train, half_life_months=recency_half_life_months)
+            if recency_half_life_months is not None
+            else None
+        )
+        fit_candidate(
+            model, train[list(feature_columns)], train["target_unit_price_twd"], weights
+        )
+        rows = held_keys.isin(fold_keys).to_numpy()
+        cold[rows] = model.predict(test.loc[rows, list(feature_columns)])
+    everything = np.ones(len(test), dtype=bool)
+    return {
+        "status": "ok",
+        "folds": folds,
+        "held_out_buildings": len(candidates),
+        "held_out_rows": int(len(test)),
+        "test_rows": int(len(split.test)),
+        "warm": _compute_metrics(actual, warm, everything),
+        "cold": _compute_metrics(actual, cold, everything),
     }
 
 

@@ -179,6 +179,61 @@ def test_metrics_include_overall_station_and_building_type_rows():
     assert {"mae", "mape", "rmse", "r2", "count"} <= set(rows.columns)
 
 
+def test_metrics_report_median_error_and_share_within_thresholds():
+    frame = pd.DataFrame({"station_code": ["A17"] * 4, "building_type": ["住宅大樓"] * 4})
+    actual = np.array([400_000.0, 400_000.0, 400_000.0, 400_000.0])
+    # absolute percentage errors: 2%, 8%, 15%, 30%
+    predicted = np.array([408_000.0, 368_000.0, 460_000.0, 280_000.0])
+
+    overall = metric_rows(actual, predicted, frame).loc["overall"]
+
+    assert overall["mape"] == pytest.approx(13.75)
+    assert overall["median_ape"] == pytest.approx(11.5)
+    assert overall["ppe5"] == pytest.approx(25.0)
+    assert overall["ppe10"] == pytest.approx(50.0)
+    assert overall["ppe20"] == pytest.approx(75.0)
+
+
+def test_total_price_metrics_use_actual_total_as_denominator():
+    actual = np.array([10_000_000.0, 20_000_000.0])
+    predicted = np.array([10_400_000.0, 17_000_000.0])
+
+    metrics = model_training.total_price_metrics(actual, predicted)
+
+    assert metrics["mape"] == pytest.approx(9.5)
+    assert metrics["median_ape"] == pytest.approx(9.5)
+    assert metrics["ppe5"] == pytest.approx(50.0)
+    assert metrics["ppe10"] == pytest.approx(50.0)
+    assert metrics["ppe20"] == pytest.approx(100.0)
+    assert metrics["count"] == 2
+
+
+def test_predicted_total_prices_add_parking_policy_to_net_building_value():
+    from qingpu_insight.parking_valuation import ParkingPricePolicy, ParkingPriceStat
+
+    policy = ParkingPricePolicy(
+        version=1,
+        minimum_type_samples=20,
+        by_type={"坡道平面": ParkingPriceStat(1_500_000, 30)},
+        market_fallback=ParkingPriceStat(1_200_000, 50),
+    )
+    frame = pd.DataFrame(
+        {
+            "building_area_ping": [40.0, 30.0, 25.0],
+            "parking_area_ping": [10.0, 0.0, 8.0],
+            "parking_type": ["坡道平面", "", "坡道機械"],
+        }
+    )
+    unit = np.array([500_000.0, 400_000.0, 300_000.0])
+
+    totals = model_training.predicted_total_prices(unit, frame, policy)
+
+    np.testing.assert_allclose(
+        totals,
+        [500_000 * 30 + 1_500_000, 400_000 * 30, 300_000 * 17 + 1_200_000],
+    )
+
+
 def test_metrics_excludes_small_groups():
     frame = pd.DataFrame(
         {

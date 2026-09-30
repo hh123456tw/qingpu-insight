@@ -8,8 +8,11 @@ from qingpu_insight.model_training import (
     ModelExperiment,
     TimeSplit,
     leakage_audit,
+    predicted_total_prices,
+    total_price_metrics,
 )
 from qingpu_insight.model_tuning import TrainingProfile
+from qingpu_insight.parking_valuation import build_parking_price_policy
 from qingpu_insight.valuation import ValuationBundle, interval_bounds
 
 MODEL_DISPLAY_NAMES = {
@@ -19,6 +22,10 @@ MODEL_DISPLAY_NAMES = {
 
 def _model_display_name(name: str) -> str:
     return MODEL_DISPLAY_NAMES.get(name, name)
+
+
+def _rounded(value: object) -> object:
+    return round(float(value), 2) if isinstance(value, int | float) else value
 
 
 def compute_interval_summary(
@@ -39,6 +46,41 @@ def compute_interval_summary(
     return {
         "test_coverage": float(((actual >= lows) & (actual <= highs)).mean()),
         "average_interval_width_twd_per_ping": float(np.mean(highs - lows)),
+    }
+
+
+def compute_total_price_metrics(
+    evaluated: Any,
+    split: TimeSplit,
+    feature_columns: tuple[str, ...],
+) -> dict[str, dict[str, float]] | None:
+    """Final-test percentage errors on total price, overall, per station and prior source.
+
+    The parking value is priced with a policy built on the training rows only.
+    """
+    test = split.test
+    if "total_price_twd" not in test or "building_area_ping" not in test:
+        return None
+    features = test[list(feature_columns)]
+    unit = evaluated.estimator.predict(features)
+    policy = (
+        build_parking_price_policy(split.train)
+        if {"parking_type", "parking_price_twd"} <= set(split.train.columns)
+        else None
+    )
+    predicted = predicted_total_prices(unit, test, policy)
+    actual = test["total_price_twd"].to_numpy(float)
+    groups: dict[str, np.ndarray] = {"overall": np.ones(len(test), dtype=bool)}
+    for station in sorted(test["station_code"].dropna().unique()):
+        groups[f"station:{station}"] = (test["station_code"] == station).to_numpy()
+    if hasattr(evaluated.estimator, "prior_sources"):
+        sources = np.asarray(evaluated.estimator.prior_sources(features))
+        for source in sorted(set(sources)):
+            groups[f"prior_source:{source}"] = sources == source
+    return {
+        name: total_price_metrics(actual[mask], predicted[mask])
+        for name, mask in groups.items()
+        if mask.any()
     }
 
 
@@ -129,6 +171,11 @@ def write_evaluation(
         "feature_ranges": bundle.feature_ranges,
         "data_date": bundle.data_max_date,
     }
+    total_metrics = compute_total_price_metrics(
+        evaluated, split, tuple(bundle.feature_columns)
+    )
+    if total_metrics is not None:
+        report["final_test_total_price_metrics"] = total_metrics
     policy = bundle.parking_price_policy
     if policy is not None:
         report["parking_policy"] = {
@@ -300,7 +347,12 @@ def write_model_card(
         mae = group_metrics.get("mae", "N/A")
         mape = group_metrics.get("mape", "N/A")
         count = group_metrics.get("count", 0)
-        lines.append(f"- {group_name}：MAE = {mae}，MAPE = {mape}%，n = {count}")
+        extra = ""
+        if "median_ape" in group_metrics:
+            extra += f"，中位數誤差 = {_rounded(group_metrics['median_ape'])}%"
+        if "ppe10" in group_metrics:
+            extra += f"，PPE10 = {_rounded(group_metrics['ppe10'])}%"
+        lines.append(f"- {group_name}：MAE = {mae}，MAPE = {mape}%{extra}，n = {count}")
 
     lines.extend(
         [

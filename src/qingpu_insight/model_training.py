@@ -111,6 +111,19 @@ def recency_weights(
     return np.maximum(weights, minimum)
 
 
+PPE_THRESHOLDS = (5, 10, 20)
+
+
+def percentage_error_summary(ape: np.ndarray) -> dict[str, float]:
+    """MAPE, median APE and PPEn (% of rows within n% error), all in percent."""
+    ape = np.asarray(ape, float)
+    summary = {"mape": float(np.mean(ape)), "median_ape": float(np.median(ape))}
+    for threshold in PPE_THRESHOLDS:
+        # A tiny tolerance keeps rows exactly on a threshold inside it despite float rounding.
+        summary[f"ppe{threshold}"] = float(np.mean(ape <= threshold + 1e-9) * 100)
+    return summary
+
+
 def _compute_metrics(actual: np.ndarray, predicted: np.ndarray, mask: np.ndarray) -> dict:
     y = actual[mask]
     y_pred = predicted[mask]
@@ -119,12 +132,54 @@ def _compute_metrics(actual: np.ndarray, predicted: np.ndarray, mask: np.ndarray
     se = (y - y_pred) ** 2
     mae = float(np.mean(ae))
     denom = np.maximum(np.abs(y), 100_000)
-    mape = float(np.mean(ae / denom) * 100)
+    percentage = percentage_error_summary(ae / denom * 100)
     rmse = float(np.sqrt(np.mean(se)))
     ss_res = float(np.sum(se))
     ss_tot = float(np.sum((y - np.mean(y)) ** 2))
     r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
-    return {"mae": mae, "mape": mape, "rmse": rmse, "r2": r2, "count": count}
+    return {
+        "mae": mae,
+        "mape": percentage["mape"],
+        "rmse": rmse,
+        "r2": r2,
+        "count": count,
+        "median_ape": percentage["median_ape"],
+        **{key: percentage[key] for key in (f"ppe{t}" for t in PPE_THRESHOLDS)},
+    }
+
+
+def total_price_metrics(actual_total: np.ndarray, predicted_total: np.ndarray) -> dict:
+    """Percentage errors on total price, the metric valuations are judged by."""
+    actual_total = np.asarray(actual_total, float)
+    predicted_total = np.asarray(predicted_total, float)
+    ape = np.abs(predicted_total - actual_total) / actual_total * 100
+    return {**percentage_error_summary(ape), "count": len(actual_total)}
+
+
+def net_building_area(frame: pd.DataFrame) -> np.ndarray:
+    """Building area without parking, the area a net unit price is multiplied by."""
+    area = pd.to_numeric(frame["building_area_ping"], errors="coerce").to_numpy(float)
+    parking = (
+        pd.to_numeric(frame["parking_area_ping"], errors="coerce").fillna(0).to_numpy(float)
+        if "parking_area_ping" in frame
+        else np.zeros(len(frame))
+    )
+    return np.where((parking > 0) & (parking < area), area - parking, area)
+
+
+def predicted_total_prices(
+    unit_prices: np.ndarray, frame: pd.DataFrame, parking_policy
+) -> np.ndarray:
+    """Net unit price x net area plus the parking policy estimate, as valuations compose it."""
+    from qingpu_insight.parking_valuation import estimate_parking_price
+
+    parking = np.zeros(len(frame))
+    if parking_policy is not None and "parking_type" in frame:
+        for i, parking_type in enumerate(frame["parking_type"]):
+            if isinstance(parking_type, str) and parking_type.strip():
+                estimate = estimate_parking_price(parking_policy, parking_type)
+                parking[i] = estimate.price_twd if estimate is not None else 0
+    return np.asarray(unit_prices, float) * net_building_area(frame) + parking
 
 
 def metric_rows(actual: np.ndarray, predicted: np.ndarray, frame: pd.DataFrame) -> pd.DataFrame:
@@ -421,6 +476,11 @@ NUMERIC_FEATURES = [
     "transaction_month_index",
     "twd97_x",
     "twd97_y",
+    "credit_control_rounds",
+    "first_floor",
+    "low_floor",
+    "top_floor",
+    "common_area_ratio",
     # Anchor-offset inputs, only present in AnchorBlendRegressor's offset model.
     "log_prior",
     "knn_distance",
