@@ -588,6 +588,10 @@ document.addEventListener("DOMContentLoaded", async function () {
 
     // Factors
     if (result.factors && result.factors.length) {
+      var labels = typeof QingpuFeatureLabels !== "undefined" ? QingpuFeatureLabels : null;
+      var featureName = function (name) {
+        return labels ? labels.featureLabel(name) : name;
+      };
       var ul = el("ul");
       result.factors.forEach(function (f) {
         var cls = f.direction === "positive" ? "factor-positive" : "factor-negative";
@@ -596,7 +600,7 @@ document.addEventListener("DOMContentLoaded", async function () {
           ? display.formatUnitWan(Math.abs(f.impact_twd_per_ping))
           : formatWan(Math.abs(f.impact_twd_per_ping)) + "／坪";
         ul.appendChild(el("li", { "class": cls }, [
-          f.feature + "：" + sign + impactText
+          featureName(f.feature) + "：" + sign + impactText
         ]));
       });
       cards.push(el("div", { "class": "valuation-card" }, [

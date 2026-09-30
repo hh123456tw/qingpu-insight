@@ -145,6 +145,7 @@
     <section id="admin-jobs"><h2>工作</h2><div class="admin-content"></div></section>
     <section id="admin-diagnostics"><h2>診斷</h2><div class="admin-content"></div></section>
   </main>
+  <script src="{{ url_for('static', filename='feature_labels.js') }}"></script>
   <script src="{{ url_for('static', filename='job_polling.js') }}"></script>
   <script src="{{ url_for('static', filename='models_admin.js') }}?v=20260727"></script>
   <script src="{{ url_for('static', filename='admin.js') }}"></script>
@@ -167,18 +168,6 @@
         r2: ["R²", "模型解釋價格差異的程度", "decimal"],
       };
 
-      var FEATURE_LABELS = {
-        station_distance_m: "距離捷運站",
-        building_age_years: "屋齡",
-        total_floors: "總樓層",
-        station_building_type: "生活圈 × 建物類型",
-        parking_area_ping: "車位面積",
-        transaction_year: "交易年份",
-        transaction_month_index: "交易月份",
-        station_code: "生活圈",
-        building_type: "建物類型",
-        bedrooms: "房數",
-      };
 
       function metricValue(value, format) {
         if (value == null || Number.isNaN(Number(value))) return "—";
@@ -281,7 +270,7 @@
         } else {
           features.forEach(function (item) {
             var feature = document.createElement("li");
-            feature.textContent = FEATURE_LABELS[item.feature] || item.feature;
+            feature.textContent = QingpuFeatureLabels.featureLabel(item.feature);
             featureList.appendChild(feature);
           });
         }
