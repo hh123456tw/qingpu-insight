@@ -1277,6 +1277,102 @@ def test_anchor_log_radii_calibrate_each_group_with_enough_rows():
     )
 
 
+def test_total_interval_radii_split_by_anchor_and_optional_inputs():
+    from qingpu_insight.valuation import anchor_log_radii, total_interval_log_radii
+
+    rng = np.random.default_rng(1)
+    n = 240
+    anchored = np.arange(n) < 120
+    predicted = np.full(n, 20_000_000.0)
+    actual = predicted * np.where(anchored, rng.uniform(0.9, 1.1, n), rng.uniform(0.8, 1.2, n))
+    without_optional = predicted * rng.uniform(0.85, 1.15, n)
+    complete = np.arange(n) % 2 == 0
+
+    radii = total_interval_log_radii(actual, predicted, without_optional, anchored, complete)
+
+    incomplete = anchor_log_radii(actual, without_optional, anchored)
+    with_inputs = anchor_log_radii(actual[complete], predicted[complete], anchored[complete])
+    assert radii == pytest.approx(
+        {
+            "anchored|incomplete": incomplete["anchored"],
+            "unanchored|incomplete": incomplete["unanchored"],
+            "anchored|complete": with_inputs["anchored"],
+            "unanchored|complete": with_inputs["unanchored"],
+        }
+    )
+    # Without enough calibration rows that had the optional inputs, reuse the other radii.
+    none_known = total_interval_log_radii(
+        actual, predicted, without_optional, anchored, np.zeros(n, dtype=bool)
+    )
+    assert none_known["anchored|complete"] == none_known["anchored|incomplete"]
+
+
+class RatioAwareStub:
+    """Exact when common_area_ratio is given, 20% high when it is withheld."""
+
+    def predict(self, X):
+        exact = X["floor"].to_numpy(float) * 1000
+        return np.where(X["common_area_ratio"].notna(), exact, exact * 1.2)
+
+    def anchored_mask(self, X):
+        return np.ones(len(X), dtype=bool)
+
+
+def test_calibration_total_radii_withhold_optional_inputs():
+    from types import SimpleNamespace
+
+    from qingpu_insight.valuation import calibration_total_radii
+
+    rng = np.random.default_rng(3)
+    n = 80
+    unit = rng.uniform(300_000, 500_000, n)
+    frame = pd.DataFrame({col: 0.0 for col in FEATURE_COLUMNS}, index=range(n))
+    frame["floor"] = unit / 1000
+    frame["common_area_ratio"] = 0.34
+    frame = frame.assign(
+        target_unit_price_twd=unit,
+        building_area_ping=30.0,
+        parking_area_ping=0.0,
+        parking_type="",
+        parking_price_twd=0.0,
+        total_price_twd=unit * 30.0,
+    )
+    split = SimpleNamespace(train=frame, calibration=frame, test=frame)
+
+    radii = calibration_total_radii(RatioAwareStub(), split, FEATURE_COLUMNS)
+
+    assert radii["anchored|complete"] == pytest.approx(0.0, abs=1e-9)
+    assert radii["anchored|incomplete"] == pytest.approx(np.log(1.2))
+
+
+def test_valuation_uses_total_price_interval_for_its_group(bundle, market, valid_resale_input):
+    from dataclasses import replace
+
+    bundle.pipeline = AnchoredStubModel("resale")
+    bundle.interval_total_log_radius_by_group = {
+        "anchored|complete": float(np.log(1.1)),
+        "anchored|incomplete": float(np.log(1.2)),
+        "unanchored|complete": float(np.log(1.3)),
+        "unanchored|incomplete": float(np.log(1.4)),
+    }
+
+    without_ratio = valuate(valid_resale_input, FakeRegistry(bundle), market)
+    total = without_ratio["estimated_total_price_twd"]
+    assert without_ratio["interval_total_price_twd"] == (
+        pytest.approx(total / 1.2, abs=1),
+        pytest.approx(total * 1.2, abs=1),
+    )
+
+    with_ratio = valuate(
+        replace(valid_resale_input, common_area_ratio=0.34), FakeRegistry(bundle), market
+    )
+    low, high = with_ratio["interval_total_price_twd"]
+    assert (low, high) == (
+        pytest.approx(with_ratio["estimated_total_price_twd"] / 1.1, abs=1),
+        pytest.approx(with_ratio["estimated_total_price_twd"] * 1.1, abs=1),
+    )
+
+
 class AnchoredStubModel:
     def __init__(self, source: str) -> None:
         self.source = source

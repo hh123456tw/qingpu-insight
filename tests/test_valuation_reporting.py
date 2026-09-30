@@ -393,6 +393,50 @@ def test_write_evaluation_reports_total_price_and_ppe_metrics(tmp_path, trained_
     assert total["overall"]["mape"] == pytest.approx(unit_overall["mape"], rel=1e-6)
 
 
+def test_interval_summary_uses_total_price_radii_when_present(trained_bundle):
+    import numpy as np
+
+    from qingpu_insight.valuation_reporting import compute_interval_summary
+
+    split = _build_experiment_frame(300, 100, 200, seed=11)
+    split = TimeSplit(
+        *(
+            part.assign(
+                total_price_twd=part["target_unit_price_twd"] * part["building_area_ping"],
+                parking_price_twd=0.0,
+            )
+            for part in (split.train, split.calibration, split.test)
+        )
+    )
+    from types import SimpleNamespace
+
+    class Stub:
+        def predict(self, X):
+            # 8% high on every other row, exact otherwise.
+            price = split.test.loc[X.index, "target_unit_price_twd"].to_numpy()
+            return price * np.where(np.arange(len(X)) % 2 == 0, 1.08, 1.0)
+
+    evaluated = SimpleNamespace(estimator=Stub())
+    trained_bundle.feature_columns = ("station_code", "building_type")
+    trained_bundle.interval_total_log_radius_by_group = {
+        "anchored|complete": 0.01,
+        "anchored|incomplete": 0.01,
+        "unanchored|complete": float(np.log(1.05)),
+        "unanchored|incomplete": float(np.log(1.05)),
+    }
+
+    summary = compute_interval_summary(trained_bundle, evaluated, split)
+
+    predicted = evaluated.estimator.predict(split.test[list(trained_bundle.feature_columns)])
+    # Rows 8% high fall outside a ±5% interval; exact rows are covered.
+    assert summary["coverage_basis"] == "total_price"
+    assert summary["test_coverage"] == pytest.approx(0.5)
+    assert summary["test_coverage_without_optional_inputs"] == pytest.approx(0.5)
+    assert summary["average_interval_width_twd_per_ping"] == pytest.approx(
+        np.mean(predicted * (1.05 - 1 / 1.05))
+    )
+
+
 def test_model_card_shows_median_error_and_ppe10(tmp_path, trained_bundle, experiment, leakage):
     trained_bundle.metrics["overall"].update({"median_ape": 6.2, "ppe10": 71.5})
     text = write_model_card(trained_bundle, experiment, leakage, tmp_path).read_text(

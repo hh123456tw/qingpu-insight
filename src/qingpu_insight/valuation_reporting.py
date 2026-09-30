@@ -13,7 +13,12 @@ from qingpu_insight.model_training import (
 )
 from qingpu_insight.model_tuning import TrainingProfile
 from qingpu_insight.parking_valuation import build_parking_price_policy
-from qingpu_insight.valuation import ValuationBundle, interval_bounds
+from qingpu_insight.valuation import (
+    ValuationBundle,
+    evaluation_totals,
+    interval_bounds,
+    interval_group,
+)
 
 MODEL_DISPLAY_NAMES = {
     "hist_gradient_boosting_log": "HGB（對數價格）",
@@ -28,11 +33,41 @@ def _rounded(value: object) -> object:
     return round(float(value), 2) if isinstance(value, int | float) else value
 
 
+def _total_interval_summary(
+    radii: dict[str, float], totals: dict[str, np.ndarray]
+) -> dict[str, object]:
+    anchored = totals["anchored"]
+
+    def cover(predicted: np.ndarray, complete: np.ndarray) -> tuple[float, np.ndarray]:
+        factor = np.exp(
+            [radii[interval_group(a, c)] for a, c in zip(anchored, complete, strict=True)]
+        )
+        low, high = predicted / factor, predicted * factor
+        inside = (totals["actual"] >= low) & (totals["actual"] <= high)
+        return float(inside.mean()), (high - low) / totals["net_area"]
+
+    coverage, width = cover(totals["complete"], totals["complete_rows"])
+    withheld, _ = cover(totals["incomplete"], np.zeros(len(anchored), dtype=bool))
+    return {
+        "coverage_basis": "total_price",
+        "test_coverage": coverage,
+        "test_coverage_without_optional_inputs": withheld,
+        "average_interval_width_twd_per_ping": float(np.mean(width)),
+    }
+
+
 def compute_interval_summary(
     bundle: ValuationBundle,
     evaluated: Any,
     split: TimeSplit,
-) -> dict[str, float]:
+) -> dict[str, object]:
+    radii = bundle.interval_total_log_radius_by_group
+    if radii is not None:
+        totals = evaluation_totals(
+            evaluated.estimator, split.test, split.train, bundle.feature_columns
+        )
+        if totals is not None:
+            return _total_interval_summary(radii, totals)
     test_pred = evaluated.estimator.predict(
         split.test[list(bundle.feature_columns)]
     )
@@ -44,6 +79,7 @@ def compute_interval_summary(
     )
     lows, highs = interval_bounds(bundle, test_pred, anchored)
     return {
+        "coverage_basis": "unit_price",
         "test_coverage": float(((actual >= lows) & (actual <= highs)).mean()),
         "average_interval_width_twd_per_ping": float(np.mean(highs - lows)),
     }
@@ -163,6 +199,8 @@ def write_evaluation(
         ),
         "calibration_log_radius": bundle.interval_log_radius,
         "calibration_log_radius_by_anchor": bundle.interval_log_radius_by_anchor,
+        "calibration_total_log_radius_by_group": bundle.interval_total_log_radius_by_group,
+        "coverage_basis": interval_summary["coverage_basis"],
         "test_coverage": round(interval_summary["test_coverage"], 4),
         "average_interval_width_twd_per_ping": round(
             interval_summary["average_interval_width_twd_per_ping"],
@@ -171,6 +209,10 @@ def write_evaluation(
         "feature_ranges": bundle.feature_ranges,
         "data_date": bundle.data_max_date,
     }
+    if "test_coverage_without_optional_inputs" in interval_summary:
+        report["test_coverage_without_optional_inputs"] = round(
+            interval_summary["test_coverage_without_optional_inputs"], 4
+        )
     total_metrics = compute_total_price_metrics(
         evaluated, split, tuple(bundle.feature_columns)
     )
@@ -359,7 +401,10 @@ def write_model_card(
             "",
             "## 區間覆蓋率",
             (
-                f"- 相對區間：預估單價 ÷／× {np.exp(bundle.interval_log_radius):.3f}"
+                "- 總價區間：預估總價 ÷／× 依同棟錨點與是否提供公設比分組的倍數"
+                "（總價 log 空間 split-conformal，名目 90%）"
+                if bundle.interval_total_log_radius_by_group is not None
+                else f"- 相對區間：預估單價 ÷／× {np.exp(bundle.interval_log_radius):.3f}"
                 "（log 空間 split-conformal，名目 90%）"
                 if bundle.interval_log_radius is not None
                 else f"- 校準分位數：{bundle.interval_abs_residual_twd_per_ping:,.0f} 元/坪"

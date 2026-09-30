@@ -12,11 +12,12 @@ import pandas as pd
 from qingpu_insight.model_features import (
     BASE_FEATURE_COLUMNS,
     FEATURE_COLUMNS,
+    OPTIONAL_FEATURE_COLUMNS,
     ValuationInput,
     input_frame,
     parking_adjusted_target,
 )
-from qingpu_insight.model_training import recency_weights
+from qingpu_insight.model_training import net_building_area, recency_weights
 from qingpu_insight.parking_valuation import (
     ParkingPriceEstimate,
     ParkingPricePolicy,
@@ -48,9 +49,15 @@ class ValuationBundle:
     interval_log_radius: float | None = None
     # Separate radii for rows with and without a same-building price anchor.
     interval_log_radius_by_anchor: dict[str, float] | None = None
+    # Total-price radii keyed "anchored|complete" etc. (see total_interval_log_radii).
+    interval_total_log_radius_by_group: dict[str, float] | None = None
 
     def __getattr__(self, name):
-        if name in ("interval_log_radius", "interval_log_radius_by_anchor"):
+        if name in (
+            "interval_log_radius",
+            "interval_log_radius_by_anchor",
+            "interval_total_log_radius_by_group",
+        ):
             return None
         if name == "feature_columns":
             return BASE_FEATURE_COLUMNS
@@ -183,6 +190,109 @@ def anchor_log_radii(
             else pooled
         )
     return radii
+
+
+def interval_group(anchored: bool, complete: bool) -> str:
+    """Total-price interval group: anchoring and whether all optional inputs were given."""
+    return (
+        f"{'anchored' if anchored else 'unanchored'}|{'complete' if complete else 'incomplete'}"
+    )
+
+
+def total_interval_log_radii(
+    actual_total: np.ndarray,
+    predicted_total: np.ndarray,
+    predicted_total_incomplete: np.ndarray,
+    anchored: np.ndarray,
+    complete_rows: np.ndarray,
+) -> dict[str, float]:
+    """Conformal log radii on total price per anchor group and optional-input availability.
+
+    'incomplete' radii come from predictions made with the optional inputs withheld (how
+    most valuations arrive); 'complete' radii from the calibration rows that had them.
+    Total price is calibrated directly so the parking estimate's error is included.
+    """
+    actual_total = np.asarray(actual_total, float)
+    anchored = np.asarray(anchored, bool)
+    complete_rows = np.asarray(complete_rows, bool)
+    incomplete = anchor_log_radii(
+        actual_total, np.asarray(predicted_total_incomplete, float), anchored
+    )
+    complete = (
+        anchor_log_radii(
+            actual_total[complete_rows],
+            np.asarray(predicted_total, float)[complete_rows],
+            anchored[complete_rows],
+        )
+        if complete_rows.sum() >= MIN_INTERVAL_GROUP_ROWS
+        else incomplete
+    )
+    radii = {f"{name}|incomplete": radius for name, radius in incomplete.items()}
+    radii.update({f"{name}|complete": radius for name, radius in complete.items()})
+    return radii
+
+
+def _without_optional_inputs(X: pd.DataFrame) -> pd.DataFrame:
+    withheld = X.copy()
+    for column in OPTIONAL_FEATURE_COLUMNS:
+        if column in withheld:
+            withheld[column] = np.nan
+    return withheld
+
+
+def evaluation_totals(
+    estimator: Any, frame: pd.DataFrame, train: pd.DataFrame, feature_columns
+) -> dict[str, np.ndarray] | None:
+    """Actual and predicted totals (as given / optional inputs withheld) for a split part.
+
+    Parking is priced with a policy built on the training rows only. None when the frame
+    has no total prices.
+    """
+    from qingpu_insight.model_training import predicted_total_prices
+
+    if not {"total_price_twd", "building_area_ping"} <= set(frame.columns) or frame.empty:
+        return None
+    policy = (
+        build_parking_price_policy(train)
+        if {"parking_type", "parking_price_twd"} <= set(train.columns)
+        else None
+    )
+    X = frame[list(feature_columns)]
+    optional = [column for column in OPTIONAL_FEATURE_COLUMNS if column in X.columns]
+    unit = np.asarray(estimator.predict(X), float)
+    unit_incomplete = (
+        np.asarray(estimator.predict(_without_optional_inputs(X)), float) if optional else unit
+    )
+    anchored = (
+        np.asarray(estimator.anchored_mask(X), bool)
+        if hasattr(estimator, "anchored_mask")
+        else np.zeros(len(X), dtype=bool)
+    )
+    return {
+        "actual": frame["total_price_twd"].to_numpy(float),
+        "complete": predicted_total_prices(unit, frame, policy),
+        "incomplete": predicted_total_prices(unit_incomplete, frame, policy),
+        "anchored": anchored,
+        "complete_rows": (
+            X[optional].notna().all(axis=1).to_numpy() if optional else np.ones(len(X), bool)
+        ),
+        "net_area": net_building_area(frame),
+    }
+
+
+def calibration_total_radii(
+    estimator: Any, split: Any, feature_columns
+) -> dict[str, float] | None:
+    totals = evaluation_totals(estimator, split.calibration, split.train, feature_columns)
+    if totals is None:
+        return None
+    return total_interval_log_radii(
+        totals["actual"],
+        totals["complete"],
+        totals["incomplete"],
+        totals["anchored"],
+        totals["complete_rows"],
+    )
 
 
 def interval_bounds(bundle: ValuationBundle, unit_price, anchored=None):
@@ -639,7 +749,16 @@ def valuate(
     building_price, parking_price, total_price = compose_total_price(
         unit_price, input_.building_area_ping, parking_estimate
     )
-    interval = prediction_interval(bundle, unit_price, anchored)
+    total_radii = bundle.interval_total_log_radius_by_group
+    total_factor: float | None = None
+    if total_radii is not None:
+        complete = all(
+            getattr(input_, column, None) is not None for column in OPTIONAL_FEATURE_COLUMNS
+        )
+        total_factor = float(np.exp(total_radii[interval_group(bool(anchored), complete)]))
+        interval = (unit_price / total_factor, unit_price * total_factor)
+    else:
+        interval = prediction_interval(bundle, unit_price, anchored)
 
     factors = local_factors(bundle, row)
     comparables_result = similar_transactions(bundle, row, market)
@@ -671,11 +790,12 @@ def valuate(
     low, high = interval
     building_low = round(low * input_.building_area_ping)
     building_high = round(high * input_.building_area_ping)
-    interval_total = (
-        (building_low + parking_price, building_high + parking_price)
-        if parking_price is not None
-        else (building_low, building_high)
-    )
+    if total_factor is not None:
+        interval_total = (round(total_price / total_factor), round(total_price * total_factor))
+    elif parking_price is not None:
+        interval_total = (building_low + parking_price, building_high + parking_price)
+    else:
+        interval_total = (building_low, building_high)
 
     result: dict[str, Any] = {
         "transaction_type": input_.transaction_type,
@@ -772,6 +892,7 @@ def train_artifact(
         if hasattr(selected.estimator, "anchored_mask")
         else None
     )
+    total_radii = calibration_total_radii(selected.estimator, split, feature_columns)
 
     imp = permutation_importance(
         selected.estimator,
@@ -866,6 +987,7 @@ def train_artifact(
         parking_price_policy=parking_policy,
         interval_log_radius=log_radius,
         interval_log_radius_by_anchor=radii_by_anchor,
+        interval_total_log_radius_by_group=total_radii,
     )
 
     artifact_dir.mkdir(parents=True, exist_ok=True)
