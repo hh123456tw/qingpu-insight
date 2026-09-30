@@ -477,6 +477,14 @@ AutoML 模式與引導調參為互斥選擇。AutoML 不自動發布任何模型
 | `address` | | 門牌地址（最長 120 字） |
 | `twd97_x` + `twd97_y`，或 `longitude` + `latitude` | | 直接提供座標；必須成對，且與 `address` 擇一 |
 | `parking_type`、`parking_area_ping`、`asking_total_price_twd` | | 車位與開價 |
+| `main_building_area_ping`、`auxiliary_building_area_ping`、`balcony_area_ping` | | 權狀的主建物／附屬建物／陽台坪數；伺服器以模型相同的算法換算公設比。填寫附屬建物或陽台時主建物必填，附屬建物與陽台留空視為 0 |
+| `common_area_ratio` | | 公設比（**不含車位**，0～0.70 的小數）；與權狀面積同時提供時，兩者差距須在 1 個百分點內，否則回傳 `conflicts_with_areas` |
+
+回應新增 `common_area` 物件：`provided`、`source`（`areas`＝由權狀面積換算、`ratio`＝直接填寫、未提供時為 `null`）與 `ratio`。
+
+**公設比（選填）**：模型的公設比定義為 1 −（主建物 + 附屬建物 + 陽台）÷ 房屋坪數（不含車位），與訓練資料一致。591 與仲介常見的「公設比」通常把車位算進公設，有車位時數字會偏高，直接填入會讓估價失準，所以表單建議改填權狀面積，並即時顯示換算結果；直接填百分比時需自行扣除車位（不含車位公設比 = 1 −（1 − 含車位公設比）× 權狀總坪數 ÷（權狀總坪數 − 車位坪數））。換算結果不在 0%～70%、只填附屬建物或陽台、或與直接填寫的公設比矛盾時回傳 400 欄位錯誤。未填寫時模型以訓練中位數代入，並使用較寬的「未提供」區間校準；結果頁的「位置與估價基準」會標示是否使用公設比。
+
+591 物件助理：詳細頁有「主建物」與「附屬建物」欄位（591 的附屬建物已含陽台）時，以同一算法換算；只有 591 標示的公設比時，無車位才直接採用，有已驗證車位坪數時假設該數字含車位並扣除換算；車位坪數無法確認或資料不足時不使用公設比。估價限制說明會列出採用方式。
 
 回應新增 `location` 物件：`source`（`address`／`coordinates`／`form`）、`precise`、`match_quality`（`exact`／`nearest_number`，僅地址）、`station_code`、`station_distance_m`（僅有位置時）與 `note`（僅門牌資料無法使用時）。使用同棟錨點模型時，`model.price_anchor` 為 `same_building`、`nearby_sales` 或 `station_baseline`；其他模型不提供此欄位。未提供位置的請求行為與先前完全相同。
 

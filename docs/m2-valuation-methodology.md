@@ -125,7 +125,7 @@ Schema v2（及更早）的訓練不會有調參快照；頁面上會標示「�
 
 - 數值特徵：station_distance_m, building_area_ping, bedrooms, living_rooms, bathrooms, building_age_years, floor, total_floors, floor_ratio, transaction_year, transaction_month, transaction_month_index, twd97_x, twd97_y
 - 類別特徵：station_code, building_type, station_building_type, building_age_band, area_band, floor_band, location_known
-- 選填特徵（`OPTIONAL_FEATURE_COLUMNS`）：common_area_ratio（公設比，不含車位）= 1 −（主建物 + 附屬建物 + 陽台）÷（建物移轉總面積 − 車位面積），由實價登錄的面積欄位在 `market_cleaning.add_area_share_features` 計算；陽台不在附屬建物內，所以另外加回，車位面積從分母扣除。估價時為選填（`ValuationInput.common_area_ratio`、API 欄位 `common_area_ratio`，0–0.70），未提供時由前處理以訓練中位數補值。舊的市場資料沒有這些面積欄位，需要重跑 `analyse` 與 `market-build`
+- 選填特徵（`OPTIONAL_FEATURE_COLUMNS`）：common_area_ratio（公設比，不含車位）= 1 −（主建物 + 附屬建物 + 陽台）÷（建物移轉總面積 − 車位面積），由實價登錄的面積欄位在 `market_cleaning.add_area_share_features` 計算；陽台不在附屬建物內，所以另外加回，車位面積從分母扣除。估價時為選填（`ValuationInput.common_area_ratio`、API 欄位 `common_area_ratio`，0–0.70），未提供時由前處理以訓練中位數補值。表單與 API 也可改收權狀主建物／附屬建物／陽台坪數（`main_building_area_ping` 等），由 `market_cleaning.common_area_ratio` 以同一定義對房屋坪數（不含車位）換算。舊的市場資料沒有這些面積欄位，需要重跑 `analyse` 與 `market-build`
 - `add_derived_features` 另外產生 1 樓／2–3 樓／頂樓旗標（`first_floor`、`low_floor`、`top_floor`）與央行選擇性信用管制輪數（`credit_control_rounds`，2020-12-08 起七波緊縮、2026-03-20 放寬一波），回測沒有改善，因此不在特徵契約內（見[問題紀錄 §20](project-issue-log.md)）
 - 不含 `parking_type`、`parking_area_ping`：車位由車位價格政策另外計價（見「目標變數」），發布檢查 `parking_price_consistency` 會拒絕把車位欄位當特徵的候選
 - 中位數填補遺漏值（附缺值指示欄）+ 標準化（數值特徵）
