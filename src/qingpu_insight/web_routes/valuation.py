@@ -20,7 +20,11 @@ from qingpu_insight.valuation_request import (
     valuation_transaction_type,
 )
 from qingpu_insight.valuation_store import FileValuationStore
-from qingpu_insight.web_routes.errors import api_input_error_response, error_response
+from qingpu_insight.web_routes.errors import (
+    api_input_error_response,
+    error_response,
+    read_market_data,
+)
 from qingpu_insight.web_routes.guards import guarded_blueprint
 
 
@@ -45,7 +49,9 @@ def create_valuation_blueprint(
         except ApiInputError as error:
             return api_input_error_response(error)
 
-        market = ds.load(MarketFilters(transaction_type=input_.transaction_type))
+        market = read_market_data(
+            lambda: ds.load(MarketFilters(transaction_type=input_.transaction_type))
+        )
         latest_data_date = (
             pd.Timestamp(market["transaction_date"].max()) if not market.empty else None
         )

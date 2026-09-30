@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any
+from typing import Any, TypeVar
 
 import numpy as np
 import pandas as pd
 from flask import Flask, jsonify
 from werkzeug.exceptions import HTTPException
 
-from qingpu_insight.api_errors import ApiInputError
+from qingpu_insight.api_errors import ApiInputError, MarketDataUnavailable
+
+T = TypeVar("T")
 
 
 def json_default(obj: Any) -> Any:
@@ -51,16 +54,29 @@ def parse_limit(raw_limit: str) -> int | None:
     return limit
 
 
+def read_market_data(load: Callable[[], T]) -> T:
+    """Run a market/listing data read, turning any failure into MarketDataUnavailable."""
+    try:
+        return load()
+    except Exception as error:
+        raise MarketDataUnavailable("market data unavailable") from error
+
+
 def register_error_handlers(app: Flask) -> None:
     @app.errorhandler(ApiInputError)
     def handle_api_input_error(error: ApiInputError):
         return api_input_error_response(error)
+
+    @app.errorhandler(MarketDataUnavailable)
+    def handle_market_data_unavailable(error: MarketDataUnavailable):
+        app.logger.error("market data unavailable", exc_info=error.__cause__)
+        return error_response(
+            "market_data_unavailable", "無法取得市場資料，請稍後再試。", 503
+        )
 
     @app.errorhandler(Exception)
     def handle_unhandled(error: Exception):
         if isinstance(error, HTTPException):
             return error
         app.logger.exception("unhandled error serving request")
-        return error_response(
-            "market_data_unavailable", "無法取得市場資料，請稍後再試。", 503
-        )
+        return error_response("internal_error", "系統發生錯誤，請稍後再試。", 500)

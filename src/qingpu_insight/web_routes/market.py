@@ -23,6 +23,7 @@ from qingpu_insight.market_metrics import (
     recent_transactions,
 )
 from qingpu_insight.market_repository import MarketDataSource
+from qingpu_insight.web_routes.errors import read_market_data
 from qingpu_insight.web_routes.guards import guarded_blueprint
 
 
@@ -141,15 +142,21 @@ def create_market_blueprint(
     ds = data_source
     lr = listing_repo
 
+    def load_market(filters: MarketFilters) -> pd.DataFrame:
+        return read_market_data(lambda: ds.load(filters))
+
+    def load_listings(listing_type: str) -> pd.DataFrame:
+        return read_market_data(lambda: lr.load_current(listing_type))
+
     @bp.get("/api/market/summary")
     def summary_api():
         filters = parse_filters(request.args)
-        return jsonify(market_summary(ds.load(filters), filters))
+        return jsonify(market_summary(load_market(filters), filters))
 
     @bp.get("/api/market/trends")
     def trends_api():
         filters = parse_filters(request.args)
-        return jsonify({"items": market_trends(ds.load(filters), filters)})
+        return jsonify({"items": market_trends(load_market(filters), filters)})
 
     @bp.get("/api/market/map-points")
     def map_points_api():
@@ -157,7 +164,7 @@ def create_market_blueprint(
         zoom, bounds = _parse_map_view(request.args)
         return jsonify(
             market_map_points(
-                ds.load(filters),
+                load_market(filters),
                 filters,
                 zoom=zoom,
                 bounds=bounds,
@@ -173,7 +180,7 @@ def create_market_blueprint(
             raise ApiInputError("筆數格式不正確。", {"limit": "integer_1_to_100"}) from None
         return jsonify(
             {
-                "items": recent_transactions(ds.load(filters), filters, limit),
+                "items": recent_transactions(load_market(filters), filters, limit),
                 "limit": limit,
             }
         )
@@ -183,7 +190,7 @@ def create_market_blueprint(
         filters = _listing_filters_from_args()
         if lr is None:
             return _listing_data_unavailable()
-        df = _publicly_visible_listings(lr.load_current(filters.listing_type))
+        df = _publicly_visible_listings(load_listings(filters.listing_type))
         return jsonify(listing_summary(df, filters))
 
     @bp.get("/api/listings")
@@ -191,7 +198,7 @@ def create_market_blueprint(
         filters = _listing_filters_from_args()
         if lr is None:
             return _listing_data_unavailable()
-        df = _publicly_visible_listings(lr.load_current(filters.listing_type))
+        df = _publicly_visible_listings(load_listings(filters.listing_type))
         items = public_listings(df, filters)
         return jsonify({"items": items, "limit": filters.limit})
 
@@ -200,7 +207,7 @@ def create_market_blueprint(
         filters = _listing_filters_from_args()
         if lr is None:
             return _listing_data_unavailable()
-        df = lr.load_events(filters.listing_type)
+        df = read_market_data(lambda: lr.load_events(filters.listing_type))
         events = public_events(df, filters)
         return jsonify({"items": events, "limit": filters.limit})
 

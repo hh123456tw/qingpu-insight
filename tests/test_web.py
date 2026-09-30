@@ -1558,6 +1558,45 @@ def test_missing_artifact_uses_explicit_baseline(client_without_models):
     assert body["model"]["name"] == "recent_median_baseline"
 
 
+def test_unexpected_valuation_error_is_internal_not_market_outage(
+    valuation_client, monkeypatch
+):
+    import qingpu_insight.web_routes.valuation as valuation_routes
+
+    def broken_valuate(*args, **kwargs):
+        raise RuntimeError("mysql://admin:password@localhost/db SELECT secret")
+
+    monkeypatch.setattr(valuation_routes, "valuate", broken_valuate)
+    response = valuation_client.post("/api/valuations", json=VALID_RESALE_PAYLOAD)
+    body = response.get_data(as_text=True)
+    assert response.status_code == 500
+    assert response.get_json()["error"] == {
+        "code": "internal_error",
+        "message": "系統發生錯誤，請稍後再試。",
+        "fields": None,
+    }
+    assert "password" not in body
+    assert "SELECT" not in body
+
+
+def test_valuation_market_data_failure_is_503(market_frame, tmp_path):
+    from qingpu_insight.valuation_store import FileValuationStore
+    from qingpu_insight.web import create_app
+
+    class FailingSource:
+        def load(self, filters):
+            raise OSError("parquet unreadable")
+
+    app = create_app(
+        data_source=FailingSource(),
+        valuation_store=FileValuationStore(tmp_path / "vals"),
+        model_registry=ModelRegistry(tmp_path / "empty"),
+    )
+    response = app.test_client().post("/api/valuations", json=VALID_RESALE_PAYLOAD)
+    assert response.status_code == 503
+    assert response.get_json()["error"]["code"] == "market_data_unavailable"
+
+
 def test_get_valuation_returns_saved_record(valuation_client):
     post = valuation_client.post("/api/valuations", json=VALID_RESALE_PAYLOAD)
     assert post.status_code == 201
