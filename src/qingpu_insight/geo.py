@@ -8,6 +8,15 @@ from qingpu_insight.addresses import match_addresses
 from qingpu_insight.config import Station
 
 _WGS84_TO_TWD97 = Transformer.from_crs("EPSG:4326", "EPSG:3826", always_xy=True)
+_TWD97_TO_WGS84 = Transformer.from_crs("EPSG:3826", "EPSG:4326", always_xy=True)
+
+# Station platforms as (latitude, longitude). Station features of a single property
+# are computed from these, so every valuation path derives them the same way.
+STATION_WGS84: dict[str, tuple[float, float]] = {
+    "A17": (25.0223, 121.2373),
+    "A18": (25.0137, 121.2143),
+    "A19": (25.0011, 121.2046),
+}
 
 
 def wgs84_to_twd97(longitude: float, latitude: float) -> tuple[float, float]:
@@ -17,6 +26,38 @@ def wgs84_to_twd97(longitude: float, latitude: float) -> tuple[float, float]:
     if not all(math.isfinite(value) for value in (x, y)):
         raise ValueError("coordinates must be finite")
     return float(x), float(y)
+
+
+def twd97_to_wgs84(x: float, y: float) -> tuple[float, float]:
+    """Return (longitude, latitude) for a TWD97 / TM2 point."""
+    if not all(math.isfinite(value) for value in (x, y)):
+        raise ValueError("coordinates must be finite")
+    longitude, latitude = _TWD97_TO_WGS84.transform(x, y)
+    if not all(math.isfinite(value) for value in (longitude, latitude)):
+        raise ValueError("coordinates must be finite")
+    return float(longitude), float(latitude)
+
+
+def station_from_coords(longitude: float, latitude: float) -> tuple[str, float]:
+    """Nearest MRT station and its Haversine distance in metres."""
+    best_station: str | None = None
+    best_distance = float("inf")
+    for code, (slat, slon) in STATION_WGS84.items():
+        dlat = math.radians(latitude - slat)
+        dlon = math.radians(longitude - slon)
+        a = (
+            math.sin(dlat / 2) ** 2
+            + math.cos(math.radians(latitude)) * math.cos(math.radians(slat))
+            * math.sin(dlon / 2) ** 2
+        )
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        dist = 6_371_000 * c
+        if dist < best_distance:
+            best_distance = dist
+            best_station = code
+    if best_station is None:
+        raise ValueError("no station within range")
+    return best_station, round(best_distance, 1)
 
 
 def station_points(stations: tuple[Station, ...], doorplates: pd.DataFrame) -> pd.DataFrame:

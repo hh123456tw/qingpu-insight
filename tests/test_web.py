@@ -1367,6 +1367,250 @@ def test_get_nonexistent_valuation_returns_404(valuation_client):
     assert response.status_code == 404
 
 
+# --- Homepage valuation location (address / coordinates) ---
+
+A18_LONGITUDE, A18_LATITUDE = 121.2143, 25.0167  # about 330 m north of A18
+TEST_ADDRESS = "中壢區青埔路二段289號5樓"
+
+
+class FakeAddressLocator:
+    def __init__(self, result=None, unavailable: bool = False) -> None:
+        self.result = result
+        self.unavailable = unavailable
+        self.calls: list[str] = []
+
+    def resolve(self, address: str):
+        from qingpu_insight.address_location import AddressLocatorUnavailable
+
+        self.calls.append(address)
+        if self.unavailable:
+            raise AddressLocatorUnavailable("doorplate data unavailable")
+        return self.result
+
+
+def _a18_match():
+    from qingpu_insight.address_location import AddressMatch
+    from qingpu_insight.geo import wgs84_to_twd97
+
+    x, y = wgs84_to_twd97(A18_LONGITUDE, A18_LATITUDE)
+    return AddressMatch(x, y, "exact")
+
+
+@pytest.fixture
+def location_app(market_frame: pd.DataFrame, trained_registry, tmp_path, monkeypatch):
+    import qingpu_insight.web as web
+    from qingpu_insight.valuation_store import FileValuationStore
+
+    captured: list[Any] = []
+    original = web.valuate
+
+    def spy(input_, *args, **kwargs):
+        captured.append(input_)
+        return original(input_, *args, **kwargs)
+
+    monkeypatch.setattr(web, "valuate", spy)
+    mf = market_frame.copy()
+    mf["floor"] = "五層"
+    mf["total_floors"] = 15
+    mf["parking_type"] = "坡道平面"
+    mf["parking_area_sqm"] = 0
+
+    def build(locator):
+        app = web.create_app(
+            data_source=InMemoryMarketDataSource(mf),
+            valuation_store=FileValuationStore(tmp_path / "vals"),
+            model_registry=trained_registry,
+            address_locator=locator,
+        )
+        return app.test_client()
+
+    return build, captured
+
+
+def _payload_without_station(**extra):
+    payload = dict(VALID_RESALE_PAYLOAD)
+    payload.pop("station_code")
+    payload.pop("station_distance_m")
+    payload.update(extra)
+    return payload
+
+
+def test_valuation_without_location_is_unchanged(location_app):
+    build, captured = location_app
+    locator = FakeAddressLocator(_a18_match())
+
+    response = build(locator).post("/api/valuations", json=VALID_RESALE_PAYLOAD)
+
+    assert response.status_code == 201
+    assert locator.calls == []
+    assert captured[0].station_code == "A17"
+    assert captured[0].station_distance_m == 500
+    assert captured[0].twd97_x is None
+    assert response.get_json()["location"] == {"source": "form", "precise": False}
+
+
+def test_valuation_address_sets_coordinates_and_station(location_app, tmp_path):
+    build, captured = location_app
+    locator = FakeAddressLocator(_a18_match())
+
+    response = build(locator).post(
+        "/api/valuations", json=_payload_without_station(address=TEST_ADDRESS)
+    )
+
+    assert response.status_code == 201, response.get_json()
+    body = response.get_json()
+    match = _a18_match()
+    assert (captured[0].twd97_x, captured[0].twd97_y) == pytest.approx(
+        (match.twd97_x, match.twd97_y)
+    )
+    assert captured[0].station_code == "A18"
+    assert 250 < captured[0].station_distance_m < 400
+    assert body["location"] == {
+        "source": "address",
+        "precise": True,
+        "match_quality": "exact",
+        "station_code": "A18",
+        "station_distance_m": captured[0].station_distance_m,
+    }
+    stored = (tmp_path / "vals" / f"{body['valuation_id']}.json").read_text(encoding="utf-8")
+    assert "青埔路" not in stored
+    assert str(int(match.twd97_x)) not in stored
+    assert str(int(match.twd97_y)) not in stored
+
+
+def test_valuation_address_overrides_form_station(location_app):
+    build, captured = location_app
+
+    response = build(FakeAddressLocator(_a18_match())).post(
+        "/api/valuations", json=dict(VALID_RESALE_PAYLOAD, address=TEST_ADDRESS)
+    )
+
+    assert response.status_code == 201
+    assert captured[0].station_code == "A18"
+
+
+def test_valuation_unknown_address_is_a_field_error(location_app):
+    build, captured = location_app
+
+    response = build(FakeAddressLocator(None)).post(
+        "/api/valuations", json=dict(VALID_RESALE_PAYLOAD, address="中壢區不存在路1號")
+    )
+
+    assert response.status_code == 400
+    error = response.get_json()["error"]
+    assert error["code"] == "address_not_found"
+    assert error["fields"] == {"address": "not_found"}
+    assert "不存在路" not in error["message"]
+    assert captured == []
+
+
+def test_valuation_address_outside_service_area_is_rejected(location_app):
+    from qingpu_insight.address_location import AddressMatch
+    from qingpu_insight.geo import wgs84_to_twd97
+
+    build, _ = location_app
+    x, y = wgs84_to_twd97(121.5654, 25.0330)
+    locator = FakeAddressLocator(AddressMatch(x, y, "exact"))
+
+    response = build(locator).post(
+        "/api/valuations", json=dict(VALID_RESALE_PAYLOAD, address=TEST_ADDRESS)
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["error"]["fields"] == {"address": "outside_service_area"}
+
+
+def test_valuation_proceeds_without_geocoder_when_station_fields_given(location_app):
+    build, captured = location_app
+
+    response = build(FakeAddressLocator(unavailable=True)).post(
+        "/api/valuations", json=dict(VALID_RESALE_PAYLOAD, address=TEST_ADDRESS)
+    )
+
+    assert response.status_code == 201
+    assert captured[0].twd97_x is None
+    location = response.get_json()["location"]
+    assert location["source"] == "form"
+    assert location["precise"] is False
+    assert "門牌定位" in location["note"]
+
+
+def test_valuation_without_geocoder_or_station_fields_is_rejected(location_app):
+    build, _ = location_app
+
+    response = build(FakeAddressLocator(unavailable=True)).post(
+        "/api/valuations", json=_payload_without_station(address=TEST_ADDRESS)
+    )
+
+    assert response.status_code == 400
+    error = response.get_json()["error"]
+    assert error["code"] == "geocoder_unavailable"
+    assert error["fields"] == {"address": "geocoder_unavailable"}
+
+
+def test_valuation_accepts_explicit_twd97_coordinates(location_app):
+    build, captured = location_app
+    match = _a18_match()
+
+    response = build(FakeAddressLocator()).post(
+        "/api/valuations",
+        json=_payload_without_station(twd97_x=match.twd97_x, twd97_y=match.twd97_y),
+    )
+
+    assert response.status_code == 201, response.get_json()
+    assert captured[0].station_code == "A18"
+    assert captured[0].twd97_x == pytest.approx(match.twd97_x)
+    location = response.get_json()["location"]
+    assert location["source"] == "coordinates"
+    assert location["precise"] is True
+
+
+def test_valuation_accepts_wgs84_coordinates(location_app):
+    build, captured = location_app
+
+    response = build(FakeAddressLocator()).post(
+        "/api/valuations",
+        json=_payload_without_station(longitude=A18_LONGITUDE, latitude=A18_LATITUDE),
+    )
+
+    assert response.status_code == 201, response.get_json()
+    assert captured[0].twd97_x == pytest.approx(_a18_match().twd97_x)
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"twd97_x": 272000.0},
+        {"longitude": A18_LONGITUDE},
+        {"twd97_x": "abc", "twd97_y": 2766000.0},
+        {"longitude": 0.0, "latitude": 0.0},
+        {"twd97_x": 272000.0, "twd97_y": 2766000.0, "longitude": 121.2, "latitude": 25.0},
+        {"address": TEST_ADDRESS, "longitude": A18_LONGITUDE, "latitude": A18_LATITUDE},
+    ],
+)
+def test_valuation_rejects_invalid_location_input(location_app, extra):
+    build, captured = location_app
+
+    response = build(FakeAddressLocator(_a18_match())).post(
+        "/api/valuations", json=dict(VALID_RESALE_PAYLOAD, **extra)
+    )
+
+    assert response.status_code == 400
+    assert "location" in response.get_json()["error"]["fields"] or (
+        "address" in response.get_json()["error"]["fields"]
+    )
+    assert captured == []
+
+
+def test_homepage_has_optional_address_field(client):
+    html = client.get("/").get_data(as_text=True)
+    soup = BeautifulSoup(html, "html.parser")
+    address = soup.find(id="valuation-address")
+    assert address is not None
+    assert not address.has_attr("required")
+    assert address.get("autocomplete") == "off"
+
+
 def test_homepage_contains_complete_valuation_contract(client):
     html = client.get("/").get_data(as_text=True)
     for element_id in (
@@ -2051,7 +2295,11 @@ def test_runtime_app_loads_dotenv_and_wires_listing_repository(
 
     assert dotenv_calls == [(tmp_path / ".env", False)]
     assert repository_calls == [tmp_path]
+    locator = runtime.pop("address_locator")
     assert runtime == {"root": tmp_path, "listing_repo": listing_repo}
+    assert isinstance(locator, web.LazyDoorplateIndex)
+    with pytest.raises(web.AddressLocatorUnavailable):
+        locator.resolve("中壢區青埔路二段289號")  # no doorplate data under tmp_path
 
 
 def test_production_admin_composition_requires_database_and_strong_secret(

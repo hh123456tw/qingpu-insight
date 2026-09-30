@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from ipaddress import ip_address
 from pathlib import Path
-from threading import BoundedSemaphore, Lock
+from threading import BoundedSemaphore, Lock, Thread
 from types import SimpleNamespace
 from typing import Any
 from urllib.parse import urlsplit
@@ -21,12 +21,20 @@ from flask import Flask, jsonify, redirect, render_template, request, send_file,
 from werkzeug.datastructures import MultiDict
 from werkzeug.exceptions import HTTPException
 
+from qingpu_insight.address_location import (
+    AddressLocator,
+    AddressLocatorUnavailable,
+    LazyDoorplateIndex,
+    ValuationLocation,
+    location_from_twd97,
+    location_from_wgs84,
+)
 from qingpu_insight.admin_dashboard import AdminDashboardService, ReadinessItem
 from qingpu_insight.admin_web import ADMIN_JOB_TYPES, AdminRuntime, create_admin_blueprint
 from qingpu_insight.backup_repository import MySQLBackupRepository
 from qingpu_insight.config import get_settings
 from qingpu_insight.evidence import UnknownCandidateError
-from qingpu_insight.geo import wgs84_to_twd97
+from qingpu_insight.geo import station_from_coords, wgs84_to_twd97
 from qingpu_insight.health import HealthService
 from qingpu_insight.health_repository import MySQLHealthRepository
 from qingpu_insight.job_executor import LocalJobExecutor
@@ -485,7 +493,7 @@ def _json_default(obj: Any) -> Any:
     raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
 
-def parse_valuation_payload(payload: dict[str, Any]) -> ValuationInput:
+def _valuation_transaction_type(payload: dict[str, Any]) -> str:
     transaction_type = str(payload.get("transaction_type", "resale"))
     if transaction_type == "presale":
         raise ApiInputError(
@@ -493,6 +501,124 @@ def parse_valuation_payload(payload: dict[str, Any]) -> ValuationInput:
             {"transaction_type": "resale_only"},
             code="presale_valuation_disabled",
         )
+    return transaction_type
+
+
+_ADDRESS_MAX_LENGTH = 120
+_OUTSIDE_SERVICE_AREA = "不在 A17／A18／A19 捷運站 2 公里服務範圍內。"
+_FORM_LOCATION_FIELDS = ("station_code", "station_distance_m")
+
+
+def _coordinate_pair(
+    payload: dict[str, Any], first: str, second: str
+) -> tuple[float, float] | None:
+    values = (payload.get(first), payload.get(second))
+    provided = [value not in (None, "") for value in values]
+    if not any(provided):
+        return None
+    if not all(provided):
+        raise ApiInputError(
+            f"{first} 與 {second} 必須成對提供。", {"location": "coordinates_incomplete"}
+        )
+    try:
+        pair = (float(values[0]), float(values[1]))
+    except (TypeError, ValueError):
+        pair = (float("nan"), float("nan"))
+    if not all(np.isfinite(pair)):
+        raise ApiInputError("座標格式不正確。", {"location": "coordinates_invalid"})
+    return pair
+
+
+def resolve_valuation_location(
+    payload: dict[str, Any], locator: AddressLocator
+) -> tuple[ValuationLocation | None, dict[str, Any]]:
+    """Resolve the optional address or coordinates into a location and its public summary.
+
+    The address is only passed to the locator; it is never returned, stored or logged.
+    """
+    raw_address = payload.get("address")
+    if raw_address is not None and not isinstance(raw_address, str):
+        raise ApiInputError("門牌地址格式不正確。", {"address": "invalid"})
+    address = (raw_address or "").strip()
+    twd97 = _coordinate_pair(payload, "twd97_x", "twd97_y")
+    wgs84 = _coordinate_pair(payload, "longitude", "latitude")
+    if sum(item is not None for item in (address or None, twd97, wgs84)) > 1:
+        raise ApiInputError(
+            "門牌地址、TWD97 座標與經緯度請擇一提供。", {"location": "multiple_sources"}
+        )
+
+    if twd97 is not None or wgs84 is not None:
+        try:
+            location = (
+                location_from_twd97(*twd97) if twd97 is not None else location_from_wgs84(*wgs84)
+            )
+        except ValueError:
+            raise ApiInputError(
+                "座標" + _OUTSIDE_SERVICE_AREA,
+                {"location": "outside_service_area"},
+                code="outside_service_area",
+            ) from None
+        return location, _location_summary("coordinates", location)
+
+    if not address:
+        return None, {"source": "form", "precise": False}
+    if len(address) > _ADDRESS_MAX_LENGTH:
+        raise ApiInputError("門牌地址過長。", {"address": "too_long"})
+    try:
+        match = locator.resolve(address)
+    except AddressLocatorUnavailable:
+        if all(payload.get(name) not in (None, "") for name in _FORM_LOCATION_FIELDS):
+            return None, {
+                "source": "form",
+                "precise": False,
+                "note": "門牌定位資料暫時無法使用，本次僅依生活圈與距捷運距離估價，"
+                "無法比對同棟成交紀錄。",
+            }
+        raise ApiInputError(
+            "門牌定位資料暫時無法使用，請改填生活圈與距捷運距離。",
+            {"address": "geocoder_unavailable"},
+            code="geocoder_unavailable",
+        ) from None
+    if match is None:
+        raise ApiInputError(
+            "找不到這個門牌地址。請確認路名與門牌號碼（可加上中壢區或大園區），"
+            "或清空地址欄後改填距捷運距離。",
+            {"address": "not_found"},
+            code="address_not_found",
+        )
+    try:
+        location = location_from_twd97(match.twd97_x, match.twd97_y)
+    except ValueError:
+        raise ApiInputError(
+            "這個門牌" + _OUTSIDE_SERVICE_AREA,
+            {"address": "outside_service_area"},
+            code="outside_service_area",
+        ) from None
+    return location, _location_summary("address", location, match.match_quality)
+
+
+def _location_summary(
+    source: str, location: ValuationLocation, match_quality: str | None = None
+) -> dict[str, Any]:
+    summary: dict[str, Any] = {"source": source, "precise": True}
+    if match_quality is not None:
+        summary["match_quality"] = match_quality
+    summary["station_code"] = location.station_code
+    summary["station_distance_m"] = location.station_distance_m
+    return summary
+
+
+def parse_valuation_payload(
+    payload: dict[str, Any], location: ValuationLocation | None = None
+) -> ValuationInput:
+    transaction_type = _valuation_transaction_type(payload)
+    if location is not None:
+        # Station features always come from the coordinates when a location is known.
+        payload = {
+            **payload,
+            "station_code": location.station_code,
+            "station_distance_m": location.station_distance_m,
+        }
     required = (
         "station_code",
         "building_area_ping",
@@ -536,6 +662,8 @@ def parse_valuation_payload(payload: dict[str, Any]) -> ValuationInput:
             asking_total_price_twd=int(payload["asking_total_price_twd"])
             if payload.get("asking_total_price_twd")
             else None,
+            twd97_x=location.twd97_x if location is not None else None,
+            twd97_y=location.twd97_y if location is not None else None,
         )
     except (KeyError, TypeError, ValueError):
         raise ApiInputError("估價條件格式不正確。", {"valuation": "invalid"}) from None
@@ -850,38 +978,6 @@ def _conversation_parking(
     return parking_type, area
 
 
-_STATION_WGS84: dict[str, tuple[float, float]] = {
-    "A17": (25.0223, 121.2373),
-    "A18": (25.0137, 121.2143),
-    "A19": (25.0011, 121.2046),
-}
-
-
-def _station_from_coords(
-    longitude: float, latitude: float
-) -> tuple[str, float]:
-    import math
-
-    best_station: str | None = None
-    best_distance = float("inf")
-    for code, (slat, slon) in _STATION_WGS84.items():
-        dlat = math.radians(latitude - slat)
-        dlon = math.radians(longitude - slon)
-        a = (
-            math.sin(dlat / 2) ** 2
-            + math.cos(math.radians(latitude)) * math.cos(math.radians(slat))
-            * math.sin(dlon / 2) ** 2
-        )
-        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-        dist = 6_371_000 * c
-        if dist < best_distance:
-            best_distance = dist
-            best_station = code
-    if best_station is None:
-        raise ValueError("no station within range")
-    return best_station, round(best_distance, 1)
-
-
 def _conversation_valuation(
     data_source: MarketDataSource,
     registry: ModelRegistry,
@@ -897,7 +993,7 @@ def _conversation_valuation(
     latitude = payload.get("latitude")
     if longitude is None or latitude is None:
         raise ValueError("listing lacks coordinates")
-    station_code, station_distance_m = _station_from_coords(
+    station_code, station_distance_m = station_from_coords(
         float(longitude), float(latitude)
     )
 
@@ -1024,6 +1120,7 @@ def create_app(
     report_repository: object | None = None,
     conversation_service: object | None = None,
     conversation_repository: object | None = None,
+    address_locator: AddressLocator | None = None,
 ) -> Flask:
     app = Flask(__name__)
     app.json.default = _json_default
@@ -1040,6 +1137,11 @@ def create_app(
     ds = data_source
     store = valuation_store or FileValuationStore(Path.cwd() / "outputs" / "valuations")
     registry = model_registry or ModelRegistry(Path.cwd() / "artifacts")
+    if address_locator is None:
+        address_locator = LazyDoorplateIndex(
+            (root or Path.cwd()) / "data" / "raw" / "doorplates.csv"
+        )
+    app.extensions["qingpu_address_locator"] = address_locator
     lr = listing_repo
     injected_legacy = (job_service, listing_update_service, job_executor)
     if admin_services is None and any(item is not None for item in injected_legacy):
@@ -1411,7 +1513,9 @@ def create_app(
             payload = request.get_json(silent=True)
             if not isinstance(payload, dict):
                 raise ApiInputError("Request body must be a JSON object.", {"body": "object"})
-            input_ = parse_valuation_payload(payload)
+            _valuation_transaction_type(payload)
+            location, location_summary = resolve_valuation_location(payload, address_locator)
+            input_ = parse_valuation_payload(payload, location)
         except ApiInputError as error:
             return jsonify(
                 {
@@ -1430,6 +1534,7 @@ def create_app(
         market_model = build_model_frame(market, input_.transaction_type)
 
         result = valuate(input_, registry, market_model, latest_data_date=latest_data_date)
+        result["location"] = location_summary
         result["valuation_id"] = str(uuid.uuid4())
         store.save_with_id(result["valuation_id"], result)
         return jsonify(result), 201
@@ -1989,7 +2094,10 @@ def _create_runtime_app(root: Path) -> Flask:
     from qingpu_insight.cli import create_listing_repository
 
     listing_repo = create_listing_repository(root)
-    return create_app(root=root, listing_repo=listing_repo)
+    locator = LazyDoorplateIndex(root / "data" / "raw" / "doorplates.csv")
+    # Building the doorplate index takes seconds; do it before the first address.
+    Thread(target=locator.warm, name="doorplate-index-warmup", daemon=True).start()
+    return create_app(root=root, listing_repo=listing_repo, address_locator=locator)
 
 
 def main() -> None:

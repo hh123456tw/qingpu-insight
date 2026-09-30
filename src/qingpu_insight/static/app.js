@@ -386,6 +386,17 @@ document.addEventListener("DOMContentLoaded", async function () {
     updateParkingArea();
   }
 
+  // With an address the server derives the station and distance from coordinates.
+  var addressInput = document.getElementById("valuation-address");
+  var distanceInput = document.getElementById("valuation-distance");
+  if (addressInput && distanceInput) {
+    function updateLocationFields() {
+      distanceInput.required = QingpuValuationForm.locationFieldState(addressInput.value).distanceRequired;
+    }
+    addressInput.addEventListener("input", updateLocationFields);
+    updateLocationFields();
+  }
+
   function money(val) {
     return new Intl.NumberFormat("zh-TW", {
       style: "currency", currency: "TWD", maximumFractionDigits: 0,
@@ -521,6 +532,19 @@ document.addEventListener("DOMContentLoaded", async function () {
     }
     cards.push(el("div", { "class": "valuation-card confidence-" + result.confidence }, confChildren));
 
+    // Location and price basis
+    var locationLines = QingpuValuationForm.locationSummaryLines(result.location, result.model);
+    if (locationLines.length) {
+      var locationList = el("ul", { "class": "reasons" });
+      locationLines.forEach(function (line) {
+        locationList.appendChild(el("li", {}, [line]));
+      });
+      cards.push(el("div", { "class": "valuation-card valuation-location" }, [
+        el("h3", {}, ["位置與估價基準"]),
+        locationList,
+      ]));
+    }
+
     // Factors
     if (result.factors && result.factors.length) {
       var ul = el("ul");
@@ -610,6 +634,9 @@ document.addEventListener("DOMContentLoaded", async function () {
       parking_area_ping: parseFloat(document.getElementById("valuation-parking-area").value) || 0,
     };
 
+    var address = QingpuValuationForm.addressForPayload(document.getElementById("valuation-address").value);
+    if (address) payload.address = address;
+
     var ageVal = document.getElementById("valuation-age").value;
     if (ageVal) payload.building_age_years = parseFloat(ageVal);
 
@@ -639,6 +666,7 @@ document.addEventListener("DOMContentLoaded", async function () {
       .catch(function (err) {
         if (err && err.error && err.error.fields) {
           var fieldMap = {
+            address: "valuation-address",
             building_area_ping: "valuation-area",
             station_distance_m: "valuation-distance",
             building_type: "valuation-building-type",
