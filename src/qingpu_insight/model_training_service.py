@@ -38,7 +38,6 @@ from qingpu_insight.model_artifacts import (
     sha256_file,
 )
 from qingpu_insight.model_features import (
-    BASE_FEATURE_COLUMNS,
     build_model_frame,
 )
 from qingpu_insight.model_training import (
@@ -354,7 +353,6 @@ class ModelTrainingService:
         seed_bundle: ValuationBundle,
         enhanced_features: tuple[str, ...],
         model_frame: pd.DataFrame,
-        is_resale: bool,
         recency_half_life_months: int,
         diagnostics: dict[str, object] | None = None,
         analysis_experiments: list[dict[str, object]] | None = None,
@@ -377,11 +375,11 @@ class ModelTrainingService:
                 seed_bundle,
                 stage,
                 feature_columns=enhanced_features,
-                training_frame=model_frame if is_resale else None,
-                use_recency_weights=is_resale,
+                training_frame=model_frame,
+                use_recency_weights=True,
                 recency_half_life_months=recency_half_life_months,
                 reporting_metrics=final_evaluation.metrics.to_dict(orient="index"),
-                reporting_diagnostics=diagnostics if is_resale else None,
+                reporting_diagnostics=diagnostics,
             )
             bundle: ValuationBundle = joblib.load(artifact_path)
             parking_policy_dict = None
@@ -411,50 +409,49 @@ class ModelTrainingService:
 
         serialized_backtests: list[dict[str, object]] = []
         release_checks: dict[str, bool] = {}
-        if is_resale:
-            try:
-                backtest_kwargs: dict[str, Any] = {
-                    "fit_spec": fit_spec,
-                    "anchor_table": anchor_table,
-                }
-                if selected_profile is not None and fit_spec is None:
-                    backtest_kwargs["profile"] = selected_profile
-                raw_backtests = run_annual_backtests(
-                    model_frame,
-                    model_name,
-                    enhanced_features,
-                    **backtest_kwargs,
-                )
-                serialized_backtests = []
-                for bt in raw_backtests:
-                    bt_copy = dict(bt)
-                    for key in (
-                        "cutoff_date",
-                        "train_max_date",
-                        "test_min_date",
-                        "source_max_date",
-                    ):
-                        if key in bt_copy and isinstance(bt_copy[key], pd.Timestamp):
-                            bt_copy[key] = str(bt_copy[key].date())
-                    serialized_backtests.append(bt_copy)
+        try:
+            backtest_kwargs: dict[str, Any] = {
+                "fit_spec": fit_spec,
+                "anchor_table": anchor_table,
+            }
+            if selected_profile is not None and fit_spec is None:
+                backtest_kwargs["profile"] = selected_profile
+            raw_backtests = run_annual_backtests(
+                model_frame,
+                model_name,
+                enhanced_features,
+                **backtest_kwargs,
+            )
+            serialized_backtests = []
+            for bt in raw_backtests:
+                bt_copy = dict(bt)
+                for key in (
+                    "cutoff_date",
+                    "train_max_date",
+                    "test_min_date",
+                    "source_max_date",
+                ):
+                    if key in bt_copy and isinstance(bt_copy[key], pd.Timestamp):
+                        bt_copy[key] = str(bt_copy[key].date())
+                serialized_backtests.append(bt_copy)
 
-                baseline_metrics = experiment.final_test_results["baseline"].metrics.to_dict(
-                    orient="index"
-                )
-                candidate_metrics = experiment.final_test_results[model_name].metrics.to_dict(
-                    orient="index"
-                )
-                data_max_ts = pd.Timestamp(bundle.data_max_date)
-                latest_official_ts = pd.Timestamp(model_frame["transaction_date"].max())
-                release_checks = evaluate_release_checks(
-                    candidate_metrics,
-                    baseline_metrics,
-                    serialized_backtests,
-                    data_max_ts,
-                    latest_official_ts,
-                )
-            except Exception as exc:
-                raise ModelTrainingError("candidate_write_failed", str(exc)) from exc
+            baseline_metrics = experiment.final_test_results["baseline"].metrics.to_dict(
+                orient="index"
+            )
+            candidate_metrics = experiment.final_test_results[model_name].metrics.to_dict(
+                orient="index"
+            )
+            data_max_ts = pd.Timestamp(bundle.data_max_date)
+            latest_official_ts = pd.Timestamp(model_frame["transaction_date"].max())
+            release_checks = evaluate_release_checks(
+                candidate_metrics,
+                baseline_metrics,
+                serialized_backtests,
+                data_max_ts,
+                latest_official_ts,
+            )
+        except Exception as exc:
+            raise ModelTrainingError("candidate_write_failed", str(exc)) from exc
 
         parking_policy = bundle.parking_price_policy
         parking_consistent = bool(
@@ -485,9 +482,9 @@ class ModelTrainingService:
                 split,
                 report_dir,
                 selected_profile=selected_profile,
-                diagnostics=diagnostics if is_resale else None,
-                feature_experiments=(analysis_experiments if is_resale else None),
-                backtests=(serialized_backtests if is_resale else None),
+                diagnostics=diagnostics,
+                feature_experiments=analysis_experiments,
+                backtests=serialized_backtests,
                 release_checks=release_checks,
                 reason_codes=release_reason_codes(release_checks),
                 automl_info=automl_info,
@@ -498,8 +495,8 @@ class ModelTrainingService:
                 leakage_audit(split),
                 report_dir,
                 selected_profile=selected_profile,
-                feature_experiments=(analysis_experiments if is_resale else None),
-                backtests=(serialized_backtests if is_resale else None),
+                feature_experiments=analysis_experiments,
+                backtests=serialized_backtests,
                 release_checks=release_checks,
                 reason_codes=release_reason_codes(release_checks),
                 automl_info=automl_info,
@@ -523,9 +520,9 @@ class ModelTrainingService:
                 stage=stage,
                 selected_profile=(selected_profile.name if selected_profile is not None else None),
                 profile_results=profile_results or [],
-                diagnostics=diagnostics if is_resale else None,
-                feature_experiments=(analysis_experiments if is_resale else None),
-                backtests=(serialized_backtests if is_resale else None),
+                diagnostics=diagnostics,
+                feature_experiments=analysis_experiments,
+                backtests=serialized_backtests,
                 release_checks=release_checks,
                 feature_columns=list(enhanced_features),
                 feature_contract_version=feature_contract_version,
@@ -547,39 +544,31 @@ class ModelTrainingService:
         stage: Path,
         plan: TrainingPlan,
     ) -> MarketTrainingResult:
-        is_resale = market == "resale"
         model_frame = build_model_frame(frame, market)
         split = split_by_time(model_frame)
-        anchor_table = self._anchor_table(frame, model_frame) if is_resale else None
-
-        diagnostics: dict[str, object] = {}
-        analysis_experiments: list[dict[str, object]] = []
-        enhanced_features: tuple[str, ...] = BASE_FEATURE_COLUMNS
-        feature_contract_ver = 0
+        anchor_table = self._anchor_table(frame, model_frame)
 
         try:
-            if is_resale:
-                exp_list = run_feature_experiments(split)
-                analysis_experiments = [
-                    {
-                        "name": fe.name,
-                        "feature_columns": list(fe.feature_columns),
-                        "selected_model": fe.selected_model,
-                        "metrics": fe.metrics,
-                        "candidate_errors": fe.candidate_errors,
-                    }
-                    for fe in exp_list
-                ]
-                enhanced_features = exp_list[1].feature_columns
-                feature_contract_ver = 3
+            exp_list = run_feature_experiments(split)
+            analysis_experiments = [
+                {
+                    "name": fe.name,
+                    "feature_columns": list(fe.feature_columns),
+                    "selected_model": fe.selected_model,
+                    "metrics": fe.metrics,
+                    "candidate_errors": fe.candidate_errors,
+                }
+                for fe in exp_list
+            ]
+            enhanced_features = exp_list[1].feature_columns
 
             experiment = run_tuned_model_experiment(
                 split,
                 profiles=plan.profiles,
-                feature_columns=(enhanced_features if is_resale else BASE_FEATURE_COLUMNS),
-                use_recency_weights=is_resale,
-                baseline_months=12 if is_resale else 24,
-                candidate_names=RESALE_GUIDED_CANDIDATES if is_resale else None,
+                feature_columns=enhanced_features,
+                use_recency_weights=True,
+                baseline_months=12,
+                candidate_names=RESALE_GUIDED_CANDIDATES,
                 anchor_table=anchor_table,
                 on_profile_start=lambda pn, _m=market: self._jobs.progress(
                     run_id,
@@ -601,18 +590,17 @@ class ModelTrainingService:
         locked = experiment.selected_evaluation
         winning_profile = next(p for p in plan.profiles if p.name == experiment.selected_profile)
 
-        if is_resale:
-            diagnostics = build_resale_diagnostics(
-                model_frame,
-                split,
-                candidate=experiment.final_test_results[experiment.selected_model],
-                feature_columns=enhanced_features,
-                source_frame=frame,
-            )
-            diagnostics = self._merge_market_quality_diagnostics(diagnostics)
-            diagnostics["leave_project_out"] = self._leave_project_out(
-                split, locked.estimator, enhanced_features, winning_profile
-            )
+        diagnostics = build_resale_diagnostics(
+            model_frame,
+            split,
+            candidate=experiment.final_test_results[experiment.selected_model],
+            feature_columns=enhanced_features,
+            source_frame=frame,
+        )
+        diagnostics = self._merge_market_quality_diagnostics(diagnostics)
+        diagnostics["leave_project_out"] = self._leave_project_out(
+            split, locked.estimator, enhanced_features, winning_profile
+        )
 
         selected_profile_obj = winning_profile
         profile_results = [
@@ -646,7 +634,7 @@ class ModelTrainingService:
             reference_rows=pd.DataFrame(),
             data_min_date="",
             data_max_date=str(
-                (model_frame if is_resale else split.train)["transaction_date"].max().date()
+                model_frame["transaction_date"].max().date()
             ),
             metrics={},
             feature_columns=enhanced_features,
@@ -663,13 +651,12 @@ class ModelTrainingService:
             seed_bundle=seed_bundle,
             enhanced_features=enhanced_features,
             model_frame=model_frame,
-            is_resale=is_resale,
             recency_half_life_months=(winning_profile.recency_half_life_months or 48),
             diagnostics=diagnostics,
             analysis_experiments=analysis_experiments,
             selected_profile=selected_profile_obj,
             profile_results=profile_results,
-            feature_contract_version=feature_contract_ver,
+            feature_contract_version=3,
             anchor_table=anchor_table,
         )
 
@@ -704,26 +691,21 @@ class ModelTrainingService:
         stage: Path,
         plan: AutoMLTuningPlan,
     ) -> tuple[MarketTrainingResult | None, AutoMLMarketSearchSnapshot]:
-        is_resale = market == "resale"
         model_frame = build_model_frame(frame, market)
         split = split_by_time(model_frame)
         diagnostics: dict[str, object] = {}
-        analysis_experiments: list[dict[str, object]] = []
-        enhanced_features: tuple[str, ...] = BASE_FEATURE_COLUMNS
-        if is_resale:
-            exp_list = run_feature_experiments(split)
-            analysis_experiments = [
-                {
-                    "name": fe.name,
-                    "feature_columns": list(fe.feature_columns),
-                    "selected_model": fe.selected_model,
-                    "metrics": fe.metrics,
-                    "candidate_errors": fe.candidate_errors,
-                }
-                for fe in exp_list
-            ]
-            enhanced_features = exp_list[1].feature_columns
-        feature_columns = list(enhanced_features) if is_resale else list(BASE_FEATURE_COLUMNS)
+        exp_list = run_feature_experiments(split)
+        analysis_experiments: list[dict[str, object]] = [
+            {
+                "name": fe.name,
+                "feature_columns": list(fe.feature_columns),
+                "selected_model": fe.selected_model,
+                "metrics": fe.metrics,
+                "candidate_errors": fe.candidate_errors,
+            }
+            for fe in exp_list
+        ]
+        feature_columns = list(exp_list[1].feature_columns)
         self._jobs.progress(
             run_id,
             {
@@ -736,8 +718,8 @@ class ModelTrainingService:
             split,
             plan,
             feature_columns,
-            use_recency_weights=is_resale,
-            baseline_months=12 if is_resale else 24,
+            use_recency_weights=True,
+            baseline_months=12,
             should_stop=lambda: self._automl_registry.should_stop(run_id),
             on_progress=lambda p: self._jobs.progress(
                 run_id,
@@ -813,19 +795,18 @@ class ModelTrainingService:
                 split,
                 trial.fit_spec,
                 feature_columns,
-                baseline_months=12 if is_resale else 24,
+                baseline_months=12,
             )
             locked_eval = trial_experiment.selection_results[0]
             model_name = trial_experiment.selected_name
-            if is_resale:
-                diagnostics = build_resale_diagnostics(
-                    model_frame,
-                    split,
-                    candidate=trial_experiment.final_test_results[model_name],
-                    feature_columns=tuple(feature_columns),
-                    source_frame=frame,
-                )
-                diagnostics = self._merge_market_quality_diagnostics(diagnostics)
+            diagnostics = build_resale_diagnostics(
+                model_frame,
+                split,
+                candidate=trial_experiment.final_test_results[model_name],
+                feature_columns=tuple(feature_columns),
+                source_frame=frame,
+            )
+            diagnostics = self._merge_market_quality_diagnostics(diagnostics)
             seed_bundle = ValuationBundle(
                 transaction_type=market,
                 model_name="",
@@ -839,7 +820,7 @@ class ModelTrainingService:
                 reference_rows=pd.DataFrame(),
                 data_min_date="",
                 data_max_date=str(
-                    (model_frame if is_resale else split.train)["transaction_date"].max().date()
+                    model_frame["transaction_date"].max().date()
                 ),
                 metrics={},
                 feature_columns=tuple(feature_columns),
@@ -856,7 +837,6 @@ class ModelTrainingService:
                 seed_bundle=seed_bundle,
                 enhanced_features=tuple(feature_columns),
                 model_frame=model_frame,
-                is_resale=is_resale,
                 recency_half_life_months=recency_half_life,
                 diagnostics=diagnostics,
                 analysis_experiments=analysis_experiments,
@@ -870,7 +850,7 @@ class ModelTrainingService:
                     "release_blockers": [],
                 },
                 fit_spec=trial.fit_spec,
-                feature_contract_version=3 if is_resale else 0,
+                feature_contract_version=3,
             )
             if not result.recommended:
                 release_blockers.extend(result.reason_codes)

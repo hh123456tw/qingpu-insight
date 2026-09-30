@@ -284,6 +284,7 @@ STAGES = (
 )
 
 
+# Releases are resale-only (ModelReleaseService._require_resale_market).
 _SMOKE_INPUTS: dict[str, ValuationInput] = {
     "resale": ValuationInput(
         transaction_type="resale",
@@ -297,18 +298,6 @@ _SMOKE_INPUTS: dict[str, ValuationInput] = {
         building_age_years=20.0,
         floor=3,
         total_floors=5,
-    ),
-    "presale": ValuationInput(
-        transaction_type="presale",
-        station_code="A17",
-        station_distance_m=500.0,
-        building_area_ping=30.0,
-        building_type="大樓",
-        bedrooms=3,
-        living_rooms=2,
-        bathrooms=2,
-        floor=3,
-        total_floors=15,
     ),
 }
 

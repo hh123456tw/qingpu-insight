@@ -143,7 +143,9 @@ def run_automl_search(
     results: list[AutoMLTrialResult] = []
     start_time = time.monotonic()
     best_mae: float | None = None
-    market: Literal["resale", "presale"] = "resale" if use_recency_weights else "presale"
+    # Only the resale market is trained; historical presale outputs still load via
+    # AutoMLSearchResult.market.
+    market: Literal["resale", "presale"] = "resale"
 
     baseline_cal_eval = None
     if trial_evaluator is None:
