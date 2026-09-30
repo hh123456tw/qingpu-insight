@@ -466,6 +466,13 @@ section > h2 {
   min-width: 0;
 }
 
+#valuation-form .field-help {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted, #666);
+}
+
 #valuation-form label {
   display: flex;
   flex-direction: column;

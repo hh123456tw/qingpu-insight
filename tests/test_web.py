@@ -1330,6 +1330,91 @@ def test_valuation_payload_accepts_optional_common_area_ratio(valid_payload):
         parse_valuation_payload(dict(valid_payload, common_area_ratio=0.9))
 
 
+def test_valuation_payload_computes_common_area_ratio_from_deed_areas(valid_payload):
+    from qingpu_insight.web import parse_valuation_payload
+
+    # building_area_ping (30) is already net of parking, as in training.
+    payload = dict(
+        valid_payload,
+        main_building_area_ping=18.5,
+        auxiliary_building_area_ping=0.5,
+        balcony_area_ping=1.0,
+    )
+    assert parse_valuation_payload(payload).common_area_ratio == pytest.approx(1 - 20 / 30)
+    # Auxiliary and balcony may be left blank (counted as 0).
+    only_main = dict(valid_payload, main_building_area_ping=20, balcony_area_ping="")
+    assert parse_valuation_payload(only_main).common_area_ratio == pytest.approx(1 / 3)
+
+
+def test_valuation_payload_accepts_matching_ratio_and_areas(valid_payload):
+    from qingpu_insight.web import parse_valuation_payload
+
+    payload = dict(valid_payload, main_building_area_ping=20, common_area_ratio=0.335)
+    assert parse_valuation_payload(payload).common_area_ratio == pytest.approx(1 / 3)
+
+
+@pytest.mark.parametrize(
+    ("extra", "field", "code"),
+    [
+        (
+            {"main_building_area_ping": 20, "common_area_ratio": 0.40},
+            "common_area_ratio",
+            "conflicts_with_areas",
+        ),
+        ({"balcony_area_ping": 2}, "main_building_area_ping", "required_with_areas"),
+        ({"main_building_area_ping": 31}, "main_building_area_ping", "ratio_out_of_range"),
+        ({"main_building_area_ping": 5}, "main_building_area_ping", "ratio_out_of_range"),
+        ({"main_building_area_ping": -1}, "main_building_area_ping", "positive_number"),
+        (
+            {"main_building_area_ping": 20, "balcony_area_ping": "abc"},
+            "balcony_area_ping",
+            "non_negative_number",
+        ),
+        ({"common_area_ratio": 0.9}, "common_area_ratio", "between_0_and_0.70"),
+    ],
+)
+def test_valuation_payload_rejects_bad_common_area_inputs(valid_payload, extra, field, code):
+    from qingpu_insight.web import ApiInputError, parse_valuation_payload
+
+    with pytest.raises(ApiInputError) as error:
+        parse_valuation_payload(dict(valid_payload, **extra))
+    assert error.value.fields == {field: code}
+
+
+def test_post_valuation_reports_common_area_source(valuation_client, valid_payload):
+    plain = valuation_client.post("/api/valuations", json=valid_payload).get_json()
+    assert plain["common_area"] == {"provided": False, "source": None, "ratio": None}
+
+    by_areas = valuation_client.post(
+        "/api/valuations", json=dict(valid_payload, main_building_area_ping=20)
+    ).get_json()
+    assert by_areas["common_area"] == {
+        "provided": True,
+        "source": "areas",
+        "ratio": pytest.approx(1 / 3, abs=1e-4),
+    }
+
+    by_ratio = valuation_client.post(
+        "/api/valuations", json=dict(valid_payload, common_area_ratio=0.3)
+    ).get_json()
+    assert by_ratio["common_area"] == {"provided": True, "source": "ratio", "ratio": 0.3}
+
+
+def test_homepage_offers_optional_common_area_inputs(client) -> None:
+    home = BeautifulSoup(client.get("/").get_data(as_text=True), "html.parser")
+    for control_id in (
+        "valuation-main-area",
+        "valuation-auxiliary-area",
+        "valuation-balcony-area",
+        "valuation-common-ratio",
+        "valuation-common-area-status",
+    ):
+        control = home.select_one(f"#{control_id}")
+        assert control is not None, control_id
+        assert not control.has_attr("required"), control_id
+    assert "不含車位" in home.select_one("#valuation-common-area").get_text()
+
+
 def test_valuation_rejects_selected_parking_with_zero_area(client, valid_payload):
     valid_payload.update(parking_type="坡道平面", parking_area_ping=0)
     response = client.post("/api/valuations", json=valid_payload)

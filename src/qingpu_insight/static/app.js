@@ -397,6 +397,45 @@ document.addEventListener("DOMContentLoaded", async function () {
     updateLocationFields();
   }
 
+  // 公設比 (optional, net of parking): show the converted ratio as the user types.
+  var commonAreaControls = {
+    main: document.getElementById("valuation-main-area"),
+    auxiliary: document.getElementById("valuation-auxiliary-area"),
+    balcony: document.getElementById("valuation-balcony-area"),
+    ratio: document.getElementById("valuation-common-ratio"),
+  };
+  var commonAreaStatus = document.getElementById("valuation-common-area-status");
+  var buildingAreaInput = document.getElementById("valuation-area");
+
+  function currentCommonAreaState() {
+    if (!commonAreaControls.main) return null;
+    return QingpuValuationForm.commonAreaState({
+      main: commonAreaControls.main.value,
+      auxiliary: commonAreaControls.auxiliary.value,
+      balcony: commonAreaControls.balcony.value,
+      ratioPercent: commonAreaControls.ratio.value,
+      buildingArea: buildingAreaInput ? buildingAreaInput.value : "",
+    });
+  }
+
+  function updateCommonArea() {
+    var state = currentCommonAreaState();
+    if (!state) return null;
+    Object.keys(commonAreaControls).forEach(function (key) {
+      commonAreaControls[key].setCustomValidity(key === state.field ? state.message : "");
+    });
+    if (commonAreaStatus) commonAreaStatus.textContent = state.summary;
+    return state;
+  }
+
+  if (commonAreaControls.main) {
+    Object.keys(commonAreaControls).forEach(function (key) {
+      commonAreaControls[key].addEventListener("input", updateCommonArea);
+    });
+    if (buildingAreaInput) buildingAreaInput.addEventListener("input", updateCommonArea);
+    updateCommonArea();
+  }
+
   function money(val) {
     return new Intl.NumberFormat("zh-TW", {
       style: "currency", currency: "TWD", maximumFractionDigits: 0,
@@ -534,6 +573,8 @@ document.addEventListener("DOMContentLoaded", async function () {
 
     // Location and price basis
     var locationLines = QingpuValuationForm.locationSummaryLines(result.location, result.model);
+    var commonAreaLine = QingpuValuationForm.commonAreaSummaryLine(result.common_area, result.degraded);
+    if (commonAreaLine) locationLines.push(commonAreaLine);
     if (locationLines.length) {
       var locationList = el("ul", { "class": "reasons" });
       locationLines.forEach(function (line) {
@@ -616,6 +657,7 @@ document.addEventListener("DOMContentLoaded", async function () {
 
   form.addEventListener("submit", function (e) {
     e.preventDefault();
+    var commonArea = updateCommonArea();
     if (!form.reportValidity()) return;
     statusEl.textContent = "估價中…";
     resultSection.hidden = true;
@@ -645,6 +687,8 @@ document.addEventListener("DOMContentLoaded", async function () {
 
     var askingVal = document.getElementById("asking-price").value;
     if (askingVal) payload.asking_total_price_twd = parseInt(askingVal);
+
+    if (commonArea) Object.assign(payload, commonArea.payload);
 
     fetch("/api/valuations", {
       method: "POST",
@@ -680,6 +724,10 @@ document.addEventListener("DOMContentLoaded", async function () {
             parking_type: "valuation-parking-type",
             station_code: "valuation-station",
             asking_total_price_twd: "asking-price",
+            main_building_area_ping: "valuation-main-area",
+            auxiliary_building_area_ping: "valuation-auxiliary-area",
+            balcony_area_ping: "valuation-balcony-area",
+            common_area_ratio: "valuation-common-ratio",
           };
           var controlId = QingpuValuationForm.firstErrorControlId(err.error.fields, fieldMap);
           if (controlId) {

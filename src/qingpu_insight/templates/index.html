@@ -174,6 +174,24 @@
           <small style="display:block;font-weight:400;color:#666">僅供資料合理性檢查，不會直接改變房屋每坪單價。</small>
         </label>
       </fieldset>
+      <fieldset id="valuation-common-area" class="common-area-valuation-fields">
+        <legend>公設比（選填，不含車位）</legend>
+        <p class="field-help">建議照權狀填寫主建物、附屬建物、陽台坪數，系統會以「1 −（主建物＋附屬建物＋陽台）÷ 房屋坪數（不含車位）」換算，與模型的算法一致。附屬建物若已含陽台，陽台欄留空即可。</p>
+        <label>主建物（坪）
+          <input id="valuation-main-area" type="number" min="0" max="200" step="0.01" inputmode="decimal">
+        </label>
+        <label>附屬建物（坪）
+          <input id="valuation-auxiliary-area" type="number" min="0" max="200" step="0.01" inputmode="decimal">
+        </label>
+        <label>陽台（坪）
+          <input id="valuation-balcony-area" type="number" min="0" max="200" step="0.01" inputmode="decimal">
+        </label>
+        <label>或直接填公設比（%，不含車位）
+          <input id="valuation-common-ratio" type="number" min="0" max="70" step="0.1" inputmode="decimal">
+        </label>
+        <p class="field-help">591 或仲介標示的公設比通常把車位算進公設，會比本欄高；有車位時請改填權狀面積，或自行換算：不含車位公設比 = 1 −（1 − 含車位公設比）× 權狀總坪數 ÷（權狀總坪數 − 車位坪數）。</p>
+        <p id="valuation-common-area-status" class="field-help" aria-live="polite"></p>
+      </fieldset>
       <button type="submit">開始估價</button>
     </form>
     <div id="valuation-status" role="status" aria-live="polite"></div>

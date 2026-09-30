@@ -2,6 +2,7 @@ import hashlib
 import re
 from dataclasses import asdict, dataclass
 
+import numpy as np
 import pandas as pd
 
 SQM_PER_PING = 3.305785
@@ -70,11 +71,37 @@ def add_area_share_features(frame: pd.DataFrame) -> pd.DataFrame:
         else 0.0
     )
     non_parking = pd.to_numeric(result["building_area_sqm"], errors="coerce") - parking
-    components = list(AREA_COMPONENT_COLUMNS)
-    private = result[components].sum(axis=1, min_count=len(components))
-    ratio = 1 - private / non_parking.where(non_parking > 0)
-    result["common_area_ratio"] = ratio.where(ratio.between(0, MAX_COMMON_AREA_RATIO)).astype(float)
+    result["common_area_ratio"] = _common_area_ratio_values(
+        *(result[column] for column in AREA_COMPONENT_COLUMNS), non_parking
+    )
     return result
+
+
+def _common_area_ratio_values(main, auxiliary, balcony, non_parking_area) -> np.ndarray:
+    values = [
+        pd.Series(value, dtype=object).pipe(pd.to_numeric, errors="coerce")
+        .to_numpy(dtype=float, na_value=np.nan)
+        if isinstance(value, pd.Series)
+        else np.asarray(pd.to_numeric(value, errors="coerce"), dtype=float)
+        for value in (main, auxiliary, balcony, non_parking_area)
+    ]
+    private = values[0] + values[1] + values[2]
+    denominator = np.where(values[3] > 0, values[3], np.nan)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ratio = 1 - private / denominator
+    return np.where((ratio >= 0) & (ratio <= MAX_COMMON_AREA_RATIO), ratio, np.nan)
+
+
+def common_area_ratio(
+    main: float, auxiliary: float, balcony: float, non_parking_area: float
+) -> float | None:
+    """公設比 net of parking for one unit: 1 - (main + auxiliary + balcony) / non-parking area.
+
+    The training definition of add_area_share_features applied to a single valuation; any
+    unit works as long as all four areas share it. None when outside [0, 0.70] or unusable.
+    """
+    value = float(_common_area_ratio_values(main, auxiliary, balcony, non_parking_area))
+    return value if np.isfinite(value) else None
 
 
 def _key(row: pd.Series) -> str:

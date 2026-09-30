@@ -167,6 +167,17 @@ def test_common_area_ratio_is_net_of_parking_and_counts_balconies_as_private() -
     assert result.loc[[3, 4], "common_area_ratio"].isna().all()
 
 
+def test_common_area_ratio_scalar_matches_training_definition() -> None:
+    from qingpu_insight.market_cleaning import common_area_ratio
+
+    # Same inputs as row 0 above, in ping instead of square metres: the ratio is unitless.
+    assert common_area_ratio(50.0, 2.0, 4.1, 85.0) == pytest.approx(1 - 56.1 / 85)
+    assert common_area_ratio(30.0, 0.0, 0.0, 30.0) == 0.0
+    assert common_area_ratio(31.0, 0.0, 0.0, 30.0) is None
+    assert common_area_ratio(5.0, 0.0, 0.0, 30.0) is None
+    assert common_area_ratio(20.0, 0.0, 0.0, 0.0) is None
+
+
 def test_build_market_dataset_carries_common_area_ratio() -> None:
     frame = sample_rows().assign(
         parking_area_sqm=0.0,
