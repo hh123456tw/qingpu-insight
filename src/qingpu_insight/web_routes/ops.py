@@ -1,4 +1,9 @@
-"""Local ops APIs: latest health check and backup history."""
+"""Local ops APIs: latest health check and backup history.
+
+``/api/admin/*`` is the canonical namespace for local management APIs
+(``/api/admin/health``, ``GET /api/admin/backups``). The older ``/api/ops/*`` paths stay
+as aliases that serve the same views, so existing scripts and bookmarks keep working.
+"""
 
 from __future__ import annotations
 
@@ -16,6 +21,7 @@ def _ops_unavailable(message: str = "維運功能未啟用。"):
 def create_ops_blueprint(ops_services: OpsServices | None) -> Blueprint:
     bp = guarded_blueprint("ops", __name__)
 
+    @bp.get("/api/admin/health")
     @bp.get("/api/ops/health")
     @local_only(LOCAL_ONLY)
     def ops_health():
@@ -46,6 +52,7 @@ def create_ops_blueprint(ops_services: OpsServices | None) -> Blueprint:
         except Exception:
             return _ops_unavailable("維運功能暫時無法使用。")
 
+    @bp.get("/api/admin/backups")
     @bp.get("/api/ops/backups")
     @local_only(LOCAL_ONLY)
     def ops_backups():

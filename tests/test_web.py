@@ -2801,6 +2801,23 @@ def test_ops_backups_is_read_only(ops_app) -> None:
     assert ops_app.post(restore_drill).status_code in (404, 405)
 
 
+@pytest.mark.parametrize(
+    ("canonical", "alias"),
+    [
+        ("/api/admin/health", "/api/ops/health"),
+        ("/api/admin/backups?limit=10", "/api/ops/backups?limit=10"),
+        ("/api/admin/backups?limit=101", "/api/ops/backups?limit=101"),
+    ],
+)
+def test_admin_namespace_is_canonical_for_ops_reads(ops_app, canonical, alias) -> None:
+    canonical_response = ops_app.get(canonical)
+    alias_response = ops_app.get(alias)
+    assert canonical_response.status_code == alias_response.status_code
+    assert canonical_response.get_json() == alias_response.get_json()
+    remote = ops_app.get(canonical, environ_base={"REMOTE_ADDR": "10.0.0.2"})
+    assert remote.status_code == 403
+
+
 def test_ops_restore_returns_404(ops_app) -> None:
     response = ops_app.post("/api/ops/restore")
     assert response.status_code == 404
@@ -4788,6 +4805,27 @@ class TestProductionRestoreApi:
         assert body["job_type"] == "database_restore"
         assert body["status"] == "pending"
         assert body["created"] is True
+
+    def test_restore_canonical_admin_paths(self, restore_client) -> None:
+        preview = restore_client.post(
+            "/api/admin/restore-previews",
+            json={"backup_id": "test-backup-id"},
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert preview.status_code == 200
+        body = preview.get_json()
+        assert body["backup_id"] == "test-backup-id"
+
+        response = restore_client.post(
+            "/api/admin/restores",
+            json={
+                "preview_id": body["preview_id"],
+                "confirmation_text": body["confirmation_text"],
+            },
+            headers={"X-Qingpu-CSRF": "test-token"},
+        )
+        assert response.status_code == 202
+        assert response.get_json()["job_type"] == "database_restore"
 
     def test_restore_submit_rejects_missing_preview_id(self, restore_client) -> None:
         response = restore_client.post(

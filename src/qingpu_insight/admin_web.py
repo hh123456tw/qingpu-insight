@@ -591,7 +591,8 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
     _RESTORE_PREVIEW_ALLOWED = frozenset({"backup_id"})
     _RESTORE_ALLOWED = frozenset({"preview_id", "confirmation_text"})
 
-    @bp.post("/api/ops/restore-previews")
+    @bp.post("/api/admin/restore-previews")
+    @bp.post("/api/ops/restore-previews")  # alias of the canonical /api/admin path
     def ops_restore_previews():
         rt = current_app.extensions.get("qingpu_admin_runtime")
         if rt is None or rt.restore_service is None:
@@ -643,7 +644,8 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
             "backup_id": backup_id,
         })
 
-    @bp.post("/api/ops/restores")
+    @bp.post("/api/admin/restores")
+    @bp.post("/api/ops/restores")  # alias of the canonical /api/admin path
     def ops_restores():
         rt = current_app.extensions.get("qingpu_admin_runtime")
         if rt is None or rt.restore_service is None or rt.executor is None:

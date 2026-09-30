@@ -742,14 +742,20 @@ LLM 不是資料清理、刊登發布或模型估價的必要條件。
 
 `backup-create` 產出 `.sql` 檔案至 `outputs/backups/`，僅透過 child process 環境傳遞密碼。
 
-### Web 維運端點
+### Web 管理與維運端點
 
-| 路由 | 方法 | 說明 |
-|------|------|------|
-| `/api/ops/health` | GET | 執行健康檢查（限本機） |
-| `/api/ops/backups?limit=N` | GET | 列出最近備份記錄（限本機） |
+本機管理 API 統一使用 `/api/admin/*`；舊的 `/api/ops/*` 路徑保留為相同功能的別名，方便既有腳本繼續使用（管理頁已改用 `/api/admin/*`）。
 
-兩個 GET 端點沿用 M4.2 的 loopback + trusted Host 保護。無任何 backup／restore HTTP mutation route。
+| 正式路由 | 別名 | 方法 | 說明 |
+|------|------|------|------|
+| `/api/admin/health` | `/api/ops/health` | GET | 最近一次健康檢查結果 |
+| `/api/admin/backups?limit=N` | `/api/ops/backups?limit=N` | GET | 列出最近備份記錄 |
+| `/api/admin/backups` | — | POST | 建立備份工作 |
+| `/api/admin/backups/<id>/restore-drills` | — | POST | 在隔離資料庫驗證備份 |
+| `/api/admin/restore-previews` | `/api/ops/restore-previews` | POST | 建立正式還原預覽與確認文字 |
+| `/api/admin/restores` | `/api/ops/restores` | POST | 以預覽 ID 與確認文字執行還原 |
+
+所有管理端點只接受本機（loopback 位址且 Host 為 `localhost`／`127.0.0.1`／`::1`）連線；POST／PUT／DELETE 另需 `X-Qingpu-CSRF` 標頭與頁面 CSRF token 相符。已停用的 `/api/ops/restore` 對任何方法都回 404。
 
 ### M4.4 Reports 工作流程
 

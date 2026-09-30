@@ -425,7 +425,7 @@
   }
 
   function loadBackups() {
-    return fetch("/api/ops/backups?limit=20")
+    return fetch("/api/admin/backups?limit=20")
       .then(function (r) { if (r.ok) return r.json(); })
       .then(function (data) {
         if (!data) return;
@@ -528,7 +528,7 @@
     statusEl.className = "admin-bk-status";
     previewArea.style.display = "none";
 
-    fetch("/api/ops/restore-previews", {
+    fetch("/api/admin/restore-previews", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Qingpu-CSRF": getCSRFToken() },
       body: JSON.stringify({ backup_id: backupId }),
@@ -566,7 +566,7 @@
     statusEl.textContent = "";
     statusEl.className = "admin-bk-status";
 
-    fetch("/api/ops/restores", {
+    fetch("/api/admin/restores", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Qingpu-CSRF": getCSRFToken() },
       body: JSON.stringify({
