@@ -111,6 +111,8 @@ radar.renderRadar(doc, list, status, {
   items: [item],
 });
 assert.match(status.textContent, /驗證頁/);
+assert.match(status.textContent, /2026\/10\/01 12:00/);
+assert.equal(radar.formatTaipeiTime(null), "—");
 assert.match(status.textContent, /共估價 12 筆/);
 assert.equal(list.children.length, 1);
 

@@ -346,6 +346,7 @@ def test_stored_records_never_contain_contact_details(tmp_path: Path) -> None:
     assert "0912" not in stored_text
     assert "a@b.com" not in stored_text
     assert "屋主急售" in stored_text
+    assert not frame.iloc[0]["title"].endswith("591售屋網")
 
 
 # --------------------------------------------------------------------------- ranking

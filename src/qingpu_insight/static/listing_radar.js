@@ -142,6 +142,20 @@
     return card;
   }
 
+  function formatTaipeiTime(value) {
+    var date = new Date(value);
+    if (!value || Number.isNaN(date.getTime())) return "—";
+    return new Intl.DateTimeFormat("zh-TW", {
+      timeZone: "Asia/Taipei",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(date);
+  }
+
   function statusText(body) {
     if (!body || !body.batch) {
       return "尚未有雷達結果。管理者可在管理中心「刊登」執行低估物件雷達。";
@@ -152,7 +166,7 @@
       ? "（遇到 591 驗證頁而提早停止，結果不完整）"
       : batch.status === "stopped_failures" ? "（多頁擷取失敗而提早停止，結果不完整）" : "";
     var items = Array.isArray(body.items) ? body.items.length : 0;
-    return "更新於 " + (batch.finished_at || "—") + stopped + "：共估價 " +
+    return "更新於 " + formatTaipeiTime(batch.finished_at) + stopped + "：共估價 " +
       (counts.valued || 0) + " 筆，符合條件且開價低於估值 " + (counts.ranked || 0) +
       " 筆，其中明顯低於區間 " + (counts.below_interval || 0) + " 筆；目前顯示 " + items + " 筆。";
   }
@@ -216,6 +230,7 @@
     renderCard: renderCard,
     renderRadar: renderRadar,
     statusText: statusText,
+    formatTaipeiTime: formatTaipeiTime,
     init: init,
   };
 });

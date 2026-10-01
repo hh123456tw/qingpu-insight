@@ -61,6 +61,7 @@ RADAR_JOB_TYPE = "listing_radar"
 
 _BATCH_ID = re.compile(r"radar-\d{8}T\d{6}Z-[0-9a-f]{8}\Z")
 _LISTING_ID = re.compile(r"[0-9A-Za-z_-]{1,64}\Z")
+_SITE_SUFFIX = re.compile(r"\s*[-－|｜]\s*591售屋網\s*\Z")
 # Detail fields kept in the capture cache: what the valuation and the radar page need.
 # Address, builder and community names are dropped; free text is contact-scrubbed again.
 _CACHED_DETAIL_FIELDS = (
@@ -253,6 +254,8 @@ def cached_detail_payload(captured: CapturedListing) -> dict[str, Any]:
     for key in _TEXT_FIELDS:
         if isinstance(payload.get(key), str):
             payload[key] = scrub_contact_text(payload[key])
+    if isinstance(payload.get("title"), str):
+        payload["title"] = _SITE_SUFFIX.sub("", payload["title"]) or payload["title"]
     return payload
 
 
