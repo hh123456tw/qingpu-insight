@@ -40,13 +40,24 @@
         <option value="asking">開價由低到高</option>
       </select>
     </label>
+    <label>判定
+      <select id="radar-verdict">
+        <option value="">全部</option>
+        <option value="clear_below">明顯低於區間</option>
+        <option value="below_estimate">低於估值</option>
+        <option value="needs_check">需人工確認</option>
+      </select>
+    </label>
   </section>
+  <section id="radar-market" class="radar-market" aria-label="市場概況" hidden></section>
   <section id="radar-status" class="radar-status" role="status" aria-live="polite">載入中…</section>
   <section id="radar-list" class="radar-list" aria-label="候選物件"></section>
   <section class="radar-method" aria-labelledby="radar-method-title">
     <h2 id="radar-method-title">排名方式</h2>
     <p>分數 = ln(估值 ÷ 開價) ÷ ln(估值 ÷ 90% 區間下限)。分數 1 代表開價剛好落在區間下限，大於 1 代表「明顯低於區間」；同樣差 15%，區間越窄的物件排越前面。</p>
     <p>兩階段：先用 591 列表欄位（站點與距離、坪數、格局、樓層、屋齡、建物型態）替最新一批列表的所有物件做快速估價與初篩，只對初篩分數最高的物件開啟詳細頁做精確估價（座標、車位坪數、公設比）；排名一律以詳細頁估價為準，初篩只決定要看哪些頁面。</p>
+    <p>同一戶常由多家仲介同時刊登，雷達會以站點、樓層、坪數、開價與屋齡合併成同一戶，只用最低開價的那筆估價，卡片顯示刊登仲介數與各家開價範圍。</p>
+    <p>判定：開價低於 90% 區間下限且沒有警示為「明顯低於區間」。比估值低 35% 以上、591 沒有主建物／公設拆分，或座標與同社區其他刊登相距超過 500 公尺時，改判「需人工確認」並排在最後；這類物件多半是坪數含車位、持分或資料錯誤，不是真的便宜。</p>
     <p>只排名資料完整的中古屋：要有座標、格局、屋齡，坪數合理，信心度不是「低」，且不是降級估價。新成屋、同棟預售錨定、未使用公設比或車位坪數無法確認的物件會加上提醒。</p>
   </section>
 </main>

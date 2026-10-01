@@ -19,10 +19,15 @@ from qingpu_insight.web_routes.errors import parse_limit, read_market_data
 from qingpu_insight.web_routes.guards import guarded_blueprint
 
 _SORTS = {
-    "score": lambda item: (-(item.get("score") or 0), item.get("rank") or 0),
+    # The stored rank already puts clean bargains before ones that need a human look.
+    "score": lambda item: (item.get("rank") or 10**9,),
     "gap": lambda item: (item.get("gap_pct") or 0, item.get("rank") or 0),
     "asking": lambda item: (item.get("asking_price_twd") or 0, item.get("rank") or 0),
 }
+
+
+_VERDICTS = ("clear_below", "below_estimate", "needs_check")
+_MARKET_KEYS = ("market_heat", "asking_index", "asking_drift", "negotiation")
 
 
 def _radar_query() -> tuple[tuple[str, ...], int, str]:
@@ -43,6 +48,15 @@ def _radar_query() -> tuple[tuple[str, ...], int, str]:
     return stations, limit, sort
 
 
+def _verdict_query() -> str | None:
+    verdict = request.args.get("verdict") or None
+    if verdict is not None and verdict not in _VERDICTS:
+        raise ApiInputError(
+            "判定篩選不支援。", {"verdict": "clear_below_below_estimate_needs_check"}
+        )
+    return verdict
+
+
 def create_radar_blueprint(store: ListingRadarStore | None) -> Blueprint:
     bp = guarded_blueprint("radar", __name__)
 
@@ -53,6 +67,7 @@ def create_radar_blueprint(store: ListingRadarStore | None) -> Blueprint:
     @bp.get("/api/listing-radar")
     def listing_radar_api():
         stations, limit, sort = _radar_query()
+        verdict = _verdict_query()
         meta, frame = (None, None) if store is None else read_market_data(store.load_latest)
         body: dict[str, object] = {
             "batch": None,
@@ -61,6 +76,7 @@ def create_radar_blueprint(store: ListingRadarStore | None) -> Blueprint:
             "sort": sort,
             "stations": list(stations),
             "caveats": list(RADAR_CAVEATS),
+            "market": None,
         }
         if meta is None or frame is None or frame.empty or "rank" not in frame:
             return jsonify(body)
@@ -68,6 +84,8 @@ def create_radar_blueprint(store: ListingRadarStore | None) -> Blueprint:
         if "station_code" in ranked:
             ranked = ranked[ranked["station_code"].isin(stations)]
         items = [public_candidate(row) for row in ranked.to_dict("records")]
+        if verdict is not None:
+            items = [item for item in items if item.get("verdict") == verdict]
         items.sort(key=_SORTS[sort])
         body["batch"] = {
             "radar_batch_id": meta.get("radar_batch_id"),
@@ -77,6 +95,7 @@ def create_radar_blueprint(store: ListingRadarStore | None) -> Blueprint:
             "dataset_versions": meta.get("dataset_versions", []),
             "counts": meta.get("counts", {}),
         }
+        body["market"] = {key: meta.get(key) for key in _MARKET_KEYS}
         body["items"] = items[:limit]
         return jsonify(body)
 

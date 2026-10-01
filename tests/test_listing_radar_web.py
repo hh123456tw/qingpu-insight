@@ -111,7 +111,7 @@ def test_api_filters_by_station_sorts_and_limits(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "query",
-    ["station=A20", "limit=0", "limit=500", "limit=abc", "sort=random"],
+    ["station=A20", "limit=0", "limit=500", "limit=abc", "sort=random", "verdict=cheap"],
 )
 def test_api_rejects_invalid_queries(tmp_path: Path, query: str) -> None:
     client = _app(tmp_path, _seed_store(tmp_path)).test_client()
@@ -250,3 +250,14 @@ def test_admin_trigger_is_unavailable_without_admin_services(tmp_path: Path) -> 
         "/api/admin/listing-radar-runs", json={}, headers={"X-Qingpu-CSRF": "test-token"}
     )
     assert response.status_code == 503
+
+
+def test_api_filters_by_verdict_and_returns_market(tmp_path: Path) -> None:
+    client = _app(tmp_path, _seed_store(tmp_path)).test_client()
+    body = client.get("/api/listing-radar").get_json()
+    verdicts = {item["verdict"] for item in body["items"]}
+    assert verdicts and None not in verdicts
+    some = next(iter(verdicts))
+    only = client.get(f"/api/listing-radar?verdict={some}").get_json()
+    assert only["items"] and all(item["verdict"] == some for item in only["items"])
+    assert set(body["market"]) == {"market_heat", "asking_index", "asking_drift", "negotiation"}

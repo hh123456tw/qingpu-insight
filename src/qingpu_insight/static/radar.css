@@ -136,3 +136,38 @@
     grid-template-columns: 1fr;
   }
 }
+
+.radar-verdict {
+  font-size: 0.75rem;
+  border-radius: 999px;
+  padding: 0.05rem 0.5rem;
+  white-space: nowrap;
+}
+
+.radar-verdict.clear_below {
+  background: #fde8e4;
+  color: #b23b2b;
+}
+
+.radar-verdict.below_estimate {
+  background: #eef2f7;
+  color: #3d5a80;
+}
+
+.radar-verdict.needs_check {
+  background: #fff3cd;
+  color: #7a5a00;
+}
+
+.radar-market {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.9rem;
+}
+
+.radar-market h2 {
+  margin: 0 0 0.4rem;
+  font-size: 1rem;
+}

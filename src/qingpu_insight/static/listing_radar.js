@@ -8,6 +8,12 @@
 
   var STATIONS = ["A17", "A18", "A19"];
   var SORTS = ["score", "gap", "asking"];
+  var VERDICTS = ["clear_below", "below_estimate", "needs_check"];
+  var VERDICT_LABELS = {
+    clear_below: "明顯低於區間",
+    below_estimate: "低於估值",
+    needs_check: "需人工確認",
+  };
   var STATION_NAMES = { A17: "A17 領航站", A18: "A18 高鐵桃園站", A19: "A19 桃園體育園區站" };
   var ANCHOR_LABELS = {
     same_building: "同棟成交錨定",
@@ -26,6 +32,10 @@
     parking_unverified: "車位坪數無法確認",
     wide_interval: "估價區間偏寬",
     price_cut: "近期降價",
+    implausible_gap: "比估值低 35% 以上（常見於坪數含車位、持分或資料錯誤）",
+    community_mismatch: "座標與同社區其他刊登相距過遠",
+    long_on_market: "刊登超過 180 天",
+    multiple_agents: "多家仲介同時刊登",
   };
   var CONFIDENCE_LABELS = { high: "高", medium: "中", low: "低" };
 
@@ -35,6 +45,8 @@
     if (station && STATIONS.indexOf(station) !== -1) params.push("station=" + station);
     var sort = options && options.sort;
     params.push("sort=" + (SORTS.indexOf(sort) !== -1 ? sort : "score"));
+    var verdict = options && options.verdict;
+    if (verdict && VERDICTS.indexOf(verdict) !== -1) params.push("verdict=" + verdict);
     var limit = Number(options && options.limit);
     params.push("limit=" + (Number.isInteger(limit) && limit >= 1 && limit <= 100 ? limit : 50));
     return "/api/listing-radar?" + params.join("&");
@@ -86,8 +98,22 @@
     return "原 " + wan(original) + "（−" + String(Math.round(percent * 10) / 10) + "%）";
   }
 
+  function agentsText(item) {
+    if (item.duplicate_listings === null || item.duplicate_listings === undefined) return "—";
+    var duplicates = Number(item.duplicate_listings);
+    if (!Number.isFinite(duplicates) || duplicates <= 0) return "1 家";
+    var low = Number(item.property_min_price_twd);
+    var high = Number(item.property_max_price_twd);
+    var range = Number.isFinite(low) && Number.isFinite(high) && high > low
+      ? "，開價 " + wan(low) + "–" + wan(high)
+      : "";
+    return String(duplicates + 1) + " 家" + range;
+  }
+
   function cardModel(item) {
     return {
+      verdict: VERDICT_LABELS[item.verdict] ? item.verdict : null,
+      verdictLabel: VERDICT_LABELS[item.verdict] || "",
       rank: "#" + (item.rank || "—"),
       station: STATION_NAMES[item.station_code] || "—",
       gap: formatGap(item.gap_pct),
@@ -108,6 +134,8 @@
         ["估價錨點", ANCHOR_LABELS[item.price_anchor] || "無錨點資訊"],
         ["公設比", COMMON_AREA_LABELS[item.common_area_source] || "未使用"],
         ["信心度", CONFIDENCE_LABELS[item.confidence] || "—"],
+        ["刊登天數", number(item.days_on_market, " 天")],
+        ["刊登仲介", agentsText(item)],
       ],
       reason: typeof item.reason === "string" ? item.reason : "",
       flags: flagLabels(item.flags),
@@ -127,6 +155,9 @@
     var head = el(doc, "div", "radar-card-head");
     head.appendChild(el(doc, "span", "radar-rank", model.rank));
     head.appendChild(el(doc, "span", "radar-station", model.station));
+    if (model.verdict) {
+      head.appendChild(el(doc, "span", "radar-verdict " + model.verdict, model.verdictLabel));
+    }
     head.appendChild(el(doc, "span", "radar-gap" + (model.below ? " below" : ""), model.gap));
     card.appendChild(head);
 
@@ -167,7 +198,7 @@
       hour: "2-digit",
       minute: "2-digit",
       hour12: false,
-    }).format(date);
+    }).format(date).replace(/s+/g, " "); // ICU builds differ in the space they emit
   }
 
   function statusText(body) {
@@ -181,12 +212,71 @@
       : batch.status === "stopped_failures" ? "（多頁擷取失敗而提早停止，結果不完整）" : "";
     var items = Array.isArray(body.items) ? body.items.length : 0;
     var prescreen = counts.prescreened
-      ? "初篩 " + counts.prescreened + " 筆列表物件後，"
+      ? "初篩 " + counts.prescreened + " 戶" +
+        (counts.duplicate ? "（另有 " + counts.duplicate + " 筆是同物件其他仲介的刊登）" : "") +
+        "後，"
       : "";
     return "更新於 " + formatTaipeiTime(batch.finished_at) + stopped + "：" + prescreen +
       "開詳細頁精算 " +
       (counts.valued || 0) + " 筆，符合條件且開價低於估值 " + (counts.ranked || 0) +
-      " 筆，其中明顯低於區間 " + (counts.below_interval || 0) + " 筆；目前顯示 " + items + " 筆。";
+      " 筆，其中明顯低於區間 " + (counts.below_interval || 0) + " 筆" +
+      (counts.needs_check ? "、低很多但需人工確認 " + counts.needs_check + " 筆" : "") +
+      "；目前顯示 " + items + " 筆。";
+  }
+
+  function percent(value) {
+    var parsed = Number(value);
+    if (value === null || value === undefined || !Number.isFinite(parsed)) return "—";
+    return String(Math.round(parsed * 1000) / 10) + "%";
+  }
+
+  function marketFacts(market) {
+    if (!market) return [];
+    var facts = [];
+    var heat = market.market_heat;
+    if (heat) {
+      facts.push(["在售戶數", (heat.properties || 0) + " 戶（" + (heat.listings || 0) +
+        " 筆刊登）"]);
+      facts.push(["刊登天數中位", number(heat.median_days_on_market, " 天")]);
+      facts.push(["有降價紀錄", percent(heat.price_cut_share)]);
+      facts.push(["已累積", (heat.days_observed || 0) + " 天資料"]);
+    }
+    var index = Array.isArray(market.asking_index)
+      ? market.asking_index.filter(function (row) { return row.station === "all"; })[0]
+      : null;
+    if (index) {
+      facts.push(["開價／模型估值", "中位 " + Number(index.median_ratio).toFixed(3) +
+        "（" + index.properties + " 戶）"]);
+    }
+    var drift = market.asking_drift;
+    if (drift) {
+      facts.push(["開價變化", (drift.pct_change >= 0 ? "+" : "−") +
+        percent(Math.abs(drift.pct_change)) + "（" + drift.days + " 天，同一模型）"]);
+    }
+    var negotiation = market.negotiation;
+    if (negotiation) {
+      facts.push(["議價空間", negotiation.usable
+        ? "成交約為最後開價的 " + percent(negotiation.median_deal_to_asking) +
+          "（" + negotiation.matched + " 戶）"
+        : "資料累積中（已對到 " + (negotiation.matched || 0) + "／" +
+          (negotiation.min_matches || 30) + " 戶）"]);
+    }
+    return facts;
+  }
+
+  function renderMarket(doc, container, market) {
+    if (!container) return;
+    while (container.firstChild) container.removeChild(container.firstChild);
+    var facts = marketFacts(market);
+    container.hidden = !facts.length;
+    if (!facts.length) return;
+    container.appendChild(el(doc, "h2", "", "市場概況"));
+    var list = el(doc, "dl", "radar-facts");
+    facts.forEach(function (pair) {
+      list.appendChild(el(doc, "dt", "", pair[0]));
+      list.appendChild(el(doc, "dd", "", pair[1]));
+    });
+    container.appendChild(list);
   }
 
   function renderRadar(doc, container, statusNode, body) {
@@ -205,12 +295,19 @@
     if (!app) return;
     var station = doc.getElementById("radar-station");
     var sort = doc.getElementById("radar-sort");
+    var verdict = doc.getElementById("radar-verdict");
+    var market = doc.getElementById("radar-market");
     var list = doc.getElementById("radar-list");
     var status = doc.getElementById("radar-status");
 
     function load() {
       status.textContent = "載入中…";
-      return fetchImpl(buildRadarQuery({ station: station.value, sort: sort.value, limit: 50 }))
+      return fetchImpl(buildRadarQuery({
+        station: station.value,
+        sort: sort.value,
+        verdict: verdict ? verdict.value : "",
+        limit: 50,
+      }))
         .then(function (response) {
           return response.json().then(function (body) {
             if (!response.ok) {
@@ -220,7 +317,10 @@
             return body;
           });
         })
-        .then(function (body) { renderRadar(doc, list, status, body); })
+        .then(function (body) {
+          renderRadar(doc, list, status, body);
+          renderMarket(doc, market, body && body.market);
+        })
         .catch(function (error) {
           status.textContent = error.message || "雷達資料暫時無法取得";
           status.className = "radar-status error";
@@ -229,6 +329,7 @@
 
     station.addEventListener("change", load);
     sort.addEventListener("change", load);
+    if (verdict) verdict.addEventListener("change", load);
     return load();
   }
 
@@ -241,6 +342,9 @@
   return {
     ANCHOR_LABELS: ANCHOR_LABELS,
     FLAG_LABELS: FLAG_LABELS,
+    VERDICT_LABELS: VERDICT_LABELS,
+    marketFacts: marketFacts,
+    renderMarket: renderMarket,
     buildRadarQuery: buildRadarQuery,
     safeListingUrl: safeListingUrl,
     formatGap: formatGap,

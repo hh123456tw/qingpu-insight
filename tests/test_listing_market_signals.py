@@ -322,3 +322,11 @@ def test_valuation_page_offer_range_appears_only_when_usable() -> None:
     assert shown is not None
     assert (shown["offer_low_twd"], shown["offer_high_twd"]) == (18_000_000, 19_000_000)
     assert shown["offer_basis_count"] == 42
+
+
+def test_public_card_hides_a_street_address_typed_as_community() -> None:
+    from qingpu_insight.listing_radar import public_candidate
+
+    address = {"community_name": "高鐵南路三段135巷36弄60號"}
+    assert public_candidate(address)["community_name"] is None
+    assert public_candidate({"community_name": "鼎藏文星"})["community_name"] == "鼎藏文星"

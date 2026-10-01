@@ -129,7 +129,7 @@ assert.equal(radar.formatTaipeiTime(null), "—");
 assert.match(status.textContent, /精算 12 筆/);
 assert.match(
   radar.statusText({ batch: { counts: { prescreened: 5400, valued: 60 } }, items: [] }),
-  /初篩 5400 筆列表物件後，開詳細頁精算 60 筆/
+  /初篩 5400 戶後，開詳細頁精算 60 筆/
 );
 assert.equal(list.children.length, 1);
 
@@ -208,3 +208,42 @@ setImmediate(() => {
   }
   process.stdout.write("listing radar contract passed\n");
 });
+
+// --- verdicts, agents and market panel -------------------------------------------------
+assert.equal(
+  radar.buildRadarQuery({ verdict: "needs_check" }),
+  "/api/listing-radar?sort=score&verdict=needs_check&limit=50"
+);
+assert.equal(radar.buildRadarQuery({ verdict: "x&y=1" }), "/api/listing-radar?sort=score&limit=50");
+const checked = radar.cardModel(Object.assign({}, item, {
+  verdict: "needs_check",
+  duplicate_listings: 19,
+  property_min_price_twd: 16000000,
+  property_max_price_twd: 16500000,
+  days_on_market: 47.2,
+  flags: ["implausible_gap", "multiple_agents"],
+}));
+assert.equal(checked.verdictLabel, "需人工確認");
+assert.deepEqual(checked.facts[checked.facts.length - 1], ["刊登仲介", "20 家，開價 1,600 萬–1,650 萬"]);
+assert.deepEqual(checked.facts[checked.facts.length - 2], ["刊登天數", "47.2 天"]);
+assert.equal(checked.flags.length, 2);
+const badgeCard = radar.renderCard(doc, Object.assign({}, item, { verdict: "clear_below" }));
+assert.equal(badgeCard.children[1].tagName, "A");
+assert.ok(texts(badgeCard).includes("明顯低於區間"));
+assert.match(
+  radar.statusText({ batch: { counts: { prescreened: 1206, duplicate: 3308, valued: 60,
+    needs_check: 3 } }, items: [] }),
+  /初篩 1206 戶（另有 3308 筆是同物件其他仲介的刊登）.*需人工確認 3 筆/
+);
+const facts = radar.marketFacts({
+  market_heat: { properties: 1206, listings: 4514, median_days_on_market: 46.9,
+    price_cut_share: 0.143, days_observed: 1 },
+  asking_index: [{ station: "all", median_ratio: 1.08, properties: 1100 }],
+  asking_drift: null,
+  negotiation: { usable: false, matched: 0, min_matches: 30 },
+});
+assert.deepEqual(facts[0], ["在售戶數", "1206 戶（4514 筆刊登）"]);
+assert.deepEqual(facts[2], ["有降價紀錄", "14.3%"]);
+assert.deepEqual(facts[4], ["開價／模型估值", "中位 1.080（1100 戶）"]);
+assert.match(facts[5][1], /資料累積中（已對到 0／30 戶）/);
+assert.deepEqual(radar.marketFacts(null), []);

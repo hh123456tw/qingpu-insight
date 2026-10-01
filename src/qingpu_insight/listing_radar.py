@@ -79,6 +79,7 @@ RADAR_JOB_TYPE = "listing_radar"
 
 _BATCH_ID = re.compile(r"radar-\d{8}T\d{6}Z-[0-9a-f]{8}\Z")
 _LISTING_ID = re.compile(r"[0-9A-Za-z_-]{1,64}\Z")
+_DOORPLATE = re.compile(r"\d+\s*號")
 _SITE_SUFFIX = re.compile(r"\s*[-－|｜]\s*591售屋網\s*\Z")
 # Detail fields kept in the capture cache: what the valuation and the radar page need.
 # Address, builder and community names are dropped; free text is contact-scrubbed again.
@@ -1221,6 +1222,8 @@ def public_candidate(record: dict[str, Any]) -> dict[str, Any]:
             value = value.item()
         if key in _TEXT_FIELDS and isinstance(value, str):
             value = scrub_contact_text(value)
+        if key == "community_name" and isinstance(value, str) and _DOORPLATE.search(value):
+            value = None  # an agent typed the street address into the community field
         if key in {"rank", "asking_price_twd", "estimate_twd", "interval_low_twd",
                    "interval_high_twd", "original_price_twd", "prescreen_estimate_twd",
                    "duplicate_listings", "property_min_price_twd", "property_max_price_twd",
