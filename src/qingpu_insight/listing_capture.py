@@ -10,7 +10,10 @@ from urllib.parse import parse_qs, urlsplit
 
 from bs4 import BeautifulSoup
 from selenium import webdriver
-from selenium.common.exceptions import NoSuchElementException
+from selenium.common.exceptions import (
+    ElementClickInterceptedException,
+    NoSuchElementException,
+)
 from selenium.webdriver.support.ui import WebDriverWait
 
 from qingpu_insight.listing_591 import (
@@ -26,7 +29,11 @@ from qingpu_insight.listing_sources import (
 )
 
 ROUTES: dict[str, str] = {
-    "sale": "https://sale.591.com.tw/?shType=list&regionid=6",
+    # 桃園 sale listings filtered to 機場捷運 A17–A19 (metro 278).
+    "sale": (
+        "https://sale.591.com.tw/?shType=list&regionid=6"
+        "&metro=278&station=66331,66332,66330&type=2"
+    ),
     "newhouse": "https://newhouse.591.com.tw/housing-list.html?regionid=6",
     "rental": "https://rent.591.com.tw/list?region=6",
 }
@@ -42,6 +49,22 @@ ROUTE_PROVENANCE: dict[str, tuple[str, str]] = {
     "newhouse": ("newhouse.591.com.tw", "regionid"),
     "rental": ("rent.591.com.tw", "region"),
 }
+
+
+NEXT_PAGE_SELECTOR = "a.next, .page-next, [rel=next]"
+# 591's current list pages render pagination as a plain <a>下一頁</a>.
+NEXT_PAGE_TEXT_XPATH = "//a[normalize-space(.)='下一頁']"
+
+
+def _is_login_wall(exc: Exception) -> bool:
+    return "t5-wc-login" in str(exc)
+
+
+def _find_next_page(browser):
+    try:
+        return browser.find_element("css selector", NEXT_PAGE_SELECTOR)
+    except NoSuchElementException:
+        return browser.find_element("xpath", NEXT_PAGE_TEXT_XPATH)
 
 
 @dataclass(frozen=True)
@@ -274,9 +297,7 @@ class Selenium591Source:
                             break
 
                         try:
-                            next_btn = browser.find_element(
-                                "css selector", "a.next, .page-next, [rel=next]"
-                            )
+                            next_btn = _find_next_page(browser)
                             if not next_btn.is_enabled() or not next_btn.is_displayed():
                                 batch.reached_terminal_page = True
                                 should_stop = True
@@ -301,6 +322,14 @@ class Selenium591Source:
                             should_stop = True
                             break
                         except Exception as exc:
+                            if isinstance(exc, ElementClickInterceptedException) and (
+                                _is_login_wall(exc)
+                            ):
+                                # 591 asks anonymous visitors to log in before more
+                                # pages; respect it and keep the pages captured so far.
+                                batch.reached_terminal_page = True
+                                should_stop = True
+                                break
                             batch.errors.append(
                                 CaptureError(
                                     page_number=page_num,

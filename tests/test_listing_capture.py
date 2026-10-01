@@ -593,3 +593,65 @@ def test_neither_cards_nor_empty_is_error(tmp_path):
     assert len(batch.errors) == 1
     assert batch.errors[0].code == "page_failed"
     assert "quit" in browser.calls
+
+
+def test_next_page_falls_back_to_the_text_link_591_now_uses():
+    # 591's list pages render pagination as a plain <a>下一頁</a> without a class.
+    from selenium.common.exceptions import NoSuchElementException
+
+    from qingpu_insight.listing_capture import _find_next_page
+
+    text_link = object()
+
+    class Browser:
+        def __init__(self, has_text_link: bool) -> None:
+            self.has_text_link = has_text_link
+
+        def find_element(self, by, value):
+            if by == "xpath" and "下一頁" in value and self.has_text_link:
+                return text_link
+            raise NoSuchElementException(value)
+
+    assert _find_next_page(Browser(has_text_link=True)) is text_link
+    with pytest.raises(NoSuchElementException):
+        _find_next_page(Browser(has_text_link=False))
+
+
+def test_login_wall_on_pagination_ends_the_batch_without_bypassing(tmp_path):
+    # 591 shows a login prompt over pagination after a few pages for anonymous
+    # visitors; stop there and keep what was captured instead of failing the batch.
+    from selenium.common.exceptions import ElementClickInterceptedException
+
+    class LoginWallBrowser(FakeBrowser):
+        def find_element(self, by, value=None, selector=None):
+            selected = value or selector or ""
+            if selected == "a.next, .page-next, [rel=next]":
+
+                class BlockedLink:
+                    def is_enabled(self):
+                        return True
+
+                    def is_displayed(self):
+                        return True
+
+                    def click(self):
+                        raise ElementClickInterceptedException(
+                            "element click intercepted: Other element would receive the "
+                            'click: <t5-wc-login class="t5-wc-login" '
+                            'type="pc-sale-list-pagination">'
+                        )
+
+                return BlockedLink()
+            return super().find_element(by, value, selector)
+
+    writer = RawBatchWriter(tmp_path, "sale")
+    batch = Selenium591Source(
+        browser=LoginWallBrowser(pages=[SALE_HTML]),
+        writer=writer,
+        config=ChromeConfig(page_timeout_seconds=0, delay_seconds=(0, 0), max_retries=0),
+    ).capture("sale", 5)
+
+    assert [page.page_number for page in batch.pages] == [1]
+    assert batch.errors == []
+    assert batch.reached_terminal_page is True
+    assert batch.is_complete is True
