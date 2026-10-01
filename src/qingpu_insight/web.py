@@ -24,6 +24,8 @@ from qingpu_insight.conversation_models import public_model_catalog
 from qingpu_insight.conversation_web import create_conversation_blueprint
 from qingpu_insight.job_executor import LocalJobExecutor
 from qingpu_insight.jobs import JobService
+from qingpu_insight.listing_radar import ListingRadarStore
+from qingpu_insight.listing_radar_runtime import radar_store
 from qingpu_insight.listing_repository import ListingRepository
 from qingpu_insight.listing_update import ListingUpdateService
 from qingpu_insight.market_repository import MarketDataSource, repository_from_env
@@ -47,6 +49,7 @@ from qingpu_insight.web_routes.jobs import create_jobs_blueprint
 from qingpu_insight.web_routes.market import create_market_blueprint
 from qingpu_insight.web_routes.ops import create_ops_blueprint
 from qingpu_insight.web_routes.pages import create_pages_blueprint
+from qingpu_insight.web_routes.radar import create_radar_blueprint
 from qingpu_insight.web_routes.reports import create_reports_blueprint
 from qingpu_insight.web_routes.valuation import create_valuation_blueprint
 
@@ -70,6 +73,7 @@ def create_app(
     conversation_service: object | None = None,
     conversation_repository: object | None = None,
     address_locator: AddressLocator | None = None,
+    listing_radar_store: ListingRadarStore | None = None,
 ) -> Flask:
     app = Flask(__name__)
     app.json.default = json_default
@@ -161,6 +165,7 @@ def create_app(
             official_data_service=admin_services.official_data_service,
             model_release_service=admin_services.model_release_service,
             backup_service=admin_services.backup_job_service,
+            listing_radar_service=admin_services.listing_radar_service,
         )
     if dashboard_service is not None:
         admin_runtime = replace(admin_runtime, dashboard_service=dashboard_service)
@@ -184,6 +189,9 @@ def create_app(
     )
     app.register_blueprint(create_pages_blueprint())
     app.register_blueprint(create_market_blueprint(data_source, listing_repo))
+    if listing_radar_store is None and root is not None:
+        listing_radar_store = radar_store(root)
+    app.register_blueprint(create_radar_blueprint(listing_radar_store))
     app.register_blueprint(
         create_valuation_blueprint(snapshots, registry, store, address_locator)
     )

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>低估物件雷達 - 青埔智價</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='radar.css') }}">
+</head>
+<body>
+<header class="hero">
+  <p class="eyebrow">桃園機場捷運 A17–A19</p>
+  <h1>低估物件雷達 <span>Listing Radar</span></h1>
+  <p>把 591 上目前刊登的青埔中古屋，逐一用與「591 物件分析」相同的模型估價，列出開價明顯低於模型區間的物件。</p>
+  <p><a href="/">&larr; 回首頁</a></p>
+</header>
+<main id="radar-app">
+  <section class="radar-caveats" aria-labelledby="radar-caveats-title">
+    <h2 id="radar-caveats-title">「比模型低」不等於「撿到便宜」</h2>
+    <ul>
+      <li>開價偏低可能反映未揭露的瑕疵：頂樓加蓋、凶宅、海砂屋、持分產權、地上權，或急售、議價空間等。</li>
+      <li>模型看不到裝潢、採光、景觀、座向、噪音與屋況；這些都可能讓合理價差很多。</li>
+      <li>新成屋（屋齡未滿 2 年）主要依同棟預售或完工前成交推估，轉手價常與預售價落差很大。</li>
+      <li>僅供研究參考，不構成買賣建議；請自行查證謄本、實價登錄與現場屋況。</li>
+    </ul>
+  </section>
+  <section class="controls radar-controls" aria-label="雷達篩選">
+    <label>站點
+      <select id="radar-station">
+        <option value="">全部（A17–A19）</option>
+        <option value="A17">A17 領航站</option>
+        <option value="A18">A18 高鐵桃園站</option>
+        <option value="A19">A19 桃園體育園區站</option>
+      </select>
+    </label>
+    <label>排序
+      <select id="radar-sort">
+        <option value="score">低於區間的程度（預設）</option>
+        <option value="gap">與估值差距 %</option>
+        <option value="asking">開價由低到高</option>
+      </select>
+    </label>
+  </section>
+  <section id="radar-status" class="radar-status" role="status" aria-live="polite">載入中…</section>
+  <section id="radar-list" class="radar-list" aria-label="候選物件"></section>
+  <section class="radar-method" aria-labelledby="radar-method-title">
+    <h2 id="radar-method-title">排名方式</h2>
+    <p>分數 = ln(估值 ÷ 開價) ÷ ln(估值 ÷ 90% 區間下限)。分數 1 代表開價剛好落在區間下限，大於 1 代表「明顯低於區間」；同樣差 15%，區間越窄的物件排越前面。</p>
+    <p>只排名資料完整的中古屋：要有座標、格局、屋齡，坪數合理，信心度不是「低」，且不是降級估價。新成屋、同棟預售錨定、未使用公設比或車位坪數無法確認的物件會加上提醒。</p>
+  </section>
+</main>
+<script src="{{ url_for('static', filename='listing_radar.js') }}"></script>
+</body>
+</html>

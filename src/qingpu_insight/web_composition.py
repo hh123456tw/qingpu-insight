@@ -70,6 +70,7 @@ class AdminServices:
     official_data_service: object | None = None
     model_release_service: object | None = None
     backup_job_service: object | None = None
+    listing_radar_service: object | None = None
 
 
 @dataclass(frozen=True)
@@ -257,6 +258,13 @@ def _create_production_admin_services(
     except Exception:
         pass
 
+    from qingpu_insight.listing_radar_runtime import ListingRadarJobService, run_listing_radar
+
+    radar_service = ListingRadarJobService(
+        service.job_service,
+        lambda options, progress=None: run_listing_radar(root, options, progress=progress),
+    )
+
     return AdminServices(
         job_service=service.job_service,
         listing_update_service=service,
@@ -266,6 +274,7 @@ def _create_production_admin_services(
         official_data_service=official_service,
         model_release_service=model_release_service,
         backup_job_service=_backup_job_svc,
+        listing_radar_service=radar_service,
     )
 
 

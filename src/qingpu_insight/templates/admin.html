@@ -63,6 +63,16 @@
     </div>
   </div>
   <button class="mutation-btn admin-btn" id="ls-run-all-btn">更新中古屋</button>
+</div>
+<div class="listing-radar-admin">
+  <h3>低估物件雷達</h3>
+  <p>逐一開啟最新中古屋的 591 物件頁（可見 Chrome，每頁間隔 3–6 秒，遇到驗證頁即停止），用正式模型估價後排名。結果顯示在 <a href="/radar">/radar</a>。</p>
+  <div class="admin-field-row">
+    <label>最多物件數 <input type="number" id="lr-max-listings" value="60" min="1" max="200" class="admin-input" style="width:80px"></label>
+    <label>沿用幾小時內的擷取 <input type="number" id="lr-refresh-hours" value="24" min="0" max="336" class="admin-input" style="width:80px"></label>
+  </div>
+  <button class="mutation-btn admin-btn" id="lr-run-btn">執行雷達</button>
+  <div id="lr-status" class="admin-od-status" role="status" aria-live="polite"></div>
 </div></div></section>
     <section id="admin-models"><h2>模型觀測與發布</h2><div class="admin-content">
       <div id="mr-status" class="mr-status-bar"></div>
@@ -150,5 +160,6 @@
   <script src="{{ url_for('static', filename='models_admin.js') }}?v=20260727"></script>
   <script src="{{ url_for('static', filename='admin.js') }}"></script>
   <script src="{{ url_for('static', filename='admin_page.js') }}"></script>
+  <script src="{{ url_for('static', filename='listing_radar_admin.js') }}"></script>
 </body>
 </html>

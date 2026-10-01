@@ -38,6 +38,8 @@ PUBLIC_PATHS = {
     "/api/listings",
     "/api/listings/summary",
     "/api/listing-events",
+    "/api/listing-radar",
+    "/radar",
     "/api/valuations",
     "/api/valuations/<valuation_id>",
 }

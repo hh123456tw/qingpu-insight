@@ -1,0 +1,138 @@
+/* 低估物件雷達 */
+
+.radar-caveats {
+  background: #fff6ec;
+  border: 1px solid #f0c9a8;
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.radar-caveats h2 {
+  margin: 0 0 0.4rem;
+  font-size: 1rem;
+  color: #8a4718;
+}
+
+.radar-caveats ul {
+  margin: 0;
+  padding-left: 1.2rem;
+  font-size: 0.88rem;
+}
+
+.radar-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.radar-status {
+  color: var(--muted);
+  font-size: 0.88rem;
+  margin-bottom: 0.75rem;
+}
+
+.radar-status.error {
+  color: #b23b2b;
+}
+
+.radar-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 0.9rem;
+}
+
+.radar-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.8rem 0.9rem;
+  min-width: 0;
+}
+
+.radar-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.radar-rank {
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.radar-station {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.radar-gap {
+  margin-left: auto;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.radar-gap.below {
+  color: #b23b2b;
+}
+
+.radar-title {
+  display: block;
+  font-weight: 600;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+  margin-bottom: 0.4rem;
+}
+
+.radar-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.6rem;
+  margin: 0 0 0.45rem;
+  font-size: 0.85rem;
+}
+
+.radar-facts dt {
+  color: var(--muted);
+}
+
+.radar-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.radar-reason {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.radar-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.45rem;
+  padding: 0;
+  list-style: none;
+}
+
+.radar-flags li {
+  font-size: 0.75rem;
+  background: #fbe9dc;
+  color: #8a4718;
+  border-radius: 999px;
+  padding: 0.05rem 0.5rem;
+}
+
+.radar-method {
+  margin-top: 1.5rem;
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+@media (max-width: 480px) {
+  .radar-list {
+    grid-template-columns: 1fr;
+  }
+}

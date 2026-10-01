@@ -784,6 +784,9 @@ def public_candidate(record: dict[str, Any]) -> dict[str, Any]:
             value = value.item()
         if key in _TEXT_FIELDS and isinstance(value, str):
             value = scrub_contact_text(value)
+        if key in {"rank", "asking_price_twd", "estimate_twd", "interval_low_twd",
+                   "interval_high_twd"} and value is not None:
+            value = int(value)
         out[key] = value
     return out
 

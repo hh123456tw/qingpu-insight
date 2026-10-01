@@ -10,6 +10,7 @@ from typing import Any
 
 from flask import Blueprint, current_app, jsonify, render_template, request, session
 
+from qingpu_insight.listing_radar import ListingRadarRequest
 from qingpu_insight.local_secrets import SecretValidationError
 from qingpu_insight.official_data import _season_key
 from qingpu_insight.operation_previews import OperationPreview
@@ -34,12 +35,13 @@ class AdminRuntime:
     llm_model_catalog: object | None = None
     root: object | None = None
     restore_service: object | None = None
+    listing_radar_service: object | None = None
 
 
 ADMIN_JOB_TYPES = frozenset({
     "official_data_update", "listing_update", "model_training",
     "model_release", "backup_create", "restore_drill",
-    "database_restore", "provider_smoke", "llm_benchmark",
+    "database_restore", "provider_smoke", "llm_benchmark", "listing_radar",
 })
 
 
@@ -523,6 +525,77 @@ def create_admin_blueprint(runtime: AdminRuntime) -> Blueprint:
             items.append(item)
 
         return jsonify({"items": items, "limit": limit})
+
+    # ------------------------------------------------------------------
+    # 低估物件雷達 (listing radar) job
+    # ------------------------------------------------------------------
+
+    @bp.post("/api/admin/listing-radar-runs")
+    def admin_listing_radar_run():
+        if request.mimetype != "application/json":
+            err = {"code": "invalid_request", "message": "Request body must be JSON.",
+                   "fields": {"body": "application_json"}}
+            return jsonify({"error": err}), 400
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            err = {"code": "invalid_request", "message": "Request body must be a JSON object.",
+                   "fields": {"body": "object"}}
+            return jsonify({"error": err}), 400
+        fields: dict[str, str] = {}
+        for key in sorted(set(payload) - {"max_listings", "refresh_hours"}):
+            fields[key] = "not_allowed"
+        max_listings = payload.get("max_listings", 60)
+        if type(max_listings) is not int or not 1 <= max_listings <= 200:
+            fields["max_listings"] = "integer_1_to_200"
+        refresh_hours = payload.get("refresh_hours", 24)
+        if (
+            isinstance(refresh_hours, bool)
+            or not isinstance(refresh_hours, int | float)
+            or not 0 <= refresh_hours <= 336
+        ):
+            fields["refresh_hours"] = "number_0_to_336"
+        if fields:
+            err = {"code": "invalid_request", "message": "Request validation failed.",
+                   "fields": fields}
+            return jsonify({"error": err}), 400
+
+        rt = current_app.extensions.get("qingpu_admin_runtime")
+        if rt is None or rt.listing_radar_service is None or rt.executor is None:
+            err = {"code": "admin_unavailable", "message": "管理功能未啟用。"}
+            return jsonify({"error": err}), 503
+        radar_request = ListingRadarRequest(
+            max_listings=max_listings, refresh_hours=float(refresh_hours), trigger="web"
+        )
+        try:
+            submission = rt.listing_radar_service.submit(radar_request)
+        except Exception:
+            err = {"code": "admin_unavailable", "message": "管理功能暫時無法使用。"}
+            return jsonify({"error": err}), 503
+
+        if submission.created:
+            try:
+                rt.executor.submit(
+                    submission.run.run_id,
+                    lambda run_id=submission.run.run_id: rt.listing_radar_service.execute(
+                        run_id, radar_request
+                    ),
+                )
+            except Exception:
+                try:
+                    rt.job_service.fail(
+                        submission.run.run_id,
+                        "enqueue_failed",
+                        "listing radar could not be queued",
+                    )
+                except Exception:
+                    pass
+                err = {"code": "enqueue_failed", "message": "工作無法啟動。"}
+                return jsonify({"error": err}), 503
+
+        body = _admin_public_job(submission.run)
+        body["created"] = submission.created
+        body["info_url"] = f"/api/jobs/{submission.run.run_id}"
+        return jsonify(body), 202 if submission.created else 200
 
     # ------------------------------------------------------------------
     # Backup / Restore-Drill API (Task 12)
