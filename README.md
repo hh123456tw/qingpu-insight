@@ -281,21 +281,43 @@ $env:QINGPU_591_PROFILE_DIR = "instance/chrome-591"   # 或寫進 .env
 有 API 列表批次時分兩階段：先替最新一批列表的**所有**物件做列表欄位快速估價（初篩），只替初篩分數最高的 `--max-listings` 筆開詳細頁，用「591 物件助理」相同的模型與換算精確估價，找出開價明顯低於模型區間的物件，結果在 <http://127.0.0.1:5000/radar>（公開唯讀，首頁有連結）與 `GET /api/listing-radar?station=A18&sort=score&limit=20`。
 
 ```powershell
-# 一個指令完成：選物件 → 可見 Chrome 擷取詳細頁 → 估價 → 排名 → 儲存與報告
+# 一個指令完成：選物件 → Chrome（預設無頭）擷取詳細頁 → 估價 → 排名 → 儲存與報告
 .\.venv\Scripts\qingpu-data.exe listing-radar --max-listings 60
 # 不開 Chrome，只用 --refresh-hours 內已擷取的頁面重新估價（例如換模型後）
 .\.venv\Scripts\qingpu-data.exe listing-radar --offline
 ```
 
+- **同物件合併**：同一戶常由二、三十家仲介同時刊登（2026-10-01 批次：4,514 筆刊登只有 1,206 戶），而且社區名稱寫法不一（鼎藏文星／鼎藏麗星／鼎藏），所以不比社區名，改以同站、同樓層與總樓層、坪數差 ≤ max(0.3 坪, 1%)、開價差 ≤ 5%、屋齡差 ≤ 2 年判定為同一戶（`listing_dedupe.py`）。每戶只以最低開價的刊登初篩與精算，其他刊登標為 `duplicate`（同物件其他仲介刊登），卡片顯示仲介數與各家開價範圍。
 - **第一階段（初篩，不連 591）**：讀 `data/raw/listings/591/` 最新的完整 API 批次（沒有完整批次時用最新的部分批次，並在報告標示），以 591 標示的站點與距離、權狀坪數、格局、樓層、屋齡、建物型態、標示公設比（若有；591 公設比不含車位）一次批次估價；沒有座標所以不使用同棟成交錨定，車位只知有無與型式、坪數未知（以含車位坪數估算並標示）。初篩分數與排名同一公式。
 - **第二階段（精算）**：初篩分數最高的 `--max-listings` 筆（預設 60），加上 `--refresh-hours` 內已擷取過詳細頁的物件（沿用快取、不重抓），走下面的詳細頁擷取與估價（設定 `QINGPU_591_PROFILE_DIR` 或 `--profile-dir` 時在已登入的專用 profile 開啟；請勿與 `listing-update` 同時執行，同一個 profile 不能同時開兩個 Chrome）。其餘物件以 `prescreen_only`（僅初篩）保存在批次中，**不列入排名**。`--no-prescreen` 或沒有 API 批次時，改回舊流程：已發布的 `listing_current`（有 MySQL 時）或 `listing_snapshots.parquet` 最新一批，新到舊取前 `--max-listings` 筆。
 - **禮貌擷取**：整批共用一個可見 Chrome；每頁間隔 3～6 秒隨機延遲（低於 3 秒會拒絕執行）；遇到 591 驗證頁立即停止整批（結束碼 2，已完成的物件照常保存），不嘗試繞過；已下架頁面略過；連續 3 頁載入失敗也會停止。`--refresh-hours`（預設 24）內擷取過的物件不重抓，因此中斷後重跑會從斷點接續。
 - **估價**：與 591 物件助理同一條路徑（`conversation_valuation.valuate_listing_with_context`）：座標算捷運站距離、扣除可驗證的車位坪數、公設比依主建物／附屬／共用換算、正式模型與總價 90% 區間。
 - **排名**：分數 = ln(估值 ÷ 開價) ÷ ln(估值 ÷ 區間下限)，1 代表剛好在區間下限，大於 1 為「明顯低於區間」；同樣的價差，區間越窄排越前。只排名有座標、格局、屋齡、扣車位後 8～120 坪、信心度非低、非降級估價、在生活圈內且開價低於估值的中古屋。新成屋（屋齡未滿 2 年）、依同棟預售錨定、未使用公設比、車位坪數無法確認、區間偏寬會加上提醒。
+- **判定與人工確認**：開價低於 90% 區間下限、且沒有下列警示時判定為「明顯低於區間」；有警示時判定為「低很多，但資料需人工確認」，排在其他候選之後，也不計入「明顯低於區間」：比估值低 35% 以上（常見於坪數含車位、持分、地下室或資料打錯）、591 未提供主建物／公設拆分（未使用公設比）、座標與同社區其他已擷取刊登的中位位置相距超過 500 公尺（實價登錄沒有社區名稱，所以拿同社區其他刊登當參考，至少要 2 筆）。另外會標示刊登超過 180 天、多家仲介同時刊登。
 - **「比模型低」不等於便宜**：開價偏低可能代表頂樓加蓋、凶宅、海砂屋、持分、地上權等未揭露瑕疵；模型也看不到裝潢、採光、景觀與屋況。頁面與報告都會顯示這段說明。
 - **顯示**：卡片與 API 另外顯示社區名稱、降價（原價與降幅，標記「近期降價」）與初篩估值；狀態列顯示初篩與精算筆數。
 - **儲存**：`data/processed/listing_radar/`（`captures.parquet` 擷取快取、`runs/<radar_batch_id>.parquet|json`、`latest.json`），報告在 `outputs/listing-radar/<radar_batch_id>.json|md`，皆含批次 ID、時間與模型版本，不需要 MySQL。快取只保留估價需要的欄位（不存地址），文字欄位再次移除電話與 e-mail。
+- **市場訊號**（報告開頭與 `GET /api/listing-radar` 的 `market`）：在售戶數、刊登天數中位、有降價紀錄的比例（來自每日歷史）；開價指數；議價空間。見下一節。
 - **管理中心**：「刊登」區塊的「執行雷達」會以背景工作執行同一流程（`POST /api/admin/listing-radar-runs`，限本機＋CSRF，需要 MySQL 工作中心），進度顯示在按鈕下方。
+
+## 每日刊登歷史、開價指數與議價空間
+
+每次完整的 API 列表批次會被併入每日歷史（`qingpu-data listing-history`，雷達執行時也會自動更新），存在 `data/processed/listing_history/`：
+
+- **`panel.parquet`**：每天每筆刊登一列（開價、原價與降幅、刊登時間、社區、站、坪數、樓層、屋齡、同物件代號），只收**完整**批次，避免沒抓完的那天被誤判成下架。由此算出每筆的降價次數、從最高價降了多少，以及刊登天數（取首次觀察與該戶所有仲介最早刊登時間的較早者；591 的刊登時間可能被仲介重新刊登刷新，所以這是下限）。
+- **`heat.parquet`**：每天的在售戶數（已合併同物件）、新上架戶數、消失的刊登數、刊登天數中位、有降價紀錄比例、開價單價中位。2026-10-01 第一天：1,206 戶、刊登天數中位約 47 天、14% 有降價紀錄。
+- **`asking_index.parquet`（開價指數）**：每次雷達初篩後，對每一戶算 ln(開價 ÷ 模型估值) 的中位數（整體與各站，至少 30 戶）。模型已控制地點、坪數、屋齡、樓層，所以這是「控制物件組成後的開價水準」。水準本身包含正常的開價溢價，只有**同一個模型版本內的變化**代表市場漂移；換模型後重新起算。實價登錄至少晚一個月才看得到，開價是即時的，因此累積幾個月後，可以用開價指數變化來修正上漲期的系統性低估（取代外推的時間趨勢），但必須先通過 `docs/m2-valuation-methodology.md` 的預先登記回測，才會進入正式模型。
+- **`negotiation.json`（議價空間）**：某一戶的所有刊登都消失後，以同站、同樓層與總樓層、坪數差 ≤ max(0.5 坪, 2%)、屋齡差 ≤ 1.5 年、成交日在下架前 120 天到下架後 45 天內，找實價登錄中古屋成交；只採用剛好一筆、且成交÷最後開價在 0.6～1.15 之間的配對。滿 30 戶後，估價頁的價格摘要才會顯示「建議出價參考」（開價 × 成交／開價比例的四分位）；之前只顯示累積進度。
+
+### 每日排程
+
+`scripts/daily-listings.ps1` 依序執行 `listing-update --types sale`（API、無頭）→ `listing-history` → `listing-radar --max-listings 60`，日誌在 `logs/daily-listings/`（保留 60 天）。列表沒有成功抓完時不會跑雷達。登錄成 Windows 排程工作（目前使用者、每天 09:30，錯過時開機後補跑）：
+
+```powershell
+pwsh -File scripts/register-daily-listings.ps1            # -At 07:00 可改時間，-Remove 移除
+```
+
+591 登入過期時，`listing-update` 會記錄 `login_required` 並停止；重新執行 `qingpu-data 591-login` 即可。
 
 ## 模型訓練與發布
 
@@ -387,7 +409,7 @@ $env:QINGPU_SECRET_KEY = "<至少 32 字元的本機隨機密鑰>"
 .\.venv\Scripts\qingpu-data.exe --help
 ```
 
-子指令：`acquire`、`analyse`、`run`、`market-build`、`mysql-load`、`model-train`、`listing-scrape`、`listing-build`、`listing-sync`、`listing-update`、`591-login`、`listing-radar`、`job-status`、`health-run`、`backup-create`、`backup-restore-drill`、`report-generate`、`llm-benchmark`、`llm-smoke`。常用維運指令：
+子指令：`acquire`、`analyse`、`run`、`market-build`、`mysql-load`、`model-train`、`listing-scrape`、`listing-build`、`listing-sync`、`listing-update`、`591-login`、`listing-radar`、`listing-history`、`job-status`、`health-run`、`backup-create`、`backup-restore-drill`、`report-generate`、`llm-benchmark`、`llm-smoke`。常用維運指令：
 
 ```powershell
 .\.venv\Scripts\qingpu-data.exe health-run                           # 健康檢查（MySQL、資料集、備份）

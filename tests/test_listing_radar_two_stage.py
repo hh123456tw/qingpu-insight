@@ -181,9 +181,11 @@ def test_two_stage_radar_only_opens_the_top_listings(tmp_path: Path) -> None:
     )
 
     assert sorted(capture.requested) == sorted(top_ids)
-    assert result.counts["prescreened"] == 62
+    # The real two-page capture lists 5 flats twice; only the cheapest listing is screened.
+    assert result.counts["prescreened"] == 57
+    assert result.counts["duplicate"] == 5
     assert result.counts["valued"] == 3
-    assert result.counts["prescreen_only"] == 59
+    assert result.counts["prescreen_only"] == 54
     assert result.meta["source"].startswith("591-api:")
     assert result.meta["prescreen"]["detail_candidates"] == 3
     assert {p["stage"] for p in progress} >= {"prescreening", "selected", "capturing"}
@@ -200,6 +202,7 @@ def test_two_stage_radar_only_opens_the_top_listings(tmp_path: Path) -> None:
 
     report = json.loads(json_path.read_text(encoding="utf-8"))
     assert report["prescreen"]["listings"] == 62
+    assert report["prescreen"]["unique_properties"] == 57
     assert PRESCREEN_CAVEAT in report["caveats"]
     markdown = md_path.read_text(encoding="utf-8")
     assert "兩階段" in markdown and "社區" in markdown
@@ -265,8 +268,9 @@ def test_public_api_shows_community_and_price_cut(tmp_path: Path) -> None:
     assert item["community_name"] == "站前新鋭"
     assert item["original_price_twd"] == 21_980_000
     assert item["down_price_percent"] == 27.3
-    assert body["batch"]["counts"]["prescreened"] == 62
-    assert body["batch"]["counts"]["prescreen_only"] == 61
+    assert body["batch"]["counts"]["prescreened"] == 57
+    assert body["batch"]["counts"]["prescreen_only"] == 56
+    assert body["batch"]["counts"]["duplicate"] == 5
 
 
 def test_fresh_cached_listings_join_without_live_requests(tmp_path: Path) -> None:

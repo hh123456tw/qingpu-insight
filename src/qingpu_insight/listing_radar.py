@@ -66,6 +66,15 @@ MIN_NET_AREA_PING = 8.0
 MAX_NET_AREA_PING = 120.0
 NEW_PROJECT_MAX_AGE_YEARS = 2.0
 WIDE_INTERVAL_RATIO = 0.6
+# Asking 35%+ under a sound estimate almost always means the listing data is off
+# (area incl. parking, a part share, a basement unit, a typo), not a bargain.
+IMPLAUSIBLE_GAP = -0.35
+LONG_ON_MARKET_DAYS = 180
+COMMUNITY_MISMATCH_M = 500.0
+MIN_COMMUNITY_PEERS = 2
+# Below-interval listings with one of these flags need a human look before they count.
+REVIEW_FLAGS = frozenset({"implausible_gap", "common_area_unused", "community_mismatch"})
+VERDICT_ORDER = {"clear_below": 0, "below_estimate": 1, "needs_check": 2}
 RADAR_JOB_TYPE = "listing_radar"
 
 _BATCH_ID = re.compile(r"radar-\d{8}T\d{6}Z-[0-9a-f]{8}\Z")
@@ -137,6 +146,16 @@ FLAG_LABELS = {
     "parking_unverified": "車位坪數無法確認",
     "wide_interval": "估價區間偏寬",
     "price_cut": "近期降價",
+    "implausible_gap": "比估值低 35% 以上，常見於坪數含車位、持分或資料錯誤",
+    "community_mismatch": "座標與同社區其他刊登相距過遠，社區名稱可能有誤",
+    "long_on_market": f"刊登超過 {LONG_ON_MARKET_DAYS} 天",
+    "multiple_agents": "多家仲介同時刊登",
+}
+
+VERDICT_LABELS = {
+    "clear_below": "明顯低於區間",
+    "needs_check": "低很多，但資料需人工確認",
+    "below_estimate": "低於估值",
 }
 
 
@@ -472,12 +491,33 @@ def assess_record(record: dict[str, Any], *, radius_m: float = DEFAULT_RADIUS_M)
         flags.append("wide_interval")
     if _finite(record.get("original_price_twd")) and _finite(record.get("down_price_percent")):
         flags.append("price_cut")
+    if gap is not None and gap <= IMPLAUSIBLE_GAP:
+        flags.append("implausible_gap")
+    mismatch = _finite(record.get("community_mismatch_m"))
+    if mismatch is not None and mismatch > COMMUNITY_MISMATCH_M:
+        flags.append("community_mismatch")
+    days = _finite(record.get("days_on_market"))
+    if days is not None and days >= LONG_ON_MARKET_DAYS:
+        flags.append("long_on_market")
+    if (_finite(record.get("duplicate_listings")) or 0) > 0:
+        flags.append("multiple_agents")
 
     out["ineligible_reasons"] = reasons
     out["eligible"] = not reasons
     out["flags"] = flags
+    out["verdict"] = _verdict(out)
     out["reason"] = _reason_text(out)
     return out
+
+
+def _verdict(record: dict[str, Any]) -> str | None:
+    gap = record.get("gap_pct")
+    if gap is None or gap >= 0:
+        return None
+    flags = set(record.get("flags") or [])
+    if record.get("below_interval") or "implausible_gap" in flags:
+        return "needs_check" if REVIEW_FLAGS & flags else "clear_below"
+    return "below_estimate"
 
 
 def _reason_text(record: dict[str, Any]) -> str:
@@ -485,7 +525,9 @@ def _reason_text(record: dict[str, Any]) -> str:
     if gap is None:
         return "無法比較開價與估值"
     parts: list[str] = []
-    if record.get("below_interval"):
+    if record.get("verdict") == "needs_check":
+        parts.append(f"開價比估值低 {-gap:.1%}，但資料需人工確認後才算數")
+    elif record.get("below_interval"):
         low = _finite(record.get("interval_low_twd")) or 0
         asking = _finite(record.get("asking_price_twd")) or 0
         below_low = (low - asking) / low if low else 0
@@ -519,7 +561,12 @@ def rank_records(
             for r in assessed
             if r.get("eligible") and r.get("score") is not None and r["score"] > 0
         ),
-        key=lambda r: (-r["score"], r["gap_pct"], str(r.get("source_listing_id"))),
+        key=lambda r: (
+            VERDICT_ORDER.get(str(r.get("verdict")), 1),
+            -r["score"],
+            r["gap_pct"],
+            str(r.get("source_listing_id")),
+        ),
     )
     order = {id(r): position for position, r in enumerate(ranked, start=1)}
     for record in assessed:
@@ -756,6 +803,18 @@ def select_for_detail(
     return candidates, rest
 
 
+def duplicate_record(listing: dict[str, Any], representative_id: str,
+                     property_key: str) -> dict[str, Any]:
+    """Another agent's listing of a property whose cheapest listing is screened instead."""
+    return {
+        **_list_record(listing),
+        "status": "duplicate",
+        "status_reason": f"同物件由其他仲介刊登，以最低開價的 {representative_id} 代表",
+        "property_key": property_key,
+        "capture_source": "list",
+    }
+
+
 def prescreen_only_record(record: dict[str, Any]) -> dict[str, Any]:
     status = (
         "out_of_area" if record.get("prescreen_status") == "out_of_area" else "prescreen_only"
@@ -778,6 +837,60 @@ def fresh_capture_ids(
         if captured_at is not None and now - captured_at < window:
             fresh.add(listing_id)
     return fresh
+
+
+# --------------------------------------------------------------------------- community
+
+
+def _distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    d_phi, d_lambda = phi2 - phi1, math.radians(lon2 - lon1)
+    a = math.sin(d_phi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2) ** 2
+    return 2 * 6_371_000 * math.asin(math.sqrt(a))
+
+
+def _capture_coordinates(row: dict[str, Any]) -> tuple[float, float] | None:
+    if row.get("status") != "captured" or not row.get("payload_json"):
+        return None
+    try:
+        payload = json.loads(row["payload_json"])
+    except (TypeError, ValueError):
+        return None
+    lat, lon = _finite(payload.get("latitude")), _finite(payload.get("longitude"))
+    return (lat, lon) if lat is not None and lon is not None else None
+
+
+def apply_community_check(
+    records: list[dict[str, Any]],
+    captures: dict[str, dict[str, Any]],
+    annotations: dict[str, dict[str, Any]],
+) -> None:
+    """Set ``community_mismatch_m`` on valued records far from their community's peers.
+
+    Peers are other captured listings carrying the same community name in the list
+    batch; their median coordinate stands in for the community, because transaction
+    records carry no community names. Needs at least MIN_COMMUNITY_PEERS peers.
+    """
+    by_community: dict[str, list[tuple[str, float, float]]] = {}
+    for listing_id, row in captures.items():
+        community = str((annotations.get(listing_id) or {}).get("community_name") or "").strip()
+        point = _capture_coordinates(row)
+        if community and point is not None:
+            by_community.setdefault(community, []).append((listing_id, *point))
+    for record in records:
+        if record.get("status") != "valued":
+            continue
+        community = str(record.get("community_name") or "").strip()
+        lat, lon = _finite(record.get("latitude")), _finite(record.get("longitude"))
+        if not community or lat is None or lon is None:
+            continue
+        own_id = record.get("source_listing_id")
+        peers = [peer for peer in by_community.get(community, []) if peer[0] != own_id]
+        if len(peers) < MIN_COMMUNITY_PEERS:
+            continue
+        center_lat = float(pd.Series([peer[1] for peer in peers]).median())
+        center_lon = float(pd.Series([peer[2] for peer in peers]).median())
+        record["community_mismatch_m"] = round(_distance_m(lat, lon, center_lat, center_lon), 1)
 
 
 # --------------------------------------------------------------------------- runner
@@ -901,10 +1014,14 @@ class ListingRadarRunner:
             counts[str(extra_record.get("status"))] += 1
             records.append(extra_record)
         counts.update(extra_counts or {})
+        apply_community_check(records, captures, annotations)
         ranked = rank_records(records, radius_m=self._radius_m)
         counts["ranked"] = sum(1 for r in ranked if r.get("rank") is not None)
         counts["below_interval"] = sum(
-            1 for r in ranked if r.get("rank") is not None and r.get("below_interval")
+            1 for r in ranked if r.get("rank") is not None and r.get("verdict") == "clear_below"
+        )
+        counts["needs_check"] = sum(
+            1 for r in ranked if r.get("rank") is not None and r.get("verdict") == "needs_check"
         )
         finished = self._clock()
         valued = [r for r in ranked if r.get("status") == "valued"]
@@ -989,6 +1106,8 @@ class ListingRadarRunner:
             "asking_price_twd": payload.get("total_price_twd"),
             "has_coordinates": payload.get("latitude") is not None
             and payload.get("longitude") is not None,
+            "latitude": _finite(payload.get("latitude")),
+            "longitude": _finite(payload.get("longitude")),
         }
         if payload.get("listing_type") != "sale":
             return {**record, "status": "not_sale", "status_reason": "僅支援中古屋"}
@@ -1043,6 +1162,7 @@ _STATUS_LABELS = {
     "not_sale": "非中古屋",
     "not_cached": "離線且無擷取",
     "prescreen_only": "僅初篩",
+    "duplicate": "同物件其他仲介刊登",
 }
 _RUN_STATUS_LABELS = {
     "completed": "完成",
@@ -1084,6 +1204,13 @@ def public_candidate(record: dict[str, Any]) -> dict[str, Any]:
         "down_price_percent",
         "prescreen_score",
         "prescreen_estimate_twd",
+        "verdict",
+        "property_key",
+        "duplicate_listings",
+        "property_min_price_twd",
+        "property_max_price_twd",
+        "days_on_market",
+        "observed_price_cuts",
     )
     out = {}
     for key in keys:
@@ -1095,8 +1222,9 @@ def public_candidate(record: dict[str, Any]) -> dict[str, Any]:
         if key in _TEXT_FIELDS and isinstance(value, str):
             value = scrub_contact_text(value)
         if key in {"rank", "asking_price_twd", "estimate_twd", "interval_low_twd",
-                   "interval_high_twd", "original_price_twd",
-                   "prescreen_estimate_twd"} and value is not None:
+                   "interval_high_twd", "original_price_twd", "prescreen_estimate_twd",
+                   "duplicate_listings", "property_min_price_twd", "property_max_price_twd",
+                   "observed_price_cuts"} and value is not None:
             value = int(value)
         out[key] = value
     return out
@@ -1113,6 +1241,52 @@ def _price_cut_text(item: dict[str, Any]) -> str:
     if not original or percent is None:
         return "—"
     return f"原 {_wan(original)}（−{percent:g}%）"
+
+
+def market_signal_lines(meta: dict[str, Any]) -> list[str]:
+    """Supply, asking-price level and negotiation gap, each only when it exists."""
+    lines: list[str] = []
+    heat = meta.get("market_heat")
+    if heat:
+        lines.append(
+            f"- 市場：在售 {heat.get('properties')} 戶（{heat.get('listings')} 筆刊登，"
+            f"已合併同物件多家仲介），刊登天數中位 "
+            f"{_fmt(heat.get('median_days_on_market'), '{:.0f}')} 天，"
+            f"有降價紀錄 {_fmt(heat.get('price_cut_share'), '{:.0%}')}；"
+            f"已累積 {heat.get('days_observed')} 天資料"
+        )
+    index = [row for row in meta.get("asking_index") or [] if row.get("station") == "all"]
+    if index:
+        row = index[0]
+        lines.append(
+            f"- 開價指數：開價／模型估值中位 {row['median_ratio']:.3f}"
+            f"（{row['properties']} 戶，四分位 {row['p25_ratio']:.3f}–{row['p75_ratio']:.3f}）"
+        )
+    drift = meta.get("asking_drift")
+    if drift:
+        lines.append(
+            f"- 開價變化：同一模型版本下 {drift['days']} 天內 {drift['pct_change']:+.1%}"
+        )
+    negotiation = meta.get("negotiation")
+    if negotiation:
+        if negotiation.get("usable"):
+            lines.append(
+                f"- 議價空間：{negotiation['matched']} 戶下架後對到實價登錄，成交／最後開價中位 "
+                f"{negotiation['median_deal_to_asking']:.3f}"
+                f"（四分位 {negotiation['p25_deal_to_asking']:.3f}–"
+                f"{negotiation['p75_deal_to_asking']:.3f}）"
+            )
+        else:
+            lines.append(
+                f"- 議價空間：資料累積中（已對到 {negotiation.get('matched', 0)} 戶，"
+                f"滿 {negotiation.get('min_matches')} 戶才顯示）"
+            )
+    return [*lines, ""] if lines else []
+
+
+def _fmt(value: Any, pattern: str) -> str:
+    number = _finite(value)
+    return "—" if number is None else pattern.format(number)
 
 
 def write_radar_report(output_dir: Path, result: RadarRunResult) -> tuple[Path, Path]:
@@ -1139,6 +1313,10 @@ def write_radar_report(output_dir: Path, result: RadarRunResult) -> tuple[Path, 
             "且開價低於估值的中古屋。"
         ),
         "caveats": list(RADAR_CAVEATS),
+        "market": {
+            key: result.meta.get(key)
+            for key in ("market_heat", "asking_index", "asking_drift", "negotiation")
+        },
         "candidates": candidates,
     }
     prescreen = result.meta.get("prescreen")
@@ -1161,8 +1339,10 @@ def write_radar_report(output_dir: Path, result: RadarRunResult) -> tuple[Path, 
             if k in _STATUS_LABELS
         ),
         f"- 排名候選：{result.counts.get('ranked', 0)} 筆，"
-        f"其中明顯低於區間 {result.counts.get('below_interval', 0)} 筆",
+        f"其中明顯低於區間 {result.counts.get('below_interval', 0)} 筆、"
+        f"低很多但需人工確認 {result.counts.get('needs_check', 0)} 筆",
         "",
+        *market_signal_lines(result.meta),
         "## 排名規則",
         "",
         report["ranking_rule"],
@@ -1183,15 +1363,20 @@ def write_radar_report(output_dir: Path, result: RadarRunResult) -> tuple[Path, 
         "",
         "## 候選物件",
         "",
-        "| # | 站 | 社區 | 坪數 | 屋齡 | 開價 | 降價 | 估值 | 90% 區間 | 差距 | 說明 |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        "| # | 判定 | 站 | 社區 | 坪數 | 屋齡 | 開價 | 降價 | 刊登天數 | 仲介數 | 估值 | "
+        "90% 區間 | 差距 | 說明 |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for item in candidates:
         gap = item.get("gap_pct")
         lines.append(
-            "| {rank} | {station} | {community} | {area} | {age} | {ask} | {cut} | {est} | "
-            "{low}–{high} | {gap} | [{reason}]({url}) |".format(
+            "| {rank} | {verdict} | {station} | {community} | {area} | {age} | {ask} | {cut} | "
+            "{days} | {agents} | {est} | {low}–{high} | {gap} | [{reason}]({url}) |".format(
                 rank=item["rank"],
+                verdict=VERDICT_LABELS.get(str(item.get("verdict")), "—"),
+                days=f"{item['days_on_market']:.0f}"
+                if item.get("days_on_market") is not None else "—",
+                agents=(item.get("duplicate_listings") or 0) + 1,
                 station=item.get("station_code") or "—",
                 community=str(item.get("community_name") or "—").replace("|", "／"),
                 cut=_price_cut_text(item),
@@ -1207,7 +1392,9 @@ def write_radar_report(output_dir: Path, result: RadarRunResult) -> tuple[Path, 
             )
         )
     if not candidates:
-        lines.append("| — | — | — | — | — | — | — | — | — | — | 本批沒有符合條件的候選 |")
+        lines.append(
+            "| — | — | — | — | — | — | — | — | — | — | — | — | — | 本批沒有符合條件的候選 |"
+        )
     md_path = output_dir / f"{result.radar_batch_id}.md"
     _atomic_write_text(md_path, "\n".join(lines) + "\n")
     return json_path, md_path

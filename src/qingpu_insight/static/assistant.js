@@ -151,6 +151,14 @@
     wrapper.appendChild(el("p", { "class": "asking-price-note" }, [
       "591 顯示的是開價，不代表最後成交價。",
     ]));
+    if (summary.offer_low_twd != null && summary.offer_high_twd != null) {
+      wrapper.appendChild(el("p", { "class": "price-summary-offer" }, [
+        "建議出價參考：" + display.formatTotalWan(summary.offer_low_twd)
+          + "～" + display.formatTotalWan(summary.offer_high_twd)
+          + "（依 " + summary.offer_basis_count
+          + " 戶 591 下架後的實價登錄成交與最後開價比例）",
+      ]));
+    }
     var rangeDetails = el("details", { "class": "model-range-details" });
     rangeDetails.appendChild(el("summary", {}, ["查看模型保守範圍（90%）"]));
     rangeDetails.appendChild(el("p", {}, [

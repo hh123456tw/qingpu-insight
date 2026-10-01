@@ -85,6 +85,29 @@ def _rounded_twd(value: float) -> int:
     return int(round(value))
 
 
+def with_offer_range(
+    summary: dict[str, Any] | None, negotiation: Mapping[str, Any] | None
+) -> dict[str, Any] | None:
+    """Add a suggested offer band from observed 591 delisting-to-deal ratios.
+
+    Only once the negotiation summary is usable (enough matched deals); before that the
+    summary is returned unchanged so the page shows nothing it cannot back up.
+    """
+    from qingpu_insight.listing_negotiation import offer_range
+
+    if summary is None:
+        return None
+    band = offer_range(summary.get("asking_twd"), negotiation)
+    if band is None or negotiation is None:
+        return summary
+    return {
+        **summary,
+        "offer_low_twd": band[0],
+        "offer_high_twd": band[1],
+        "offer_basis_count": int(negotiation.get("matched") or 0),
+    }
+
+
 def project_price_summary(pack: Any) -> dict[str, Any] | None:
     valuation = _field(pack, "valuation")
     if not isinstance(valuation, Mapping):

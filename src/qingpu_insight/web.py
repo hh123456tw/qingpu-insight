@@ -24,8 +24,9 @@ from qingpu_insight.conversation_models import public_model_catalog
 from qingpu_insight.conversation_web import create_conversation_blueprint
 from qingpu_insight.job_executor import LocalJobExecutor
 from qingpu_insight.jobs import JobService
+from qingpu_insight.listing_negotiation import load_summary as load_negotiation_summary
 from qingpu_insight.listing_radar import ListingRadarStore
-from qingpu_insight.listing_radar_runtime import radar_store
+from qingpu_insight.listing_radar_runtime import HISTORY_STORE_DIR, radar_store
 from qingpu_insight.listing_repository import ListingRepository
 from qingpu_insight.listing_update import ListingUpdateService
 from qingpu_insight.market_repository import MarketDataSource, repository_from_env
@@ -184,6 +185,11 @@ def create_app(
             catalog_getter=lambda: public_model_catalog(
                 gemini_configured=providers.gemini_configured(),
                 ollama_ready=providers.llm_model_catalog.ollama_model_ready("gemma4:e2b"),
+            ),
+            negotiation_getter=(
+                (lambda: load_negotiation_summary(root / HISTORY_STORE_DIR))
+                if root is not None
+                else None
             ),
         )
     )

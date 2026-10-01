@@ -1568,6 +1568,27 @@ def login_591(
     return 0
 
 
+def listing_history(root: Path, args) -> int:
+    """Fold complete 591 API batches into the daily panel; print supply and negotiation."""
+    from qingpu_insight.listing_history import ListingHistoryStore, heat_summary
+    from qingpu_insight.listing_radar_runtime import (
+        HISTORY_STORE_DIR,
+        RAW_LISTING_DIR,
+        negotiation_summary_for,
+    )
+
+    store = ListingHistoryStore(root / HISTORY_STORE_DIR)
+    panel, added = store.update(root / RAW_LISTING_DIR)
+    summary = {
+        "added_batches": added,
+        "panel_rows": int(len(panel)),
+        "market_heat": heat_summary(store.load_heat()),
+        "negotiation": negotiation_summary_for(root),
+    }
+    print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
+    return 0
+
+
 def listing_radar(root: Path, args) -> int:
     """低估物件雷達: capture, value and rank current 591 sale listings in one command."""
     try:
@@ -1986,6 +2007,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="dedicated Chrome user-data directory (overrides QINGPU_591_PROFILE_DIR)",
     )
 
+    subparsers.add_parser(
+        "listing-history",
+        help="fold complete 591 API batches into the daily history panel and print market heat",
+    )
+
     radar_parser = subparsers.add_parser(
         "listing-radar",
         help="低估物件雷達: value current 591 sale listings and rank clearly low asking prices",
@@ -2328,6 +2354,8 @@ def main(argv: list[str] | None = None) -> int:
         return login_591(root, args)
     if args.command == "listing-radar":
         return listing_radar(root, args)
+    if args.command == "listing-history":
+        return listing_history(root, args)
     if args.command == "job-status":
         return job_status(root, args)
     if args.command == "health-run":

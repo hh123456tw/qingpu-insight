@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlsplit
@@ -26,6 +26,7 @@ from qingpu_insight.conversation_contracts import (
 from qingpu_insight.conversation_presentation import (
     project_citation_details,
     project_price_summary,
+    with_offer_range,
 )
 from qingpu_insight.conversation_urls import (
     Unsupported591Url,
@@ -122,6 +123,7 @@ def _message_to_json(
     evidence_pack: Any | None = None,
     *,
     include_price_summary: bool = True,
+    negotiation: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     citation_details = (
         project_citation_details(evidence_pack, msg.citations)
@@ -143,7 +145,7 @@ def _message_to_json(
         "citations": msg.citations,
         "citation_details": citation_details,
         "price_summary": (
-            project_price_summary(evidence_pack)
+            with_offer_range(project_price_summary(evidence_pack), negotiation)
             if include_price_summary and msg.role == "assistant" and evidence_pack is not None
             else None
         ),
@@ -156,6 +158,7 @@ def create_conversation_blueprint(
     repository,
     *,
     catalog_getter: Callable[[], dict[str, Any]] | None = None,
+    negotiation_getter: Callable[[], Mapping[str, Any] | None] | None = None,
 ):
     # Every conversation route is trusted-local; unsafe methods also need the CSRF token.
     bp = guarded_blueprint(
@@ -451,6 +454,7 @@ def create_conversation_blueprint(
                     include_price_summary=(
                         message.sequence_no == first_assistant_seq
                     ),
+                    negotiation=negotiation_getter() if negotiation_getter else None,
                 )
                 for message in messages
             ],
