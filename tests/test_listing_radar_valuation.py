@@ -123,3 +123,62 @@ def test_unverified_parking_is_flagged(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert context["parking_unverified"] is True
     assert context["net_area_ping"] == pytest.approx(40.32)
+
+
+LIST_PAYLOAD = {
+    **{
+        key: value
+        for key, value in PAYLOAD.items()
+        if key
+        not in (
+            "latitude",
+            "longitude",
+            "main_building_area_ping",
+            "auxiliary_building_area_ping",
+            "common_area_ping",
+        )
+    },
+    "parking_type": "平面式",
+    "station_code": "A18",
+    "station_distance_m": 536.0,
+}
+
+
+def test_prescreen_uses_listed_station_without_coordinates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen = []
+    _patch(monkeypatch, {"version": "official-v3"})
+    original = conversation_valuation.valuate
+
+    def spy(input_, *args, **kwargs):
+        seen.append(input_)
+        return original(input_, *args, **kwargs)
+
+    monkeypatch.setattr(conversation_valuation, "valuate", spy)
+    public, context = conversation_valuation.valuate_listing_with_context(
+        _market(), object(), LIST_PAYLOAD, allow_listed_station=True  # type: ignore[arg-type]
+    )
+
+    assert (context["station_code"], context["station_distance_m"]) == ("A18", 536.0)
+    assert context["location_source"] == "591_listed_station"
+    assert context["parking_unverified"] is True
+    assert seen[0].twd97_x is None and seen[0].twd97_y is None
+    assert "591 列表標示" in public["limitations"][0]
+
+
+def test_listed_station_is_only_for_the_prescreen(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch(monkeypatch, {"version": "official-v3"})
+    market = _market()
+    with pytest.raises(ValueError, match="coordinates"):
+        conversation_valuation.valuate_listing_with_context(
+            market, object(), LIST_PAYLOAD  # type: ignore[arg-type]
+        )
+    for change in ({"station_code": None}, {"station_distance_m": 2400.0}):
+        with pytest.raises(conversation_valuation.ListingOutOfArea):
+            conversation_valuation.valuate_listing_with_context(
+                market,
+                object(),  # type: ignore[arg-type]
+                {**LIST_PAYLOAD, **change},
+                allow_listed_station=True,
+            )

@@ -1,7 +1,14 @@
 """低估物件雷達: which current 591 sale listings ask clearly less than the model expects.
 
-Data flow::
+Data flow (two stages when a 591 API batch exists)::
 
+    stage 1 (no network): latest API list batch (data/raw/listings/591/.../page-*.json)
+      -> prescreen_listings: every in-area listing valued from list fields only
+         (591's own station label + distance, area, layout, floor, age, building type,
+         parking without area, listed 公設比), prescreen score from that quick estimate
+      -> select_for_detail: top ``max_listings`` by prescreen score, plus listings whose
+         detail capture is still fresh (cache, no request)
+    stage 2, or the only stage without an API batch:
     latest sale listings (listing_current, else the listing_snapshots.parquet export)
       -> select_candidates (active, A17–A19, valid 591 sale URL, newest first, capped)
       -> ListingRadarRunner: one detail page per listing through the assistant's
@@ -46,6 +53,7 @@ from qingpu_insight.conversation_urls import (
     parse_initial_591_url,
 )
 from qingpu_insight.conversation_valuation import ListingOutOfArea
+from qingpu_insight.listing_api_591 import API_REPRESENTATION, extract_api_page
 
 RADAR_STATIONS = ("A17", "A18", "A19")
 DEFAULT_MAX_LISTINGS = 60
@@ -65,6 +73,7 @@ _LISTING_ID = re.compile(r"[0-9A-Za-z_-]{1,64}\Z")
 _SITE_SUFFIX = re.compile(r"\s*[-－|｜]\s*591售屋網\s*\Z")
 # Detail fields kept in the capture cache: what the valuation and the radar page need.
 # Address, builder and community names are dropped; free text is contact-scrubbed again.
+# (The community name shown on radar cards comes from the list API, never the cache.)
 _CACHED_DETAIL_FIELDS = (
     "listing_type",
     "source_listing_id",
@@ -85,7 +94,7 @@ _CACHED_DETAIL_FIELDS = (
     "common_area_ping",
     "listed_common_area_percent",
 )
-_TEXT_FIELDS = ("title", "layout", "building_type", "floor", "parking_type")
+_TEXT_FIELDS = ("title", "layout", "building_type", "floor", "parking_type", "community_name")
 _LIST_COLUMNS = ("confidence_reasons", "limitations", "flags", "ineligible_reasons")
 
 RADAR_CAVEATS = (
@@ -106,6 +115,20 @@ COMMON_AREA_SOURCE_LABELS = {
     "591_areas": "591 主建物／附屬／共用坪數換算",
     "591_listed": "591 標示公設比",
 }
+PRESCREEN_CAVEAT = (
+    "初篩只用 591 列表欄位（沒有座標，因此不使用同棟成交錨定；車位坪數未知時以含車位的"
+    "權狀坪數估算），只用來決定哪些物件值得開詳細頁；排名一律以詳細頁的精確估價為準。"
+)
+# List-API fields carried onto radar records and cards (never contact data).
+LIST_FIELDS = (
+    "community_name",
+    "original_price_twd",
+    "down_price_percent",
+    "posted_at",
+    "station_name",
+    "main_area_ping",
+)
+
 FLAG_LABELS = {
     "new_project": "新成屋（屋齡未滿 2 年）",
     "presale_anchor": "主要依同棟預售／完工前成交推估",
@@ -113,6 +136,7 @@ FLAG_LABELS = {
     "common_area_unused": "未使用公設比",
     "parking_unverified": "車位坪數無法確認",
     "wide_interval": "估價區間偏寬",
+    "price_cut": "近期降價",
 }
 
 
@@ -121,6 +145,8 @@ class CaptureFn(Protocol):
 
 
 ValuateFn = Callable[[dict[str, Any]], tuple[dict[str, Any], dict[str, Any]]]
+# Stage 1: many list-field payloads at once; each slot is (public, context) or the error.
+PrescreenFn = Callable[[list[dict[str, Any]]], list[Any]]
 ProgressFn = Callable[[dict[str, Any]], None]
 
 
@@ -444,6 +470,8 @@ def assess_record(record: dict[str, Any], *, radius_m: float = DEFAULT_RADIUS_M)
         flags.append("parking_unverified")
     if width is not None and width > WIDE_INTERVAL_RATIO:
         flags.append("wide_interval")
+    if _finite(record.get("original_price_twd")) and _finite(record.get("down_price_percent")):
+        flags.append("price_cut")
 
     out["ineligible_reasons"] = reasons
     out["eligible"] = not reasons
@@ -497,6 +525,259 @@ def rank_records(
     for record in assessed:
         record["rank"] = order.get(id(record))
     return assessed
+
+
+# --------------------------------------------------------------------------- stage 1
+
+
+@dataclass(frozen=True)
+class ListBatch:
+    """The latest 591 API list batch, already contact-free on disk."""
+
+    batch_id: str
+    started_at: str | None
+    is_complete: bool
+    listings: list[dict[str, Any]]
+
+
+def _api_manifests(raw_root: Path) -> list[tuple[dict[str, Any], Path]]:
+    found = []
+    if not raw_root.exists():
+        return found
+    for manifest_path in raw_root.rglob("manifest.json"):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(manifest, dict) or manifest.get("listing_type") != "sale":
+            continue
+        pages = manifest.get("pages")
+        if not isinstance(pages, list) or not pages:
+            continue
+        if not all(
+            isinstance(page, dict) and page.get("representation") == API_REPRESENTATION
+            for page in pages
+        ):
+            continue
+        found.append((manifest, manifest_path.parent))
+    return found
+
+
+def load_latest_api_batch(raw_root: Path) -> ListBatch | None:
+    """Newest complete API batch (else the newest partial one), deduplicated by houseid."""
+    manifests = _api_manifests(raw_root)
+    if not manifests:
+        return None
+
+    def recency(entry: tuple[dict[str, Any], Path]) -> tuple[int, float, str]:
+        manifest, path = entry
+        stamp = _parse_time(manifest.get("started_at"))
+        return (
+            1 if manifest.get("is_complete") is True else 0,
+            stamp.timestamp() if stamp else 0.0,
+            path.name,
+        )
+
+    manifest, batch_dir = max(manifests, key=recency)
+    listings: dict[str, dict[str, Any]] = {}
+    for page in sorted(manifest["pages"], key=lambda item: int(item.get("page_number") or 0)):
+        path = batch_dir / f"page-{int(page['page_number']):04d}.json"
+        try:
+            extraction = extract_api_page(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for listing in extraction.listings:
+            listings.setdefault(
+                listing.source_listing_id,
+                {**listing.payload, "source_listing_id": listing.source_listing_id},
+            )
+    return ListBatch(
+        batch_id=str(manifest.get("batch_id") or batch_dir.name),
+        started_at=manifest.get("started_at") if isinstance(manifest.get("started_at"), str)
+        else None,
+        is_complete=manifest.get("is_complete") is True,
+        listings=list(listings.values()),
+    )
+
+
+def prescreen_payload(listing: dict[str, Any]) -> dict[str, Any]:
+    """List-API fields in the shape the assistant's valuation reads (no coordinates)."""
+    return {
+        "listing_type": "sale",
+        "source_listing_id": str(listing.get("source_listing_id") or listing.get("id") or ""),
+        "title": listing.get("title"),
+        "total_price_twd": listing.get("asking_price_twd"),
+        "area_ping": listing.get("area_ping"),
+        "layout": listing.get("layout"),
+        "building_type": listing.get("building_type"),
+        "floor": listing.get("floor_text"),
+        "total_floors": listing.get("total_floors"),
+        "age_years": listing.get("building_age_years"),
+        "parking_type": listing.get("parking_type"),
+        "latitude": None,
+        "longitude": None,
+        "station_code": listing.get("station_code"),
+        "station_distance_m": listing.get("station_distance_m"),
+        "listed_common_area_percent": listing.get("listed_common_area_percent"),
+    }
+
+
+def _interval_score(asking: Any, estimate: Any, low: Any) -> tuple[float | None, float | None]:
+    asking, estimate, low = _finite(asking), _finite(estimate), _finite(low)
+    if not asking or not estimate or asking <= 0 or estimate <= 0:
+        return None, None
+    gap = (asking - estimate) / estimate
+    if not low or not 0 < low < estimate:
+        return None, gap
+    return math.log(estimate / asking) / math.log(estimate / low), gap
+
+
+def _list_record(listing: dict[str, Any]) -> dict[str, Any]:
+    listing_id = str(listing.get("source_listing_id") or listing.get("id") or "")
+    record = {
+        "source_listing_id": listing_id,
+        "url": listing.get("url"),
+        "title": listing.get("title"),
+        "station_code": listing.get("station_code"),
+        "station_distance_m": _finite(listing.get("station_distance_m")),
+        "area_ping": _finite(listing.get("area_ping")),
+        "layout": listing.get("layout"),
+        "floor": listing.get("floor_text"),
+        "age_years": _finite(listing.get("building_age_years")),
+        "building_type": listing.get("building_type"),
+        "asking_price_twd": listing.get("asking_price_twd"),
+    }
+    for key in LIST_FIELDS:
+        record[key] = listing.get(key)
+    return record
+
+
+PRESCREEN_CHUNK = 500
+
+
+def prescreen_listings(
+    listings: Iterable[dict[str, Any]],
+    prescreen: PrescreenFn,
+    *,
+    progress: ProgressFn | None = None,
+) -> list[dict[str, Any]]:
+    """Quick list-field estimate and prescreen score for every listing in the batch."""
+    items = list(listings)
+    records: list[dict[str, Any]] = []
+    for offset in range(0, len(items), PRESCREEN_CHUNK):
+        chunk = items[offset : offset + PRESCREEN_CHUNK]
+        try:
+            outcomes: list[Any] = list(prescreen([prescreen_payload(item) for item in chunk]))
+        except Exception as error:  # market data or model missing: nothing can be valued
+            outcomes = [error] * len(chunk)
+        if len(outcomes) != len(chunk):
+            outcomes = [RuntimeError("prescreen returned a different number of results")] * len(
+                chunk
+            )
+        for listing, outcome in zip(chunk, outcomes, strict=True):
+            records.append(_prescreen_record(listing, outcome))
+        if progress is not None:
+            progress({"stage": "prescreening", "processed": len(records), "total": len(items)})
+    return records
+
+
+def _prescreen_record(listing: dict[str, Any], outcome: Any) -> dict[str, Any]:
+    record = _list_record(listing)
+    if isinstance(outcome, ListingOutOfArea):
+        record.update(prescreen_status="out_of_area", prescreen_score=None)
+        return record
+    if isinstance(outcome, BaseException) or not isinstance(outcome, tuple):
+        message = str(outcome) if isinstance(outcome, ValueError) else type(outcome).__name__
+        record.update(
+            prescreen_status="valuation_failed",
+            prescreen_score=None,
+            prescreen_reason=scrub_contact_text(message[:200]),
+        )
+        return record
+    public, context = outcome
+    score, gap = _interval_score(
+        record["asking_price_twd"],
+        public.get("point_estimate_twd"),
+        public.get("low_estimate_twd"),
+    )
+    record.update(
+        prescreen_status="valued",
+        prescreen_estimate_twd=public.get("point_estimate_twd"),
+        prescreen_low_twd=public.get("low_estimate_twd"),
+        prescreen_high_twd=public.get("high_estimate_twd"),
+        prescreen_score=score,
+        prescreen_gap_pct=gap,
+        prescreen_parking_unverified=bool(context.get("parking_unverified")),
+    )
+    return record
+
+
+def _prescreen_order(record: dict[str, Any]) -> tuple[int, float, float, str]:
+    score = _finite(record.get("prescreen_score"))
+    gap = _finite(record.get("prescreen_gap_pct"))
+    if record.get("prescreen_status") == "out_of_area":
+        tier = 3
+    elif score is not None:
+        tier = 0
+    elif record.get("prescreen_status") == "valued":
+        tier = 1
+    else:
+        tier = 2  # list fields could not be valued; the detail page may still work
+    return (tier, -(score or 0.0), gap if gap is not None else 0.0,
+            str(record.get("source_listing_id")))
+
+
+def select_for_detail(
+    prescreened: list[dict[str, Any]],
+    max_listings: int,
+    fresh_ids: set[str] | frozenset[str] = frozenset(),
+) -> tuple[list[RadarCandidate], list[dict[str, Any]]]:
+    """Top ``max_listings`` by prescreen score, plus fresh cached ones; the rest stay list-only."""
+    ordered = sorted(
+        (r for r in prescreened if r.get("prescreen_status") != "out_of_area"),
+        key=_prescreen_order,
+    )
+    chosen: list[dict[str, Any]] = []
+    rest: list[dict[str, Any]] = []
+    for record in ordered:
+        url = _sale_url(record.get("url"))
+        listing_id = str(record.get("source_listing_id"))
+        if url is None or not _LISTING_ID.fullmatch(listing_id):
+            rest.append(record)
+        elif len(chosen) < max_listings or listing_id in fresh_ids:
+            chosen.append({**record, "url": url})
+        else:
+            rest.append(record)
+    rest.extend(r for r in prescreened if r.get("prescreen_status") == "out_of_area")
+    candidates = [
+        RadarCandidate(source_listing_id=str(r["source_listing_id"]), source_url=r["url"])
+        for r in chosen
+    ]
+    return candidates, rest
+
+
+def prescreen_only_record(record: dict[str, Any]) -> dict[str, Any]:
+    status = (
+        "out_of_area" if record.get("prescreen_status") == "out_of_area" else "prescreen_only"
+    )
+    reason = (
+        "591 列表標示不在 A17–A19 生活圈範圍內"
+        if status == "out_of_area"
+        else "僅初篩（未開詳細頁），不列入排名"
+    )
+    return {**record, "status": status, "status_reason": reason, "capture_source": "list"}
+
+
+def fresh_capture_ids(
+    store: ListingRadarStore, now: datetime, refresh_hours: float
+) -> set[str]:
+    window = timedelta(hours=refresh_hours)
+    fresh = set()
+    for listing_id, row in store.capture_index().items():
+        captured_at = _parse_time(row.get("captured_at"))
+        if captured_at is not None and now - captured_at < window:
+            fresh.add(listing_id)
+    return fresh
 
 
 # --------------------------------------------------------------------------- runner
@@ -553,10 +834,18 @@ class ListingRadarRunner:
         max_listings: int = DEFAULT_MAX_LISTINGS,
         source: str | None = None,
         progress: ProgressFn | None = None,
+        annotations: dict[str, dict[str, Any]] | None = None,
+        extra_records: list[dict[str, Any]] | None = None,
+        extra_counts: dict[str, int] | None = None,
+        extra_meta: dict[str, Any] | None = None,
+        started_at: datetime | None = None,
     ) -> RadarRunResult:
-        started = self._clock()
+        """Stage 2 (or the only stage). ``annotations`` adds list-API fields per listing id;
+        ``extra_records`` are stage-1 rows that never get a detail page (never ranked)."""
+        started = started_at or self._clock()
         batch_id = new_radar_batch_id(started)
         selected = candidates[:max_listings]
+        annotations = annotations or {}
         captures = self._store.capture_index()
         counts: Counter[str] = Counter(candidates=len(selected))
         records: list[dict[str, Any]] = []
@@ -588,6 +877,9 @@ class ListingRadarRunner:
                 counts["captured_live"] += 1
                 consecutive_failures = consecutive_failures + 1 if failed else 0
                 record = self._from_capture_row(candidate, row, source="live")
+            extra = annotations.get(candidate.source_listing_id)
+            if extra:
+                record = {**extra, **{k: v for k, v in record.items() if v is not None}}
             counts[record["status"]] += 1
             records.append(record)
             if progress is not None:
@@ -605,6 +897,10 @@ class ListingRadarRunner:
                 status = "stopped_failures"
                 break
 
+        for extra_record in extra_records or []:
+            counts[str(extra_record.get("status"))] += 1
+            records.append(extra_record)
+        counts.update(extra_counts or {})
         ranked = rank_records(records, radius_m=self._radius_m)
         counts["ranked"] = sum(1 for r in ranked if r.get("rank") is not None)
         counts["below_interval"] = sum(
@@ -628,6 +924,7 @@ class ListingRadarRunner:
                 "delay_seconds": list(self._delay),
                 "radius_m": self._radius_m,
                 "caveats": list(RADAR_CAVEATS),
+                **(extra_meta or {}),
             },
         )
         self._store.save_run(result)
@@ -745,6 +1042,7 @@ _STATUS_LABELS = {
     "out_of_area": "不在生活圈",
     "not_sale": "非中古屋",
     "not_cached": "離線且無擷取",
+    "prescreen_only": "僅初篩",
 }
 _RUN_STATUS_LABELS = {
     "completed": "完成",
@@ -781,6 +1079,11 @@ def public_candidate(record: dict[str, Any]) -> dict[str, Any]:
         "reason",
         "captured_at",
         "model_version",
+        "community_name",
+        "original_price_twd",
+        "down_price_percent",
+        "prescreen_score",
+        "prescreen_estimate_twd",
     )
     out = {}
     for key in keys:
@@ -792,7 +1095,8 @@ def public_candidate(record: dict[str, Any]) -> dict[str, Any]:
         if key in _TEXT_FIELDS and isinstance(value, str):
             value = scrub_contact_text(value)
         if key in {"rank", "asking_price_twd", "estimate_twd", "interval_low_twd",
-                   "interval_high_twd"} and value is not None:
+                   "interval_high_twd", "original_price_twd",
+                   "prescreen_estimate_twd"} and value is not None:
             value = int(value)
         out[key] = value
     return out
@@ -801,6 +1105,14 @@ def public_candidate(record: dict[str, Any]) -> dict[str, Any]:
 def _wan(value: Any) -> str:
     number = _finite(value)
     return "—" if number is None else f"{number / 10000:,.0f} 萬"
+
+
+def _price_cut_text(item: dict[str, Any]) -> str:
+    original = _finite(item.get("original_price_twd"))
+    percent = _finite(item.get("down_price_percent"))
+    if not original or percent is None:
+        return "—"
+    return f"原 {_wan(original)}（−{percent:g}%）"
 
 
 def write_radar_report(output_dir: Path, result: RadarRunResult) -> tuple[Path, Path]:
@@ -829,6 +1141,10 @@ def write_radar_report(output_dir: Path, result: RadarRunResult) -> tuple[Path, 
         "caveats": list(RADAR_CAVEATS),
         "candidates": candidates,
     }
+    prescreen = result.meta.get("prescreen")
+    if prescreen:
+        report["prescreen"] = prescreen
+        report["caveats"].append(PRESCREEN_CAVEAT)
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / f"{result.radar_batch_id}.json"
     _atomic_write_text(json_path, json.dumps(report, ensure_ascii=False, indent=2, default=str))
@@ -851,22 +1167,34 @@ def write_radar_report(output_dir: Path, result: RadarRunResult) -> tuple[Path, 
         "",
         report["ranking_rule"],
         "",
+        *(
+            [
+                f"- 兩階段：初篩 {prescreen.get('listings', 0)} 筆（列表批次 "
+                f"{prescreen.get('list_batch_id')}），開詳細頁精算 "
+                f"{prescreen.get('detail_candidates', 0)} 筆",
+            ]
+            if prescreen
+            else []
+        ),
+        "",
         "## 請先讀這段",
         "",
-        *[f"- {caveat}" for caveat in RADAR_CAVEATS],
+        *[f"- {caveat}" for caveat in report["caveats"]],
         "",
         "## 候選物件",
         "",
-        "| # | 站 | 坪數 | 屋齡 | 開價 | 估值 | 90% 區間 | 差距 | 說明 |",
-        "|---|---|---|---|---|---|---|---|---|",
+        "| # | 站 | 社區 | 坪數 | 屋齡 | 開價 | 降價 | 估值 | 90% 區間 | 差距 | 說明 |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for item in candidates:
         gap = item.get("gap_pct")
         lines.append(
-            "| {rank} | {station} | {area} | {age} | {ask} | {est} | {low}–{high} | {gap} | "
-            "[{reason}]({url}) |".format(
+            "| {rank} | {station} | {community} | {area} | {age} | {ask} | {cut} | {est} | "
+            "{low}–{high} | {gap} | [{reason}]({url}) |".format(
                 rank=item["rank"],
                 station=item.get("station_code") or "—",
+                community=str(item.get("community_name") or "—").replace("|", "／"),
+                cut=_price_cut_text(item),
                 area=f"{item['area_ping']:g}" if item.get("area_ping") else "—",
                 age=f"{item['age_years']:g}" if item.get("age_years") is not None else "—",
                 ask=_wan(item.get("asking_price_twd")),
@@ -879,7 +1207,7 @@ def write_radar_report(output_dir: Path, result: RadarRunResult) -> tuple[Path, 
             )
         )
     if not candidates:
-        lines.append("| — | — | — | — | — | — | — | — | 本批沒有符合條件的候選 |")
+        lines.append("| — | — | — | — | — | — | — | — | — | — | 本批沒有符合條件的候選 |")
     md_path = output_dir / f"{result.radar_batch_id}.md"
     _atomic_write_text(md_path, "\n".join(lines) + "\n")
     return json_path, md_path

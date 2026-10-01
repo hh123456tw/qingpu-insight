@@ -22,21 +22,40 @@ from qingpu_insight.conversation_urls import Unsupported591Url
 from qingpu_insight.jobs import JobService, JobSubmission
 from qingpu_insight.listing_radar import (
     DEFAULT_DELAY_SECONDS,
+    LIST_FIELDS,
+    PRESCREEN_CAVEAT,
     RADAR_JOB_TYPE,
     CaptureFn,
     ListingRadarRequest,
     ListingRadarRunner,
     ListingRadarStore,
+    PrescreenFn,
     ProgressFn,
+    RadarCandidate,
     RadarRunResult,
     ValuateFn,
+    fresh_capture_ids,
     load_candidate_frame,
+    load_latest_api_batch,
+    prescreen_listings,
+    prescreen_only_record,
     select_candidates,
+    select_for_detail,
     write_radar_report,
 )
 
 RADAR_STORE_DIR = Path("data") / "processed" / "listing_radar"
 RADAR_REPORT_DIR = Path("outputs") / "listing-radar"
+RAW_LISTING_DIR = Path("data") / "raw" / "listings" / "591"
+_ANNOTATION_FIELDS = (
+    *LIST_FIELDS,
+    "prescreen_status",
+    "prescreen_score",
+    "prescreen_gap_pct",
+    "prescreen_estimate_twd",
+    "prescreen_low_twd",
+    "prescreen_high_twd",
+)
 MIN_POLITE_DELAY_SECONDS = 3.0
 
 
@@ -112,6 +131,7 @@ class RadarRunOptions:
     page_timeout_seconds: int = 30
     profile_dir: str | None = None
     offline: bool = False
+    prescreen: bool = True
 
     def __post_init__(self) -> None:
         ListingRadarRequest(max_listings=self.max_listings, refresh_hours=self.refresh_hours)
@@ -122,8 +142,12 @@ class RadarRunOptions:
             raise ValueError("page timeout must be between 5 and 300 seconds")
 
 
-def _default_valuate(root: Path) -> ValuateFn:
-    from qingpu_insight.conversation_valuation import valuate_listing_with_context
+def _default_valuators(root: Path) -> tuple[ValuateFn, PrescreenFn]:
+    """Detail valuation (stage 2) and list-field prescreen (stage 1) on one market snapshot."""
+    from qingpu_insight.conversation_valuation import (
+        prescreen_listings_with_context,
+        valuate_listing_with_context,
+    )
     from qingpu_insight.market_repository import repository_from_env
     from qingpu_insight.market_snapshot import ModelFrameCache
     from qingpu_insight.valuation import ModelRegistry
@@ -131,8 +155,68 @@ def _default_valuate(root: Path) -> ValuateFn:
     data_source = repository_from_env(root)
     registry = ModelRegistry(root / "artifacts")
     snapshots = ModelFrameCache(data_source)
-    return lambda payload: valuate_listing_with_context(
-        data_source, registry, payload, snapshots=snapshots
+    return (
+        lambda payload: valuate_listing_with_context(
+            data_source, registry, payload, snapshots=snapshots
+        ),
+        lambda payloads: prescreen_listings_with_context(
+            data_source, registry, payloads, snapshots=snapshots
+        ),
+    )
+
+
+def _default_valuate(root: Path) -> ValuateFn:
+    return _default_valuators(root)[0]
+
+
+@dataclass
+class _Plan:
+    candidates: list[RadarCandidate]
+    source: str
+    max_listings: int
+    annotations: dict[str, dict[str, Any]]
+    extra_records: list[dict[str, Any]]
+    extra_counts: dict[str, int]
+    extra_meta: dict[str, Any]
+
+
+def _two_stage_plan(
+    root: Path,
+    options: RadarRunOptions,
+    prescreen: PrescreenFn,
+    *,
+    clock: Callable[[], datetime],
+    progress: ProgressFn | None,
+) -> _Plan | None:
+    """Stage 1 over the latest API list batch; None when there is no such batch."""
+    batch = load_latest_api_batch(root / RAW_LISTING_DIR)
+    if batch is None or not batch.listings:
+        return None
+    prescreened = prescreen_listings(batch.listings, prescreen, progress=progress)
+    fresh = fresh_capture_ids(radar_store(root), clock(), options.refresh_hours)
+    candidates, rest = select_for_detail(prescreened, options.max_listings, fresh)
+    annotations = {
+        str(record["source_listing_id"]): {key: record.get(key) for key in _ANNOTATION_FIELDS}
+        for record in prescreened
+    }
+    valued = sum(1 for r in prescreened if r.get("prescreen_status") == "valued")
+    summary = {
+        "list_batch_id": batch.batch_id,
+        "list_batch_started_at": batch.started_at,
+        "list_batch_complete": batch.is_complete,
+        "listings": len(prescreened),
+        "valued": valued,
+        "detail_candidates": len(candidates),
+        "detail_limit": options.max_listings,
+    }
+    return _Plan(
+        candidates=candidates,
+        source=f"591-api:{batch.batch_id}",
+        max_listings=len(candidates),
+        annotations=annotations,
+        extra_records=[prescreen_only_record(record) for record in rest],
+        extra_counts={"prescreened": len(prescreened), "prescreen_valued": valued},
+        extra_meta={"prescreen": summary, "prescreen_caveat": PRESCREEN_CAVEAT},
     )
 
 
@@ -173,16 +257,35 @@ def run_listing_radar(
     capture: CaptureFn | None = None,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     sleep: Callable[[float], None] | None = None,
+    prescreen: PrescreenFn | None = None,
 ) -> tuple[RadarRunResult, Path, Path]:
-    """Select, capture, value, rank, persist and report one radar batch."""
+    """Select (two-stage when an API list batch exists), capture, value, rank and report."""
     from qingpu_insight.config import get_settings
 
     settings = get_settings(root)
-    repo = repository if repository is not None else _default_repository(root)
-    frame, source = load_candidate_frame(
-        repo, root / "data" / "processed" / "listing_snapshots.parquet"
-    )
-    candidates = select_candidates(frame, options.max_listings)
+    started = clock()
+    plan: _Plan | None = None
+    if options.prescreen:
+        if prescreen is None and load_latest_api_batch(root / RAW_LISTING_DIR) is not None:
+            default_valuate, prescreen = _default_valuators(root)
+            valuate = valuate or default_valuate
+        if prescreen is not None:
+            plan = _two_stage_plan(root, options, prescreen, clock=clock, progress=progress)
+    if plan is None:
+        repo = repository if repository is not None else _default_repository(root)
+        frame, source = load_candidate_frame(
+            repo, root / "data" / "processed" / "listing_snapshots.parquet"
+        )
+        plan = _Plan(
+            candidates=select_candidates(frame, options.max_listings),
+            source=source,
+            max_listings=options.max_listings,
+            annotations={},
+            extra_records=[],
+            extra_counts={},
+            extra_meta={},
+        )
+    candidates = plan.candidates
     if progress is not None:
         progress({"stage": "selected", "processed": 0, "total": len(candidates)})
 
@@ -204,7 +307,15 @@ def run_listing_radar(
             **runner_kwargs,
         )
         result = runner.run(
-            candidates, max_listings=options.max_listings, source=source, progress=progress
+            candidates,
+            max_listings=plan.max_listings,
+            source=plan.source,
+            progress=progress,
+            annotations=plan.annotations,
+            extra_records=plan.extra_records,
+            extra_counts=plan.extra_counts,
+            extra_meta=plan.extra_meta,
+            started_at=started,
         )
     finally:
         if session is not None:

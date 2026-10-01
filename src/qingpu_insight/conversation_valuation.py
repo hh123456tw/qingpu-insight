@@ -20,7 +20,7 @@ from qingpu_insight.market_metrics import MarketFilters
 from qingpu_insight.market_repository import MarketDataSource
 from qingpu_insight.market_snapshot import ModelFrameCache
 from qingpu_insight.model_features import ValuationInput, build_model_frame
-from qingpu_insight.valuation import ModelRegistry, valuate
+from qingpu_insight.valuation import ModelRegistry, quick_estimates, valuate
 
 
 def listing_market_comparables(
@@ -236,6 +236,19 @@ def listing_common_area(
     return None, unused, skipped
 
 
+_LISTED_STATIONS = ("A17", "A18", "A19")
+
+
+def _listed_station(payload: dict[str, Any]) -> tuple[str, float]:
+    code = payload.get("station_code")
+    distance = _positive_listing_number(payload.get("station_distance_m"))
+    if code not in _LISTED_STATIONS:
+        raise ListingOutOfArea("591 did not list an A17–A19 station")
+    if distance is None:
+        raise ValueError("listing lacks a listed station distance")
+    return str(code), float(distance)
+
+
 def valuate_listing(
     data_source: MarketDataSource,
     registry: ModelRegistry,
@@ -256,12 +269,103 @@ def valuate_listing_with_context(
     payload: dict[str, Any],
     *,
     snapshots: ModelFrameCache | None = None,
+    allow_listed_station: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """The assistant's valuation plus how it was reached (anchor, station, parking, fallback).
 
     The listing radar ranks listings with the same numbers the assistant shows, and needs
     the context to judge how far each estimate can be trusted.
+
+    ``allow_listed_station`` is only for the radar's list-field prescreen: without
+    coordinates it takes 591's own nearest-station label and distance
+    (``station_code`` / ``station_distance_m``), so there is no same-building anchor.
     """
+    prepared = _prepare_listing_input(payload, allow_listed_station=allow_listed_station)
+    latest_data_date, model_frame = _market_snapshot(
+        data_source, prepared["transaction_type"], snapshots
+    )
+    result = valuate(
+        prepared["input"],
+        registry,
+        model_frame,
+        latest_data_date=latest_data_date,
+    )
+    return _listing_valuation_result(prepared, result, payload)
+
+
+def prescreen_listings_with_context(
+    data_source: MarketDataSource,
+    registry: ModelRegistry,
+    payloads: list[dict[str, Any]],
+    *,
+    snapshots: ModelFrameCache | None = None,
+) -> list[tuple[dict[str, Any], dict[str, Any]] | Exception]:
+    """The radar's list-field prescreen: one model call for many coordinate-less listings.
+
+    Same inputs and price/interval as :func:`valuate_listing_with_context` with
+    ``allow_listed_station=True``, but without comparables, factors or confidence.
+    Per-listing problems come back as the exception in that listing's slot.
+    """
+    outcomes: list[tuple[dict[str, Any], dict[str, Any]] | Exception | None] = []
+    prepared_items: list[tuple[int, dict[str, Any]]] = []
+    for index, payload in enumerate(payloads):
+        try:
+            prepared = _prepare_listing_input(payload, allow_listed_station=True)
+        except Exception as error:  # missing features, out of area, odd numbers
+            outcomes.append(error)
+            continue
+        outcomes.append(None)
+        prepared_items.append((index, prepared))
+    if not prepared_items:
+        return [outcome for outcome in outcomes if outcome is not None]
+    latest_data_date, model_frame = _market_snapshot(data_source, "resale", snapshots)
+    resale = [(i, p) for i, p in prepared_items if p["transaction_type"] == "resale"]
+    estimates = quick_estimates(
+        [p["input"] for _, p in resale], registry, latest_data_date=latest_data_date
+    )
+    if estimates is None:
+        # Degraded model path: the per-listing valuation knows how to fall back.
+        for index, prepared in prepared_items:
+            try:
+                result = valuate(
+                    prepared["input"], registry, model_frame, latest_data_date=latest_data_date
+                )
+                outcomes[index] = _listing_valuation_result(prepared, result, payloads[index])
+            except Exception as error:
+                outcomes[index] = error
+    else:
+        for (index, prepared), estimate in zip(resale, estimates, strict=True):
+            result = {**estimate, "confidence": None, "confidence_reasons": []}
+            outcomes[index] = _listing_valuation_result(prepared, result, payloads[index])
+        for index, _prepared in prepared_items:
+            if outcomes[index] is None:
+                outcomes[index] = ValueError("prescreen supports resale listings only")
+    return [outcome for outcome in outcomes if outcome is not None]
+
+
+def _market_snapshot(
+    data_source: MarketDataSource,
+    transaction_type: str,
+    snapshots: ModelFrameCache | None,
+) -> tuple[pd.Timestamp, pd.DataFrame]:
+    if snapshots is not None:
+        snapshot = snapshots.snapshot(transaction_type)
+        if snapshot.row_count == 0:
+            raise ValueError("market data unavailable")
+        return snapshot.latest_data_date, snapshot.model_frame
+    market = data_source.load(MarketFilters(transaction_type=transaction_type))
+    if market.empty:
+        raise ValueError("market data unavailable")
+    return (
+        pd.Timestamp(market["transaction_date"].max()),
+        build_model_frame(market, transaction_type),
+    )
+
+
+def _prepare_listing_input(
+    payload: dict[str, Any], *, allow_listed_station: bool
+) -> dict[str, Any]:
+    """591 listing fields -> the model's ValuationInput plus the notes the result needs."""
     transaction_type = "presale" if payload.get("listing_type") == "newhouse" else "resale"
     layout_text = str(payload.get("layout") or "")
     layout = _LAYOUT_RE.search(layout_text)
@@ -285,16 +389,23 @@ def valuate_listing_with_context(
 
     longitude = payload.get("longitude")
     latitude = payload.get("latitude")
+    listed_station = False
     if longitude is None or latitude is None:
-        raise ValueError("listing lacks coordinates")
-    station_code, station_distance_m = station_from_coords(
-        float(longitude), float(latitude)
-    )
+        if not allow_listed_station:
+            raise ValueError("listing lacks coordinates")
+        station_code, station_distance_m = _listed_station(payload)
+        listed_station = True
+    else:
+        station_code, station_distance_m = station_from_coords(
+            float(longitude), float(latitude)
+        )
     if station_distance_m > MAX_STATION_DISTANCE_M:
         raise ListingOutOfArea(
             f"listing is {station_distance_m:.0f} m from the nearest A17–A19 station"
         )
 
+    if payload.get("total_floors") is None:
+        raise ValueError("listing lacks total floors")
     total_floors = int(payload["total_floors"])
     floor = int(floor_match.group("floor"))
     total_area = float(payload["area_ping"])
@@ -308,7 +419,12 @@ def valuate_listing_with_context(
         payload.get("building_type"),
         total_floors,
     )
-    age = None if transaction_type == "presale" else float(payload["age_years"])
+    if transaction_type == "presale":
+        age = None
+    elif payload.get("age_years") is None:
+        raise ValueError("listing lacks building age")
+    else:
+        age = float(payload["age_years"])
     raw_parking = str(payload.get("parking_type") or "").strip()
     parking_unverified = bool(raw_parking) and "無車位" not in raw_parking and not parking_type
     ratio, common_area, common_area_note = listing_common_area(
@@ -318,8 +434,6 @@ def valuate_listing_with_context(
         parking_area=parking_area,
         parking_unverified=parking_unverified,
     )
-    longitude = payload.get("longitude")
-    latitude = payload.get("latitude")
     coordinates = (
         wgs84_to_twd97(float(longitude), float(latitude))
         if longitude is not None and latitude is not None
@@ -346,28 +460,38 @@ def valuate_listing_with_context(
         twd97_y=coordinates[1],
         common_area_ratio=ratio,
     )
-    if snapshots is not None:
-        snapshot = snapshots.snapshot(transaction_type)
-        if snapshot.row_count == 0:
-            raise ValueError("market data unavailable")
-        latest_data_date = snapshot.latest_data_date
-        model_frame = snapshot.model_frame
-    else:
-        market = data_source.load(MarketFilters(transaction_type=transaction_type))
-        if market.empty:
-            raise ValueError("market data unavailable")
-        latest_data_date = pd.Timestamp(market["transaction_date"].max())
-        model_frame = build_model_frame(market, transaction_type)
-    result = valuate(
-        valuation_input,
-        registry,
-        model_frame,
-        latest_data_date=latest_data_date,
-    )
+    return {
+        "input": valuation_input,
+        "transaction_type": transaction_type,
+        "station_code": station_code,
+        "station_distance_m": station_distance_m,
+        "listed_station": listed_station,
+        "total_area": total_area,
+        "net_area": area,
+        "parking_type": parking_type,
+        "parking_area": parking_area,
+        "parking_unverified": parking_unverified,
+        "age": age,
+        "common_area": common_area,
+        "common_area_note": common_area_note,
+        "layout_note": layout_note,
+    }
+
+
+def _listing_valuation_result(
+    prepared: dict[str, Any], result: dict[str, Any], payload: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    station_distance_m = prepared["station_distance_m"]
+    parking_type = prepared["parking_type"]
     low, high = result["interval_total_price_twd"]
     model = result.get("model") or {}
     limitations = [
-        f"捷運生活圈與距離由物件座標直接計算（距捷運站約 {station_distance_m:g} 公尺）"
+        (
+            f"捷運站與距離採 591 列表標示（約 {station_distance_m:g} 公尺）；"
+            "沒有座標，因此未使用同棟成交錨定"
+        )
+        if prepared["listed_station"]
+        else f"捷運生活圈與距離由物件座標直接計算（距捷運站約 {station_distance_m:g} 公尺）"
     ]
     if payload.get("parking_type") and not parking_type:
         limitations.append(
@@ -375,27 +499,30 @@ def valuate_listing_with_context(
         )
     elif parking_type:
         limitations.append(
-            f"房屋坪數已從建物總坪數扣除車位 {parking_area:g} 坪"
+            f"房屋坪數已從建物總坪數扣除車位 {prepared['parking_area']:g} 坪"
         )
-    limitations.append(common_area_note)
-    if layout_note is not None:
-        limitations.append(layout_note)
+    limitations.append(prepared["common_area_note"])
+    if prepared["layout_note"] is not None:
+        limitations.append(prepared["layout_note"])
     context = {
-        "transaction_type": transaction_type,
-        "station_code": station_code,
+        "transaction_type": prepared["transaction_type"],
+        "station_code": prepared["station_code"],
         "station_distance_m": station_distance_m,
-        "total_area_ping": total_area,
-        "net_area_ping": area,
-        "parking_area_ping": parking_area,
-        "parking_unverified": parking_unverified,
-        "age_years": age,
+        "total_area_ping": prepared["total_area"],
+        "net_area_ping": prepared["net_area"],
+        "parking_area_ping": prepared["parking_area"],
+        "parking_unverified": prepared["parking_unverified"],
+        "age_years": prepared["age"],
         "price_anchor": model.get("price_anchor"),
         "degraded": bool(result.get("degraded", False)),
         "degraded_reason": result.get("degraded_reason"),
         "model_name": model.get("name"),
+        "location_source": (
+            "591_listed_station" if prepared["listed_station"] else "coordinates"
+        ),
     }
     public = {
-        "common_area": common_area,
+        "common_area": prepared["common_area"],
         "point_estimate_twd": result["estimated_total_price_twd"],
         "estimated_building_price_twd": result.get("estimated_building_price_twd"),
         "estimated_parking_price_twd": result.get("estimated_parking_price_twd"),

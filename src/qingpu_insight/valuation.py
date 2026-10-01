@@ -546,6 +546,120 @@ def confidence_assessment(
     return {"confidence": "high", "confidence_reasons": []}
 
 
+def _priced_total(
+    bundle: ValuationBundle, input_: ValuationInput, unit_price: float, anchored: bool | None
+) -> dict[str, Any]:
+    """Total price and its 90% interval from the model's building unit price."""
+    parking_estimate = estimate_parking_price(bundle.parking_price_policy, input_.parking_type)
+    building_price, parking_price, total_price = compose_total_price(
+        unit_price, input_.building_area_ping, parking_estimate
+    )
+    total_radii = bundle.interval_total_log_radius_by_group
+    total_factor: float | None = None
+    if total_radii is not None:
+        complete = all(
+            getattr(input_, column, None) is not None for column in OPTIONAL_FEATURE_COLUMNS
+        )
+        total_factor = float(np.exp(total_radii[interval_group(bool(anchored), complete)]))
+        interval = (unit_price / total_factor, unit_price * total_factor)
+    else:
+        interval = prediction_interval(bundle, unit_price, anchored)
+    low, high = interval
+    building_low = round(low * input_.building_area_ping)
+    building_high = round(high * input_.building_area_ping)
+    if total_factor is not None:
+        interval_total = (round(total_price / total_factor), round(total_price * total_factor))
+    elif parking_price is not None:
+        interval_total = (building_low + parking_price, building_high + parking_price)
+    else:
+        interval_total = (building_low, building_high)
+    return {
+        "parking_estimate": parking_estimate,
+        "building_price": building_price,
+        "parking_price": parking_price,
+        "total_price": total_price,
+        "interval": interval,
+        "interval_total": interval_total,
+    }
+
+
+def quick_estimates(
+    inputs: list[ValuationInput],
+    registry: ModelRegistry,
+    *,
+    latest_data_date: pd.Timestamp | None = None,
+    stale_after_days: int = 180,
+    valuation_date: pd.Timestamp | None = None,
+) -> list[dict[str, Any]] | None:
+    """Point estimates and 90% total intervals for many inputs in one model call.
+
+    The same numbers :func:`valuate` returns for the official model, without factors,
+    comparables or confidence (the expensive parts). Returns ``None`` whenever
+    :func:`valuate` would take a degraded path (no model, legacy parking contract, stale
+    model, mixed transaction types); callers then fall back to :func:`valuate` per input.
+    """
+    if not inputs:
+        return []
+    transaction_types = {value.transaction_type for value in inputs}
+    if len(transaction_types) != 1:
+        return None
+    transaction_type = transaction_types.pop()
+    try:
+        bundle = registry.get(transaction_type)
+    except ModelUnavailableError:
+        return None
+    if bundle.parking_price_policy is None and (
+        "parking_type" in bundle.feature_columns
+        or "parking_area_ping" in bundle.feature_columns
+    ):
+        return None
+    if (
+        transaction_type == "resale"
+        and latest_data_date is not None
+        and model_age_days(bundle, latest_data_date) > stale_after_days
+    ):
+        return None
+    priced_at = pricing_date(bundle, valuation_date)
+    rows = pd.concat([input_frame(value, priced_at) for value in inputs], ignore_index=True)
+    if "parking_type" in bundle.feature_columns:
+        rows["parking_type"] = [value.parking_type for value in inputs]
+    if "parking_area_ping" in bundle.feature_columns:
+        rows["parking_area_ping"] = [value.parking_area_ping for value in inputs]
+    unit_prices = np.asarray(bundle.pipeline.predict(rows), dtype=float)
+    sources = (
+        [str(value) for value in bundle.pipeline.prior_sources(rows)]
+        if hasattr(bundle.pipeline, "prior_sources")
+        else [None] * len(inputs)
+    )
+    anchored = (
+        [bool(value) for value in bundle.pipeline.anchored_mask(rows)]
+        if hasattr(bundle.pipeline, "anchored_mask")
+        else [None] * len(inputs)
+    )
+    results = []
+    for index, value in enumerate(inputs):
+        unit_price = float(unit_prices[index])
+        priced = _priced_total(bundle, value, unit_price, anchored[index])
+        model: dict[str, Any] = {
+            "name": bundle.model_name,
+            "version": bundle.model_version,
+            "transaction_type": bundle.transaction_type,
+        }
+        if sources[index] in _PRICE_ANCHORS:
+            model["price_anchor"] = _PRICE_ANCHORS[sources[index]]
+        results.append(
+            {
+                "estimated_unit_price_per_ping_twd": round(unit_price),
+                "estimated_total_price_twd": round(priced["total_price"]),
+                "interval_total_price_twd": priced["interval_total"],
+                "data_date": bundle.data_max_date,
+                "degraded": False,
+                "model": model,
+            }
+        )
+    return results
+
+
 def valuate(
     input_: ValuationInput,
     registry: ModelRegistry,
@@ -769,20 +883,12 @@ def valuate(
         if hasattr(bundle.pipeline, "anchored_mask")
         else None
     )
-    parking_estimate = estimate_parking_price(bundle.parking_price_policy, input_.parking_type)
-    building_price, parking_price, total_price = compose_total_price(
-        unit_price, input_.building_area_ping, parking_estimate
-    )
-    total_radii = bundle.interval_total_log_radius_by_group
-    total_factor: float | None = None
-    if total_radii is not None:
-        complete = all(
-            getattr(input_, column, None) is not None for column in OPTIONAL_FEATURE_COLUMNS
-        )
-        total_factor = float(np.exp(total_radii[interval_group(bool(anchored), complete)]))
-        interval = (unit_price / total_factor, unit_price * total_factor)
-    else:
-        interval = prediction_interval(bundle, unit_price, anchored)
+    priced = _priced_total(bundle, input_, unit_price, anchored)
+    parking_estimate = priced["parking_estimate"]
+    building_price = priced["building_price"]
+    parking_price = priced["parking_price"]
+    total_price = priced["total_price"]
+    interval = priced["interval"]
 
     factors = local_factors(bundle, row)
     comparables_result = similar_transactions(bundle, row, market)
@@ -811,15 +917,7 @@ def valuate(
         if assessing["confidence"] == "high":
             assessing["confidence"] = "medium"
 
-    low, high = interval
-    building_low = round(low * input_.building_area_ping)
-    building_high = round(high * input_.building_area_ping)
-    if total_factor is not None:
-        interval_total = (round(total_price / total_factor), round(total_price * total_factor))
-    elif parking_price is not None:
-        interval_total = (building_low + parking_price, building_high + parking_price)
-    else:
-        interval_total = (building_low, building_high)
+    interval_total = priced["interval_total"]
 
     result: dict[str, Any] = {
         "transaction_type": input_.transaction_type,

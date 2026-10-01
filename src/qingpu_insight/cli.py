@@ -1573,13 +1573,19 @@ def listing_radar(root: Path, args) -> int:
             page_timeout_seconds=args.page_timeout,
             profile_dir=args.profile_dir,
             offline=args.offline,
+            prescreen=not args.no_prescreen,
         )
     except ValueError as error:
         print(f"參數不正確: {error}", file=sys.stderr)
         return 1
 
     def progress(summary: dict[str, object]) -> None:
-        if summary.get("stage") == "selected":
+        if summary.get("stage") == "prescreening":
+            print(
+                f"初篩 {summary.get('processed')}/{summary.get('total')} 筆（列表欄位快速估價）",
+                flush=True,
+            )
+        elif summary.get("stage") == "selected":
             print(f"候選物件 {summary.get('total')} 筆", flush=True)
         elif summary.get("stage") == "capturing":
             print(
@@ -1988,6 +1994,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--offline",
         action="store_true",
         help="do not open Chrome; value only listings captured within --refresh-hours",
+    )
+    radar_parser.add_argument(
+        "--no-prescreen",
+        action="store_true",
+        help=(
+            "skip the list-API prescreen and pick the newest listings instead "
+            "(the prescreen runs whenever an API list batch exists)"
+        ),
     )
 
     job_status_parser = subparsers.add_parser(
