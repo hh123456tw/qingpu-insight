@@ -198,7 +198,7 @@
       hour: "2-digit",
       minute: "2-digit",
       hour12: false,
-    }).format(date).replace(/s+/g, " "); // ICU builds differ in the space they emit
+    }).format(date).replace(/\s+/g, " "); // ICU builds differ in the space they emit
   }
 
   function statusText(body) {
