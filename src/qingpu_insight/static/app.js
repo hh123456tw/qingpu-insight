@@ -654,6 +654,11 @@ document.addEventListener("DOMContentLoaded", async function () {
       el("p", {}, ["模型：" + result.model.name + "（" + result.model.version + "）"]),
       el("p", {}, ["資料日期：" + result.data_date]),
     ];
+    if (result.model.valuation_date) {
+      discChildren.push(el("p", {}, [
+        "估價基準日：" + result.model.valuation_date + "（資料日期之後的行情依近期趨勢推估）"
+      ]));
+    }
     if (result.degraded) {
       discChildren.push(el("p", { "class": "degraded" }, ["⚠ 使用降級模型"]));
     }

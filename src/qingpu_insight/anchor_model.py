@@ -9,6 +9,12 @@ The two log predictions are averaged.
 Everything is decided from valuation inputs only (month, twd97 coordinates, building
 age), so training rows and live valuations resolve anchors by the same rules, and
 every anchor is dated strictly before the month being priced.
+
+With time_trend, both members work net of a hedonic monthly price index
+(HedonicTimeIndex): the plain HGB models log(price) - L(t), anchors are restated from
+their sale month to the month being priced, and months after the training data get the
+index extrapolated with a damped recent trend. Trees alone hold the last level, which
+underestimates valuations made months after the data cutoff in a rising market.
 """
 
 from __future__ import annotations
@@ -148,6 +154,103 @@ class LocalPriceIndex:
         return self.level(next_month.to_numpy("datetime64[ns]"))
 
 
+# Hedonic time index (issue log §22). Ridge penalties: month-to-month level changes
+# (random walk) and building fixed effects. The extrapolation is a damped trend.
+TREND_STEP_ALPHA = 200.0
+TREND_BUILDING_ALPHA = 1.0
+TREND_MOMENTUM_MONTHS = 6
+TREND_DAMPING = 0.9
+TREND_MAX_HORIZON_MONTHS = 12
+TREND_BUILDING_GRID_M = ANCHOR_RADIUS_M
+
+
+def building_keys(X: pd.DataFrame) -> np.ndarray:
+    """Coarse building identity from valuation inputs: coordinate grid cell, implied
+    completion year and station (rows without coordinates share a cell)."""
+    xs = pd.to_numeric(X["twd97_x"], errors="coerce").to_numpy(float)
+    ys = pd.to_numeric(X["twd97_y"], errors="coerce").to_numpy(float)
+    known = np.isfinite(xs) & np.isfinite(ys)
+    cell_x = np.where(known, np.round(np.nan_to_num(xs) / TREND_BUILDING_GRID_M), -1)
+    cell_y = np.where(known, np.round(np.nan_to_num(ys) / TREND_BUILDING_GRID_M), -1)
+    completion_year = implied_completion(X) / 365.25
+    year = np.where(np.isfinite(completion_year), np.round(completion_year), -1)
+    stations = X["station_code"].astype(str).to_numpy()
+    return np.array(
+        [
+            f"{int(a)}|{int(b)}|{int(c)}|{s}"
+            for a, b, c, s in zip(cell_x, cell_y, year, stations, strict=True)
+        ],
+        dtype=object,
+    )
+
+
+class HedonicTimeIndex:
+    """Monthly log price level net of building mix, with a damped extrapolation.
+
+    A ridge regression of log unit price on monthly level steps (random-walk penalty),
+    building fixed effects and log area / floor ratio. level(m) is the fitted level for
+    months in the data; after the last data month T it is
+    L(T) + slope * sum_{j=1..h} TREND_DAMPING**j with h capped at
+    TREND_MAX_HORIZON_MONTHS and slope the average monthly change over the last
+    TREND_MOMENTUM_MONTHS months. Before the first month the first level is held.
+    """
+
+    def __init__(self, dates, prices, buildings, covariates=None) -> None:
+        log_prices = np.log(np.asarray(prices, float))
+        usable = np.isfinite(log_prices)
+        months = _month_ordinals(dates)[usable]
+        log_prices = log_prices[usable]
+        self.first_ = int(months.min())
+        self.last_ = int(months.max())
+        n_months = self.last_ - self.first_ + 1
+        n = len(log_prices)
+
+        blocks = [np.ones((n, 1)), (months - self.first_)[:, None] >= np.arange(1, n_months)]
+        penalties = [np.zeros(1), np.full(n_months - 1, TREND_STEP_ALPHA)]
+        codes, unique = pd.factorize(pd.Series(np.asarray(buildings, object)[usable]))
+        one_hot = np.zeros((n, len(unique)))
+        one_hot[np.arange(n), codes] = 1.0
+        blocks.append(one_hot)
+        penalties.append(np.full(len(unique), TREND_BUILDING_ALPHA))
+        if covariates is not None:
+            values = np.asarray(covariates, float)[usable]
+            medians = np.nanmedian(np.where(np.isfinite(values), values, np.nan), axis=0)
+            values = np.where(np.isfinite(values), values, np.nan_to_num(medians))
+            spread = values.std(axis=0)
+            keep = spread > 1e-9
+            blocks.append((values[:, keep] - values[:, keep].mean(axis=0)) / spread[keep])
+            penalties.append(np.ones(int(keep.sum())))
+        design = np.hstack([block.astype(float) for block in blocks])
+        gram = design.T @ design + np.diag(np.concatenate(penalties))
+        beta = np.linalg.solve(gram, design.T @ log_prices)
+
+        self.levels_ = np.concatenate([[0.0], np.cumsum(beta[1:n_months])])
+        span = min(TREND_MOMENTUM_MONTHS, n_months - 1)
+        self.slope_ = (
+            float((self.levels_[-1] - self.levels_[-1 - span]) / span) if span > 0 else 0.0
+        )
+
+    @classmethod
+    def from_rows(cls, X: pd.DataFrame, prices) -> HedonicTimeIndex:
+        covariates = np.c_[
+            np.log(pd.to_numeric(X["building_area_ping"], errors="coerce").to_numpy(float)),
+            pd.to_numeric(X["floor_ratio"], errors="coerce").to_numpy(float),
+        ]
+        return cls(month_starts(X), prices, building_keys(X), covariates)
+
+    def level(self, dates) -> np.ndarray:
+        months = _month_ordinals(dates)
+        inside = np.clip(months - self.first_, 0, len(self.levels_) - 1)
+        levels = self.levels_[inside].astype(float)
+        horizon = np.clip(months - self.last_, 0, TREND_MAX_HORIZON_MONTHS)
+        damped = TREND_DAMPING * (1 - TREND_DAMPING**horizon) / (1 - TREND_DAMPING)
+        return levels + self.slope_ * damped
+
+    def level_after(self, dates) -> np.ndarray:
+        """Level of each sale's own month (the fit already includes that month)."""
+        return self.level(dates)
+
+
 class _Pool:
     def __init__(self, table: pd.DataFrame, index: LocalPriceIndex | None = None) -> None:
         self.x = table["twd97_x"].to_numpy(float)
@@ -282,6 +385,10 @@ def _history_table(X: pd.DataFrame, y: np.ndarray) -> pd.DataFrame:
 class AnchorBlendRegressor(RegressorMixin, BaseEstimator):
     """Average of a log-price HGB and a same-building price-anchor offset HGB."""
 
+    # Models pickled before the time trend existed load without these attributes.
+    time_trend = False
+    time_index_ = None
+
     def __init__(
         self,
         anchor_table: pd.DataFrame | None = None,
@@ -291,6 +398,7 @@ class AnchorBlendRegressor(RegressorMixin, BaseEstimator):
         l2_regularization: float = 1.0,
         random_state: int = 42,
         anchor_index_months: int | None = None,
+        time_trend: bool = False,
     ) -> None:
         self.anchor_table = anchor_table
         self.learning_rate = learning_rate
@@ -299,6 +407,17 @@ class AnchorBlendRegressor(RegressorMixin, BaseEstimator):
         self.l2_regularization = l2_regularization
         self.random_state = random_state
         self.anchor_index_months = anchor_index_months
+        self.time_trend = time_trend
+
+    @property
+    def extrapolates_time_trend(self) -> bool:
+        """Whether predictions move with the transaction month beyond the training data."""
+        return self.time_index_ is not None
+
+    def _time_level(self, dates: np.ndarray) -> np.ndarray:
+        if self.time_index_ is None:
+            return np.zeros(len(dates))
+        return self.time_index_.level(dates)
 
     def _hgb(self, preprocessor) -> HistGradientBoostingRegressor:
         names = preprocessor.get_feature_names_out()
@@ -341,6 +460,8 @@ class AnchorBlendRegressor(RegressorMixin, BaseEstimator):
             make_preprocessor,
         )
 
+        if self.time_trend and self.anchor_index_months:
+            raise ValueError("time_trend restates anchors itself; unset anchor_index_months")
         X = X.reset_index(drop=True)
         y = np.asarray(y, float)
         # Every column the caller passes that the preprocessors know is a model feature.
@@ -349,11 +470,13 @@ class AnchorBlendRegressor(RegressorMixin, BaseEstimator):
         dates = month_starts(X)
         self.fit_until_ = (pd.Timestamp(dates.max()) + pd.DateOffset(months=1)).to_datetime64()
         self.history_ = _history_table(X, y)
-        self.price_index_ = (
-            LocalPriceIndex(dates, y, window_months=self.anchor_index_months)
-            if self.anchor_index_months
-            else None
-        )
+        self.time_index_ = HedonicTimeIndex.from_rows(X, y) if self.time_trend else None
+        if self.time_index_ is not None:
+            self.price_index_ = self.time_index_
+        elif self.anchor_index_months:
+            self.price_index_ = LocalPriceIndex(dates, y, window_months=self.anchor_index_months)
+        else:
+            self.price_index_ = None
         self.baseline_ = RecentMedianBaseline(months=12).fit(
             pd.DataFrame(
                 {
@@ -368,7 +491,9 @@ class AnchorBlendRegressor(RegressorMixin, BaseEstimator):
         plain_X = X.loc[:, list(self.feature_columns_)]
         self.plain_preprocessor_ = make_preprocessor(self.feature_columns_).fit(plain_X)
         self.plain_model_ = self._hgb(self.plain_preprocessor_).fit(
-            self.plain_preprocessor_.transform(plain_X), np.log(y), sample_weight=sample_weight
+            self.plain_preprocessor_.transform(plain_X),
+            np.log(y) - self._time_level(dates),
+            sample_weight=sample_weight,
         )
 
         priors = self._priors(X, cutoff=None)
@@ -384,14 +509,19 @@ class AnchorBlendRegressor(RegressorMixin, BaseEstimator):
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         X = X.reset_index(drop=True)
+        dates = month_starts(X)
         priors = self._priors(X, cutoff=self.fit_until_)
         plain_log = self.plain_model_.predict(
             self.plain_preprocessor_.transform(X.loc[:, list(self.feature_columns_)])
-        )
+        ) + self._time_level(dates)
         offset_X = self._offset_frame(X, priors)
+        # Anchors are restated up to the anchor cutoff; move them on to the priced month.
+        limits = np.minimum(dates, np.datetime64(self.fit_until_, "ns"))
         offset_log = (
             self.offset_model_.predict(self.offset_preprocessor_.transform(offset_X))
             + offset_X["log_prior"].to_numpy()
+            + self._time_level(dates)
+            - self._time_level(limits)
         )
         return np.exp((plain_log + offset_log) / 2)
 

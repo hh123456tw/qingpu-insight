@@ -879,3 +879,5 @@ def test_candidate_estimators_builds_anchor_blend_from_profile_and_table() -> No
     assert estimator.anchor_table is table
     assert estimator.learning_rate == profile.hgb_learning_rate
     assert estimator.max_iter == profile.hgb_max_iter
+    # Chosen on rolling backtests with a deployment gap (issue log §22).
+    assert estimator.time_trend is True

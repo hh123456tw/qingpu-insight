@@ -601,11 +601,14 @@ def candidate_estimators(
         # Only callers that supply building price history get the anchor blend.
         from qingpu_insight.anchor_model import AnchorBlendRegressor
 
+        # The hedonic time index halves the low bias of valuations made months after
+        # the data cutoff in rolling backtests (issue log §22).
         estimators["anchor_blend"] = AnchorBlendRegressor(
             anchor_table=anchor_table,
             learning_rate=profile.hgb_learning_rate,
             max_iter=profile.hgb_max_iter,
             random_state=seed,
+            time_trend=True,
         )
     return estimators
 

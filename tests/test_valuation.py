@@ -1441,6 +1441,88 @@ def test_valuation_omits_price_anchor_for_other_pipelines(bundle, market, valid_
     assert "price_anchor" not in result["model"]
 
 
+class MonthRecordingModel:
+    """Records the transaction month each valuation row is priced at."""
+
+    def __init__(self, extrapolates: bool) -> None:
+        self.extrapolates_time_trend = extrapolates
+        self.months: list[tuple[int, int]] = []
+
+    def predict(self, X):
+        self.months += list(zip(X["transaction_year"], X["transaction_month"], strict=True))
+        return np.full(len(X), 500_000.0)
+
+
+@pytest.mark.parametrize(
+    ("valuation_date", "priced_month", "reported"),
+    [
+        ("2026-10-01", (2026, 10), "2026-10-01"),
+        # Extrapolation is capped at TREND_MAX_HORIZON_MONTHS after the data date.
+        ("2028-03-15", (2027, 6), "2027-06-01"),
+        # Never earlier than the data the model was trained on.
+        ("2026-01-10", (2026, 6), "2026-06-01"),
+    ],
+)
+def test_trend_models_are_priced_at_the_valuation_date(
+    bundle, market, valid_resale_input, valuation_date, priced_month, reported
+):
+    model = MonthRecordingModel(extrapolates=True)
+    bundle.pipeline = model
+
+    result = valuate(
+        valid_resale_input,
+        FakeRegistry(bundle),
+        market,
+        valuation_date=pd.Timestamp(valuation_date),
+    )
+
+    assert model.months[0] == priced_month
+    assert result["model"]["valuation_date"] == reported
+    assert result["data_date"] == "2026-06-01"
+
+
+def test_trend_models_default_to_today(bundle, market, valid_resale_input, monkeypatch):
+    import qingpu_insight.valuation as valuation_module
+
+    monkeypatch.setattr(valuation_module, "_today", lambda: pd.Timestamp("2026-09-20 15:30"))
+    model = MonthRecordingModel(extrapolates=True)
+    bundle.pipeline = model
+
+    result = valuate(valid_resale_input, FakeRegistry(bundle), market)
+
+    assert model.months[0] == (2026, 9)
+    assert result["model"]["valuation_date"] == "2026-09-20"
+
+
+def test_models_without_a_time_trend_stay_at_the_data_month(bundle, market, valid_resale_input):
+    model = MonthRecordingModel(extrapolates=False)
+    bundle.pipeline = model
+
+    result = valuate(
+        valid_resale_input,
+        FakeRegistry(bundle),
+        market,
+        valuation_date=pd.Timestamp("2026-10-01"),
+    )
+
+    assert model.months[0] == (2026, 6)
+    assert "valuation_date" not in result["model"]
+
+
+def test_stale_trend_models_still_fall_back(bundle, market, valid_resale_input):
+    bundle.pipeline = MonthRecordingModel(extrapolates=True)
+
+    result = valuate(
+        valid_resale_input,
+        FakeRegistry(bundle),
+        market,
+        latest_data_date=pd.Timestamp("2027-03-01"),
+        valuation_date=pd.Timestamp("2027-03-05"),
+    )
+
+    assert result["degraded_reason"] == "stale_model"
+
+
 def test_model_version_includes_model_name():
     from qingpu_insight.valuation import _model_version
 

@@ -236,3 +236,154 @@ def test_anchor_table_skips_sources_without_coordinates():
         }
     )
     assert build_anchor_table(frame, frame).empty
+
+
+def _trend_sales(monthly_growth: float, months: int = 24, seed: int = 0):
+    """Two buildings whose prices grow together; the cheap one dominates later months."""
+    rng = np.random.default_rng(seed)
+    frames = []
+    for m in range(months):
+        start = pd.Timestamp("2022-01-01") + pd.DateOffset(months=m)
+        level = (1 + monthly_growth) ** m
+        expensive, cheap = (30, 5) if m < months // 2 else (5, 30)
+        for count, x, age, price in (
+            (expensive, 300_000.0, 3.0, 500_000.0),
+            (cheap, 302_000.0, 15.0, 300_000.0),
+        ):
+            rows = _rows(count, start=str(start.date()), x=x, age=age + m / 12, price=1.0)
+            rows["transaction_date"] = start
+            rows["transaction_year"] = start.year
+            rows["transaction_month"] = start.month
+            rows = add_derived_features(rows)
+            rows["target_unit_price_twd"] = price * level * rng.uniform(0.98, 1.02, count)
+            frames.append(rows)
+    return pd.concat(frames, ignore_index=True)
+
+
+def _hedonic_index(frame: pd.DataFrame):
+    from qingpu_insight.anchor_model import HedonicTimeIndex
+
+    return HedonicTimeIndex.from_rows(frame, frame["target_unit_price_twd"].to_numpy())
+
+
+def _level(index, date: str) -> float:
+    return float(index.level(np.array([pd.Timestamp(date)], "datetime64[ns]"))[0])
+
+
+def test_hedonic_time_index_tracks_same_building_prices_despite_mix_shift():
+    frame = _trend_sales(0.01)
+    index = _hedonic_index(frame)
+    monthly_median = frame.groupby("transaction_date")["target_unit_price_twd"].median()
+    # The raw monthly median falls when the mix shifts to the cheap building ...
+    assert np.log(monthly_median.iloc[-1] / monthly_median.iloc[0]) < -0.2
+    # ... while the index follows the 1% monthly growth, smoothed by its random-walk prior.
+    change = _level(index, "2023-12-15") - _level(index, "2022-01-15")
+    assert 0.7 * 23 * np.log(1.01) < change <= 23 * np.log(1.01)
+    assert 0.5 * np.log(1.01) < index.slope_ < 1.2 * np.log(1.01)
+
+
+def test_hedonic_time_index_extrapolates_a_damped_capped_trend():
+    from qingpu_insight.anchor_model import TREND_DAMPING, TREND_MAX_HORIZON_MONTHS
+
+    index = _hedonic_index(_trend_sales(0.01))
+    last = _level(index, "2023-12-01")
+
+    def ahead(months: int) -> float:
+        date = pd.Timestamp("2023-12-01") + pd.DateOffset(months=months)
+        return _level(index, str(date.date())) - last
+
+    def damped(h: int) -> float:
+        return index.slope_ * TREND_DAMPING * (1 - TREND_DAMPING**h) / (1 - TREND_DAMPING)
+
+    assert ahead(1) == pytest.approx(damped(1))
+    assert ahead(6) == pytest.approx(damped(6))
+    assert ahead(6) < 6 * index.slope_
+    assert ahead(TREND_MAX_HORIZON_MONTHS + 24) == pytest.approx(damped(TREND_MAX_HORIZON_MONTHS))
+    # Before the first month the first level is held.
+    assert _level(index, "2020-01-01") == pytest.approx(_level(index, "2022-01-01"))
+
+
+def test_hedonic_time_index_holds_level_in_a_flat_market():
+    index = _hedonic_index(_trend_sales(0.0))
+    assert abs(index.slope_) < 0.002
+
+
+@pytest.fixture(scope="module")
+def rising_market():
+    return _trend_sales(0.01, months=36)
+
+
+def _at_month(X: pd.DataFrame, date: str) -> pd.DataFrame:
+    stamp = pd.Timestamp(date)
+    moved = X.assign(transaction_year=stamp.year, transaction_month=stamp.month)
+    return add_derived_features(moved)[list(FEATURE_COLUMNS)]
+
+
+def test_time_trend_blend_extrapolates_to_the_valuation_month(rising_market):
+    X = rising_market[list(FEATURE_COLUMNS)]
+    y = rising_market["target_unit_price_twd"].to_numpy()
+    trend = AnchorBlendRegressor(max_iter=60, learning_rate=0.1, time_trend=True).fit(X, y)
+    flat = AnchorBlendRegressor(max_iter=60, learning_rate=0.1).fit(X, y)
+    row = X.iloc[[-1]]
+
+    # Both months lie after the data and share the calendar month; without coordinates
+    # both use the station baseline prior, so only the extrapolated index separates them.
+    unlocated = row.assign(twd97_x=np.nan, twd97_y=np.nan)
+    soon = trend.predict(_at_month(unlocated, "2025-06-01"))[0]
+    later = trend.predict(_at_month(unlocated, "2026-06-01"))[0]
+    assert trend.extrapolates_time_trend
+    expected = _level(trend.time_index_, "2026-06-01") - _level(trend.time_index_, "2025-06-01")
+    assert expected > 0.005
+    assert np.log(later / soon) == pytest.approx(expected, abs=1e-9)
+    at_data_end = trend.predict(_at_month(unlocated, "2024-12-01"))[0]
+    assert soon > at_data_end * 1.02
+    # Without the index a tree model holds the last level.
+    assert not flat.extrapolates_time_trend
+    assert flat.predict(_at_month(unlocated, "2026-06-01"))[0] == pytest.approx(
+        flat.predict(_at_month(unlocated, "2025-06-01"))[0]
+    )
+
+
+def test_time_trend_blend_predicts_later_months_with_less_lag(rising_market):
+    columns = list(FEATURE_COLUMNS)
+    train = rising_market.loc[rising_market["transaction_date"] < "2024-07-01"]
+    later = rising_market.loc[rising_market["transaction_date"] >= "2024-07-01"]
+    y = train["target_unit_price_twd"].to_numpy()
+
+    def bias(model) -> float:
+        model.fit(train[columns], y)
+        actual = later["target_unit_price_twd"].to_numpy()
+        return float(np.mean(np.log(actual / model.predict(later[columns]))))
+
+    plain = bias(AnchorBlendRegressor(max_iter=60, learning_rate=0.1))
+    trend = bias(AnchorBlendRegressor(max_iter=60, learning_rate=0.1, time_trend=True))
+    assert plain > 0.03  # trees hold the last level in a rising market
+    assert abs(trend) < plain / 2
+
+
+def test_time_trend_restates_anchors_with_the_hedonic_index(rising_market):
+    model = AnchorBlendRegressor(max_iter=20, learning_rate=0.1, time_trend=True)
+    model.fit(
+        rising_market[list(FEATURE_COLUMNS)], rising_market["target_unit_price_twd"].to_numpy()
+    )
+    assert model.price_index_ is model.time_index_
+
+
+def test_time_trend_and_local_price_index_are_exclusive(rising_market):
+    model = AnchorBlendRegressor(max_iter=5, time_trend=True, anchor_index_months=6)
+    with pytest.raises(ValueError, match="time_trend"):
+        model.fit(
+            rising_market[list(FEATURE_COLUMNS)],
+            rising_market["target_unit_price_twd"].to_numpy(),
+        )
+
+
+def test_models_pickled_before_the_time_trend_still_predict(fitted_model):
+    model, train = fitted_model
+    X = train[list(FEATURE_COLUMNS)].iloc[-3:]
+    legacy = pickle.loads(pickle.dumps(model))
+    del legacy.time_index_
+    del legacy.__dict__["time_trend"]
+    np.testing.assert_allclose(legacy.predict(X), model.predict(X))
+    assert not legacy.extrapolates_time_trend
+    assert clone(legacy).get_params()["time_trend"] is False

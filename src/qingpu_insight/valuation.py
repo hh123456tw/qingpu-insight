@@ -149,6 +149,29 @@ class ModelRegistry:
         return self._bundles[transaction_type]
 
 
+def _today() -> pd.Timestamp:
+    return pd.Timestamp.now()
+
+
+def pricing_date(bundle: ValuationBundle, valuation_date: pd.Timestamp | None) -> pd.Timestamp:
+    """Transaction date a valuation is priced at.
+
+    Models with a time trend (AnchorBlendRegressor(time_trend=True)) were selected on
+    backtests that price each sale at its own month, months after the data cutoff, so
+    they price at the valuation date: today unless given, clamped to the data date and
+    TREND_MAX_HORIZON_MONTHS after it. Other models stay at the data date, where they
+    were evaluated; beyond it a tree only repeats the last level.
+    """
+    from qingpu_insight.anchor_model import TREND_MAX_HORIZON_MONTHS
+
+    data_date = pd.Timestamp(bundle.data_max_date).normalize()
+    if not getattr(bundle.pipeline, "extrapolates_time_trend", False):
+        return data_date
+    wanted = pd.Timestamp(valuation_date if valuation_date is not None else _today()).normalize()
+    latest = data_date + pd.DateOffset(months=TREND_MAX_HORIZON_MONTHS)
+    return min(max(wanted, data_date), latest)
+
+
 def model_age_days(bundle: ValuationBundle, latest_data_date: pd.Timestamp) -> int:
     data_date = pd.Timestamp(bundle.data_max_date).normalize()
     return (latest_data_date.normalize() - data_date).days
@@ -529,6 +552,7 @@ def valuate(
     market: pd.DataFrame,
     latest_data_date: pd.Timestamp | None = None,
     stale_after_days: int = 180,
+    valuation_date: pd.Timestamp | None = None,
 ) -> dict[str, Any]:
     from qingpu_insight.model_training import RecentMedianBaseline
 
@@ -727,8 +751,8 @@ def valuate(
             result["asking_price_assessment"] = None
         return result
 
-    data_date = pd.Timestamp(bundle.data_max_date)
-    row = input_frame(input_, data_date)
+    priced_at = pricing_date(bundle, valuation_date)
+    row = input_frame(input_, priced_at)
     if "parking_type" in bundle.feature_columns:
         row["parking_type"] = input_.parking_type
     if "parking_area_ping" in bundle.feature_columns:
@@ -829,6 +853,9 @@ def valuate(
     }
     if prior_source in _PRICE_ANCHORS:
         result["model"]["price_anchor"] = _PRICE_ANCHORS[prior_source]
+    if getattr(bundle.pipeline, "extrapolates_time_trend", False):
+        # Market level carried from the data date to this date by the model's time trend.
+        result["model"]["valuation_date"] = str(priced_at.date())
 
     if input_.asking_total_price_twd is not None and input_.asking_total_price_twd > 0:
         low, high = result["interval_total_price_twd"]
