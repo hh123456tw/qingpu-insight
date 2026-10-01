@@ -1571,7 +1571,7 @@ def listing_radar(root: Path, args) -> int:
             refresh_hours=args.refresh_hours,
             delay_seconds=(args.delay_min, args.delay_max),
             page_timeout_seconds=args.page_timeout,
-            profile_dir=args.profile_dir,
+            profile_dir=resolve_profile_dir(args.profile_dir),
             offline=args.offline,
             prescreen=not args.no_prescreen,
         )

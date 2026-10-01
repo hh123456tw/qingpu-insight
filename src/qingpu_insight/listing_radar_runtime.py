@@ -20,6 +20,7 @@ from qingpu_insight.conversation_listing_parser import (
 )
 from qingpu_insight.conversation_urls import Unsupported591Url
 from qingpu_insight.jobs import JobService, JobSubmission
+from qingpu_insight.listing_api_591 import resolve_profile_dir
 from qingpu_insight.listing_radar import (
     DEFAULT_DELAY_SECONDS,
     LIST_FIELDS,
@@ -376,7 +377,10 @@ class ListingRadarJobService:
                 pass
 
         options = RadarRunOptions(
-            max_listings=request.max_listings, refresh_hours=request.refresh_hours
+            max_listings=request.max_listings,
+            refresh_hours=request.refresh_hours,
+            # Detail pages open in the logged-in 591 profile when one is configured.
+            profile_dir=resolve_profile_dir(None),
         )
         result, _, _ = self._run(options, progress=progress)
         summary = radar_job_summary(result)

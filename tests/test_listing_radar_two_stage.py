@@ -326,3 +326,20 @@ def test_cli_no_prescreen_flag(tmp_path: Path, monkeypatch) -> None:
     with pytest.raises(SystemExit):
         cli.main(["listing-radar"])
     assert [o.prescreen for o in seen] == [False, True]
+
+
+def test_cli_radar_uses_the_591_profile_env(tmp_path: Path, monkeypatch) -> None:
+    seen: list[RadarRunOptions] = []
+
+    def fake_run(root, options, **kwargs):
+        seen.append(options)
+        raise SystemExit(0)
+
+    monkeypatch.setattr(cli, "run_listing_radar", fake_run)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("QINGPU_591_PROFILE_DIR", "instance/chrome-591")
+    with pytest.raises(SystemExit):
+        cli.main(["listing-radar"])
+    with pytest.raises(SystemExit):
+        cli.main(["listing-radar", "--profile-dir", "D:/other"])
+    assert [o.profile_dir for o in seen] == ["instance/chrome-591", "D:/other"]
