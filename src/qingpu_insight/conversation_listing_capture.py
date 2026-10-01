@@ -12,9 +12,11 @@ from urllib.parse import urljoin
 import requests
 
 from qingpu_insight.conversation_listing_parser import (
+    ListingDelisted,
     ListingPageVerificationRequired,
     ParsedListingDetail,
     has_listing_detail_content,
+    is_delisted_page,
     parse_listing_detail,
 )
 from qingpu_insight.conversation_urls import (
@@ -119,7 +121,7 @@ class DetailPageBrowser:
                     f"Page did not load content within {self._config.page_timeout_seconds}s"
                 )
             html = driver.page_source
-            if is_verification_page(html):
+            if is_verification_page(html) or is_delisted_page(html):
                 return
             if has_listing_detail_content(html, listing_type=listing_type):
                 if listing_type != "sale":
@@ -152,6 +154,8 @@ class DetailPageBrowser:
                 raise ListingPageVerificationRequired(
                     "Verification page detected after navigation"
                 )
+            if is_delisted_page(html):
+                raise ListingDelisted("591 reports the listing is closed or missing")
 
             final_url = validate_final_591_url(driver.current_url)
             if final_url.canonical_url != validated.canonical_url:

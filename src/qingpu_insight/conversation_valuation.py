@@ -234,6 +234,25 @@ def valuate_listing(
     *,
     snapshots: ModelFrameCache | None = None,
 ) -> dict[str, Any]:
+    """Valuation evidence for the assistant (see :func:`valuate_listing_with_context`)."""
+    result, _ = valuate_listing_with_context(
+        data_source, registry, payload, snapshots=snapshots
+    )
+    return result
+
+
+def valuate_listing_with_context(
+    data_source: MarketDataSource,
+    registry: ModelRegistry,
+    payload: dict[str, Any],
+    *,
+    snapshots: ModelFrameCache | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The assistant's valuation plus how it was reached (anchor, station, parking, fallback).
+
+    The listing radar ranks listings with the same numbers the assistant shows, and needs
+    the context to judge how far each estimate can be trusted.
+    """
     transaction_type = "presale" if payload.get("listing_type") == "newhouse" else "resale"
     layout = _LAYOUT_RE.search(str(payload.get("layout") or ""))
     floor_match = _FLOOR_RE.search(str(payload.get("floor") or ""))
@@ -263,12 +282,13 @@ def valuate_listing(
     )
     age = None if transaction_type == "presale" else float(payload["age_years"])
     raw_parking = str(payload.get("parking_type") or "").strip()
+    parking_unverified = bool(raw_parking) and "無車位" not in raw_parking and not parking_type
     ratio, common_area, common_area_note = listing_common_area(
         payload,
         total_area=total_area,
         net_area=area,
         parking_area=parking_area,
-        parking_unverified=bool(raw_parking) and "無車位" not in raw_parking and not parking_type,
+        parking_unverified=parking_unverified,
     )
     longitude = payload.get("longitude")
     latitude = payload.get("latitude")
@@ -330,7 +350,21 @@ def valuate_listing(
             f"房屋坪數已從建物總坪數扣除車位 {parking_area:g} 坪"
         )
     limitations.append(common_area_note)
-    return {
+    context = {
+        "transaction_type": transaction_type,
+        "station_code": station_code,
+        "station_distance_m": station_distance_m,
+        "total_area_ping": total_area,
+        "net_area_ping": area,
+        "parking_area_ping": parking_area,
+        "parking_unverified": parking_unverified,
+        "age_years": age,
+        "price_anchor": model.get("price_anchor"),
+        "degraded": bool(result.get("degraded", False)),
+        "degraded_reason": result.get("degraded_reason"),
+        "model_name": model.get("name"),
+    }
+    public = {
         "common_area": common_area,
         "point_estimate_twd": result["estimated_total_price_twd"],
         "estimated_building_price_twd": result.get("estimated_building_price_twd"),
@@ -345,3 +379,4 @@ def valuate_listing(
         "comparables": result.get("comparables", []),
         "limitations": limitations,
     }
+    return public, context

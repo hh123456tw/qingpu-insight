@@ -328,3 +328,15 @@ class TestEdgeCases:
         assert result.floor == "8F/14F"
         assert result.total_floors == 14
         assert result.parking_type == "機械車位"
+
+
+def test_scrub_contact_text_removes_phones_and_emails() -> None:
+    from qingpu_insight.conversation_listing_parser import scrub_contact_text
+
+    text = "急售 0912-345-678 或 0912345678 洽 (03)4567890 a.b@example.com"
+    scrubbed = scrub_contact_text(text)
+    assert "0912" not in scrubbed
+    assert "example.com" not in scrubbed
+    assert "4567890" not in scrubbed
+    assert scrub_contact_text(None) is None
+    assert scrub_contact_text("3房2廳 12F/15F 2,298萬") == "3房2廳 12F/15F 2,298萬"

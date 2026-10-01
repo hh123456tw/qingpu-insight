@@ -306,3 +306,28 @@ class TestDetailPageBrowser:
         with pytest.raises(TimeoutError):
             browser.capture(initial)
         assert "quit" in driver.calls
+
+
+DELISTED_HTML = """<html><head><title>591售屋網</title></head><body>
+<div class="error-page"><p>您查詢的物件已下架或不存在</p></div>
+</body></html>"""
+
+
+def test_delisted_page_raises_listing_delisted_without_waiting() -> None:
+    from qingpu_insight.conversation_listing_parser import ListingDelisted
+
+    driver = FakeBrowser(pages=[DELISTED_HTML])
+    browser = DetailPageBrowser(
+        driver_factory=lambda: driver,
+        redirect_resolver=_resolved_sale,
+    )
+    with pytest.raises(ListingDelisted):
+        browser.capture(Initial591Url(request_url=SALE_URL, kind="direct"))
+    assert "quit" in driver.calls
+
+
+def test_detail_content_mentioning_closed_text_is_not_treated_as_delisted() -> None:
+    from qingpu_insight.conversation_listing_parser import is_delisted_page
+
+    assert is_delisted_page(DELISTED_HTML) is True
+    assert is_delisted_page(SALE_DETAIL_HTML.replace("測試社區", "社區已成交多戶")) is False

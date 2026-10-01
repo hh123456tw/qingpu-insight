@@ -14,11 +14,14 @@ from bs4 import BeautifulSoup
 from qingpu_insight.listing_capture import is_verification_page
 
 _PHONE_RE = re.compile(
-    r"(?<!\d)(?:09\d{8}|0[2-8][-\s]?\d{7,8})(?!\d)"
+    r"(?<!\d)(?:09\d{2}(?:[-\s]?\d{3}){2}|\(?0[2-8]\)?[-\s]?\d{3,4}[-\s]?\d{3,4})(?!\d)"
 )
 _EMAIL_RE = re.compile(
     r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
 )
+# Shown by 591 instead of a listing once it is closed; only read when the page has no
+# listing data, so a community blurb mentioning "已成交" never marks a live listing.
+_DELISTED_PHRASES = ("已下架", "已關閉", "不存在", "已售出", "已成交", "找不到此物件")
 
 
 class ListingPageVerificationRequired(RuntimeError):
@@ -29,6 +32,18 @@ class ListingDetailParseError(ValueError):
     pass
 
 
+class ListingDelisted(RuntimeError):
+    """The 591 page says the listing is closed, sold or no longer exists."""
+
+
+def scrub_contact_text(value: str | None) -> str | None:
+    """Replace phone numbers and e-mail addresses so contact details are never stored."""
+    if value is None:
+        return None
+    cleaned = _PHONE_RE.sub("[已移除電話]", value)
+    return _EMAIL_RE.sub("[已移除信箱]", cleaned)
+
+
 def _safe_persisted_text(
     value: str | None,
     *,
@@ -37,9 +52,7 @@ def _safe_persisted_text(
 ) -> str | None:
     if value is None:
         return None
-    cleaned = " ".join(value.split())
-    cleaned = _PHONE_RE.sub("[已移除電話]", cleaned)
-    cleaned = _EMAIL_RE.sub("[已移除信箱]", cleaned)
+    cleaned = scrub_contact_text(" ".join(value.split())) or ""
     if len(cleaned) > max_length:
         raise ListingDetailParseError(
             f"{field} exceeds {max_length} characters"
@@ -303,6 +316,19 @@ def has_listing_detail_content(
         soup.select_one(".build-price") is not None
         and soup.select_one(".info-item.address") is not None
     )
+
+
+def is_delisted_page(html: str) -> bool:
+    """True for a 591 "listing closed / not found" page that carries no listing data."""
+    if has_listing_detail_content(html, listing_type="sale") or has_listing_detail_content(
+        html, listing_type="newhouse"
+    ):
+        return False
+    soup = BeautifulSoup(html, "html.parser")
+    for element in soup(["script", "style", "noscript", "template"]):
+        element.decompose()
+    text = soup.get_text("", strip=True)
+    return any(phrase in text for phrase in _DELISTED_PHRASES)
 
 
 def _validate_positive_int(value: int | None, name: str) -> int | None:
