@@ -51,6 +51,7 @@ from qingpu_insight.listing_geocoding import (
 )
 from qingpu_insight.listing_location import assign_listing_life_circle
 from qingpu_insight.listing_normalization import NormalizedListing, normalize_listing
+from qingpu_insight.listing_radar_runtime import RadarRunOptions, run_listing_radar
 from qingpu_insight.listing_repository import (
     ListingRepository,
     MySQLListingRepository,
@@ -1357,6 +1358,54 @@ def listing_update(root: Path, args) -> int:
     return 0 if result.status == "succeeded" else 1
 
 
+def listing_radar(root: Path, args) -> int:
+    """低估物件雷達: capture, value and rank current 591 sale listings in one command."""
+    try:
+        options = RadarRunOptions(
+            max_listings=args.max_listings,
+            refresh_hours=args.refresh_hours,
+            delay_seconds=(args.delay_min, args.delay_max),
+            page_timeout_seconds=args.page_timeout,
+            profile_dir=args.profile_dir,
+            offline=args.offline,
+        )
+    except ValueError as error:
+        print(f"參數不正確: {error}", file=sys.stderr)
+        return 1
+
+    def progress(summary: dict[str, object]) -> None:
+        if summary.get("stage") == "selected":
+            print(f"候選物件 {summary.get('total')} 筆", flush=True)
+        elif summary.get("stage") == "capturing":
+            print(
+                f"[{summary.get('processed')}/{summary.get('total')}] "
+                f"已估價 {summary.get('valued')}，即時擷取 {summary.get('captured_live')}，"
+                f"沿用快取 {summary.get('from_cache')}",
+                flush=True,
+            )
+
+    result, json_path, md_path = run_listing_radar(root, options, progress=progress)
+    print(
+        json.dumps(
+            {
+                "radar_batch_id": result.radar_batch_id,
+                "status": result.status,
+                "counts": result.counts,
+                "report_json": str(json_path),
+                "report_markdown": str(md_path),
+            },
+            ensure_ascii=False,
+        )
+    )
+    if result.status == "stopped_verification":
+        print(
+            "591 顯示驗證頁，已停止；請在 Chrome 手動完成驗證後重新執行（已擷取的物件不會重抓）。",
+            file=sys.stderr,
+        )
+        return 2
+    return 0 if result.status == "completed" else 1
+
+
 def _safe_job_payload(run) -> dict[str, object]:
     return {
         "run_id": run.run_id,
@@ -1677,6 +1726,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     listing_update_parser.add_argument("--max-pages", type=int, default=10)
 
+    radar_parser = subparsers.add_parser(
+        "listing-radar",
+        help="低估物件雷達: value current 591 sale listings and rank clearly low asking prices",
+    )
+    radar_parser.add_argument("--max-listings", type=int, default=60)
+    radar_parser.add_argument(
+        "--refresh-hours",
+        type=float,
+        default=24.0,
+        help="reuse detail captures newer than this many hours (default: 24)",
+    )
+    radar_parser.add_argument("--delay-min", type=float, default=3.0)
+    radar_parser.add_argument("--delay-max", type=float, default=6.0)
+    radar_parser.add_argument("--page-timeout", type=int, default=30)
+    radar_parser.add_argument("--profile-dir", default=None)
+    radar_parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="do not open Chrome; value only listings captured within --refresh-hours",
+    )
+
     job_status_parser = subparsers.add_parser(
         "job-status",
         help="query a job run status",
@@ -1981,6 +2051,8 @@ def main(argv: list[str] | None = None) -> int:
         return listing_sync(root, args)
     if args.command == "listing-update":
         return listing_update(root, args)
+    if args.command == "listing-radar":
+        return listing_radar(root, args)
     if args.command == "job-status":
         return job_status(root, args)
     if args.command == "health-run":
