@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import msvcrt
 import os
 import threading
 from collections.abc import Callable
@@ -11,6 +10,25 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import Literal, Protocol, cast
+
+if os.name == "nt":
+    import msvcrt
+
+    def _lock_first_byte(fileno: int) -> None:
+        msvcrt.locking(fileno, msvcrt.LK_NBLCK, 1)
+
+    def _unlock_first_byte(fileno: int) -> None:
+        msvcrt.locking(fileno, msvcrt.LK_UNLCK, 1)
+
+else:
+    import fcntl
+
+    # flock (not lockf) so a second open in the same process conflicts, as on Windows.
+    def _lock_first_byte(fileno: int) -> None:
+        fcntl.flock(fileno, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def _unlock_first_byte(fileno: int) -> None:
+        fcntl.flock(fileno, fcntl.LOCK_UN)
 
 import pandas as pd
 
@@ -102,7 +120,7 @@ class AdvisoryFileLock:
             handle.flush()
         handle.seek(0)
         try:
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            _lock_first_byte(handle.fileno())
         except OSError:
             handle.close()
             return False
@@ -140,7 +158,7 @@ class AdvisoryFileLock:
             return
         try:
             handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            _unlock_first_byte(handle.fileno())
         finally:
             handle.close()
             self._handle = None

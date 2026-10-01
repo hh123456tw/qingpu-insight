@@ -7,8 +7,11 @@ on:
 
 jobs:
   test:
-    # listing_update.py imports msvcrt, so the suite only runs on Windows.
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
