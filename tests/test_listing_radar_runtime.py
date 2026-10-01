@@ -287,6 +287,7 @@ def test_cli_listing_radar_runs_one_command(tmp_path: Path, monkeypatch, capsys)
     assert calls[0].max_listings == 5
     assert calls[0].refresh_hours == 12
     assert calls[0].delay_seconds == (3.0, 6.0)
+    assert calls[0].headless is True
     out = capsys.readouterr().out
     assert "radar-" in out
     report = json.loads(next((tmp_path / "outputs" / "listing-radar").glob("*.json")).read_text(
@@ -314,3 +315,17 @@ def test_cli_listing_radar_exit_code_signals_verification(tmp_path, monkeypatch)
 def test_cli_rejects_impolite_delay(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     assert cli.main(["listing-radar", "--delay-min", "0.5", "--delay-max", "1"]) == 1
+
+
+def test_chrome_session_follows_the_headless_option(monkeypatch) -> None:
+    from qingpu_insight import listing_capture
+    from qingpu_insight.listing_radar_runtime import _chrome_session
+
+    configs = []
+    monkeypatch.setattr(
+        listing_capture, "create_chrome", lambda config: configs.append(config) or FakeBrowser()
+    )
+    for headless in (True, False):
+        session, _ = _chrome_session(RadarRunOptions(headless=headless))
+        session.driver()
+    assert [c.headless for c in configs] == [True, False]

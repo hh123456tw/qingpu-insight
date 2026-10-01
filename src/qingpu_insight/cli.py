@@ -211,6 +211,8 @@ class ListingSourceOptions:
     kind: str = "dom"
     profile_dir: str | None = None
     api_max_pages: int = API_DEFAULT_MAX_PAGES
+    # The API walk needs no window: it fetches inside the logged-in profile's page.
+    headless: bool = True
 
     def __post_init__(self) -> None:
         if self.kind not in LISTING_SOURCE_KINDS:
@@ -226,6 +228,7 @@ class ListingSourceOptions:
         requested: str | None = None,
         profile_dir: str | None = None,
         api_max_pages: int | None = None,
+        headless: bool = True,
     ) -> "ListingSourceOptions":
         """Default to the API source whenever a dedicated 591 profile is configured."""
         profile = resolve_profile_dir(profile_dir)
@@ -234,6 +237,7 @@ class ListingSourceOptions:
             kind=kind,
             profile_dir=profile,
             api_max_pages=api_max_pages if api_max_pages is not None else API_DEFAULT_MAX_PAGES,
+            headless=headless,
         )
 
 
@@ -1101,7 +1105,7 @@ class M3ListingPreparationRunner:
             return create_api_listing_source(
                 self._root,
                 ChromeConfig(
-                    headless=False,
+                    headless=options.headless,
                     profile_dir=options.profile_dir,
                     delay_seconds=API_DEFAULT_DELAY_SECONDS,
                 ),
@@ -1448,7 +1452,8 @@ class _ForegroundJobExecutor:
 def listing_update(root: Path, args) -> int:
     try:
         source_options = ListingSourceOptions.resolve(
-            args.source, args.profile_dir, args.max_pages
+            args.source, args.profile_dir, args.max_pages,
+            headless=not args.show_browser,
         )
         if args.max_pages is None:
             dom_pages = 10
@@ -1574,6 +1579,7 @@ def listing_radar(root: Path, args) -> int:
             profile_dir=resolve_profile_dir(args.profile_dir),
             offline=args.offline,
             prescreen=not args.no_prescreen,
+            headless=not args.show_browser,
         )
     except ValueError as error:
         print(f"參數不正確: {error}", file=sys.stderr)
@@ -1964,6 +1970,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="dedicated, logged-in Chrome profile (overrides QINGPU_591_PROFILE_DIR)",
     )
+    listing_update_parser.add_argument(
+        "--show-browser",
+        action="store_true",
+        help="show the Chrome window for the API source (default: headless)",
+    )
 
     login_parser = subparsers.add_parser(
         "591-login",
@@ -1990,6 +2001,11 @@ def build_parser() -> argparse.ArgumentParser:
     radar_parser.add_argument("--delay-max", type=float, default=6.0)
     radar_parser.add_argument("--page-timeout", type=int, default=30)
     radar_parser.add_argument("--profile-dir", default=None)
+    radar_parser.add_argument(
+        "--show-browser",
+        action="store_true",
+        help="show the Chrome window while opening detail pages (default: headless)",
+    )
     radar_parser.add_argument(
         "--offline",
         action="store_true",

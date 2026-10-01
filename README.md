@@ -270,6 +270,7 @@ $env:QINGPU_591_PROFILE_DIR = "instance/chrome-591"   # 或寫進 .env
 ```
 
 - **流程**：以專用 profile 開啟 A17～A19 中古屋列表頁一次（遇驗證頁或被導向登入頁即停止），之後在頁面內以 `fetch(..., {credentials: "include"})` 呼叫 591 列表 API（`bff-house.591.com.tw/v1/web/sale/list`），`firstRow` 每次加 30，直到 `firstRow ≥ total`（批次完整，`listing-update` 才會發布）或達 `--max-pages`（API 預設上限 300 頁）。每次呼叫間隔 3～6 秒隨機延遲，低於 3 秒拒絕執行。
+- **背景執行**：登入後，`listing-update`（API 來源）與 `listing-radar` 預設以 Chrome 無頭模式（headless）執行，沿用同一個 profile 的登入狀態、不開視窗，也不偽裝成一般瀏覽器；加 `--show-browser` 可改回顯示視窗。`591-login` 一律開視窗，讓你自己登入。
 - **停止條件**：HTTP 非 200、`status ≠ 1`、要求登入、驗證頁、空白頁都會記錄 CaptureError 並停止（批次標為不完整、不發布），不嘗試繞過；請重新執行 `591-login` 或手動完成驗證。
 - **隱私**：每頁 JSON 在寫入 `data/raw/listings/591/<日期>/<批次>/page-NNNN.json` 前只保留白名單欄位；仲介姓名、暱稱、電話、頭像、user id 等聯絡欄位不會寫入磁碟、資料庫或報告，標題再移除電話與 e-mail，新建案廣告整筆丟棄。`591-login` 不讀取、不輸入也不儲存帳號密碼；登入狀態只存在 profile 目錄（已被 `.gitignore` 排除）。
 - **對應**：`distance_name` 領航／高鐵桃園站／桃園體育園區 → A17／A18／A19，只保留距站 2 公里內；以 houseid 去重。列表沒有座標，因此 `station_code`／`station_distance_m` 採 591 標示值，`location_eligible` 仍為 false（未經定位）；建物型態、屋齡、車位型式寫入既有欄位。社區名稱、主建物坪數、原價／降幅、刊登時間保留在原始批次，供雷達使用，不改 MySQL schema。

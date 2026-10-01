@@ -133,6 +133,7 @@ class RadarRunOptions:
     profile_dir: str | None = None
     offline: bool = False
     prescreen: bool = True
+    headless: bool = True
 
     def __post_init__(self) -> None:
         ListingRadarRequest(max_listings=self.max_listings, refresh_hours=self.refresh_hours)
@@ -235,7 +236,7 @@ def _chrome_session(options: RadarRunOptions) -> tuple[SharedChromeSession, Capt
     from qingpu_insight.listing_capture import ChromeConfig, create_chrome
 
     config = ChromeConfig(
-        headless=False,
+        headless=options.headless,
         profile_dir=options.profile_dir,
         page_timeout_seconds=options.page_timeout_seconds,
         delay_seconds=options.delay_seconds,

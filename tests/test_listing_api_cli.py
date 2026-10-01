@@ -45,6 +45,8 @@ def test_source_defaults_to_api_only_when_a_profile_is_configured(monkeypatch) -
     )
     assert ListingSourceOptions.resolve("dom").kind == "dom"
     assert ListingSourceOptions.resolve(None, "C:/p").profile_dir == "C:/p"
+    assert options.headless is True
+    assert ListingSourceOptions.resolve(headless=False).headless is False
 
 
 def test_api_source_without_profile_is_refused() -> None:
@@ -136,7 +138,7 @@ def test_preparation_runner_builds_the_api_source(tmp_path, monkeypatch) -> None
     assert source.capture("sale", 10) == ("sale", 7)
     assert built[0].profile_dir == "P"
     assert built[0].delay_seconds == (3.0, 6.0)
-    assert built[0].headless is False
+    assert built[0].headless is True
 
 
 # --------------------------------------------------------------------------- scrape + build
