@@ -655,3 +655,23 @@ def test_login_wall_on_pagination_ends_the_batch_without_bypassing(tmp_path):
     assert batch.errors == []
     assert batch.reached_terminal_page is True
     assert batch.is_complete is True
+
+
+def test_create_chrome_passes_an_absolute_profile_dir(monkeypatch, tmp_path):
+    # Chrome crashes at startup when --user-data-dir is relative.
+    from qingpu_insight import listing_capture
+
+    captured = {}
+
+    class FakeChrome:
+        def __init__(self, options):
+            captured["args"] = list(options.arguments)
+
+        def set_page_load_timeout(self, seconds):
+            pass
+
+    monkeypatch.setattr(listing_capture.webdriver, "Chrome", FakeChrome)
+    monkeypatch.chdir(tmp_path)
+    listing_capture.create_chrome(ChromeConfig(profile_dir="instance/chrome-591"))
+    expected = f"--user-data-dir={(tmp_path / 'instance' / 'chrome-591').resolve()}"
+    assert expected in captured["args"]

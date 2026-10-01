@@ -525,7 +525,8 @@ def create_chrome(config: ChromeConfig) -> webdriver.Chrome:
     if config.binary:
         options.binary_location = config.binary
     if config.profile_dir:
-        options.add_argument(f"--user-data-dir={config.profile_dir}")
+        # Chrome fails to start with a relative --user-data-dir.
+        options.add_argument(f"--user-data-dir={Path(config.profile_dir).resolve()}")
     driver = webdriver.Chrome(options=options)
     driver.set_page_load_timeout(config.page_timeout_seconds)
     return driver
