@@ -126,6 +126,15 @@ class RawBatchWriter:
         tmp.replace(final)
         return final
 
+    def write_json_page(self, page_number: int, text: str) -> Path:
+        """An API page that has already been sanitized (no contact fields)."""
+        self._batch_dir.mkdir(parents=True, exist_ok=True)
+        tmp = self._batch_dir / f"page-{page_number:04d}.json.tmp"
+        final = self._batch_dir / f"page-{page_number:04d}.json"
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(final)
+        return final
+
     def write_diagnostic(self, page_number: int, html: str) -> Path:
         self._batch_dir.mkdir(parents=True, exist_ok=True)
         tmp = self._batch_dir / f"diagnostic-page-{page_number:04d}.html.tmp"

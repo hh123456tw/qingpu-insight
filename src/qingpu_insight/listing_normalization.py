@@ -174,6 +174,22 @@ def _positive_float(payload: dict[str, object], field: str) -> float | None:
     return parsed
 
 
+def _optional_text(payload: dict[str, object], field: str) -> str | None:
+    """Free-text listing attributes the API source provides (DOM payloads omit them)."""
+    value = payload.get(field)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip()[:80]
+
+
+def _optional_age(payload: dict[str, object]) -> float | None:
+    value = payload.get("building_age_years")
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    parsed = float(value)
+    return round(parsed, 2) if math.isfinite(parsed) and 0 <= parsed < 200 else None
+
+
 def _metadata(payload: dict[str, object], field: str, legacy_field: str) -> str:
     value = payload.get(field, payload.get(legacy_field, "unknown"))
     return value if isinstance(value, str) and value else "unknown"
@@ -283,14 +299,14 @@ def normalize_listing(source: SourceListing, snapshot_at: datetime) -> Normalize
         acquisition_schema_version=_metadata(
             payload, "schema_version", "acquisition_schema_version"
         ),
-        building_type=None,
+        building_type=_optional_text(payload, "building_type"),
         bedrooms=bedrooms if isinstance(bedrooms, int) else None,
         living_rooms=living_rooms if isinstance(living_rooms, int) else None,
         bathrooms=bathrooms if isinstance(bathrooms, int) else None,
-        building_age_years=None,
+        building_age_years=_optional_age(payload),
         floor=floor if isinstance(floor, int) else None,
         total_floors=total_floors if isinstance(total_floors, int) else None,
-        parking_type=None,
+        parking_type=_optional_text(payload, "parking_type"),
         latitude=latitude,
         longitude=longitude,
         structured_address=structured_address,
