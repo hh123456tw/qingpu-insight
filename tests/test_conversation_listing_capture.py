@@ -331,3 +331,36 @@ def test_detail_content_mentioning_closed_text_is_not_treated_as_delisted() -> N
 
     assert is_delisted_page(DELISTED_HTML) is True
     assert is_delisted_page(SALE_DETAIL_HTML.replace("測試社區", "社區已成交多戶")) is False
+
+
+def test_capture_waits_until_591_template_placeholders_are_rendered(monkeypatch) -> None:
+    # Live 591 pages ship the detail rows before Vue fills them ("${item.value}").
+    templated = SALE_DETAIL_HTML.replace(
+        '<div class="info-floor">12F/15F</div>',
+        '<div class="info-floor">${item.value} ${item.name}</div>',
+    ).replace("</body>", '<div class="detail-house-value">x</div></body>')
+    rendered = SALE_DETAIL_HTML.replace("</body>", '<div class="detail-house-value">x</div></body>')
+
+    class RenderingBrowser(FakeBrowser):
+        def __init__(self) -> None:
+            super().__init__(pages=[templated])
+            self.sources = [templated, templated, rendered]
+
+        @property
+        def page_source(self):
+            return self.sources.pop(0) if len(self.sources) > 1 else self.sources[0]
+
+        @page_source.setter
+        def page_source(self, value):
+            pass
+
+    clock = _SimulatedClock()
+    monkeypatch.setattr(conversation_listing_capture.time, "sleep", clock.sleep)
+    driver = RenderingBrowser()
+    browser = DetailPageBrowser(
+        driver_factory=lambda: driver,
+        redirect_resolver=_resolved_sale,
+        clock=clock,
+    )
+    captured = browser.capture(Initial591Url(request_url=SALE_URL, kind="direct"))
+    assert captured.detail.floor == "12F/15F"

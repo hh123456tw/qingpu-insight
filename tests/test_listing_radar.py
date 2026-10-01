@@ -329,6 +329,16 @@ def test_valuation_failures_and_out_of_area_are_recorded_not_raised(tmp_path: Pa
     result = _runner(tmp_path, capture, valuate=far).run(_candidates("2"))
     assert result.records[0]["status"] == "out_of_area"
 
+    # The shared valuation path rejects listings beyond the 2 km life circle.
+    from qingpu_insight.conversation_valuation import ListingOutOfArea
+
+    def outside(payload):
+        raise ListingOutOfArea("listing is 3500 m from the nearest A17–A19 station")
+
+    capture = _FakeCapture({"3": _captured("3")})
+    result = _runner(tmp_path, capture, valuate=outside).run(_candidates("3"))
+    assert result.records[0]["status"] == "out_of_area"
+
 
 def test_stored_records_never_contain_contact_details(tmp_path: Path) -> None:
     capture = _FakeCapture({"1": _captured("1", title="屋主急售 0912-345-678 a@b.com")})

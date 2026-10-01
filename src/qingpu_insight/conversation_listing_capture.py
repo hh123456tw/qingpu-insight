@@ -86,6 +86,10 @@ class Safe591RedirectResolver:
         raise RuntimeError(f"Exceeded maximum redirects ({MAX_REDIRECTS})")
 
 
+# Placeholder text left in 591 sale pages until Vue renders the detail fields.
+_UNRENDERED_TEMPLATE = "${item"
+
+
 class DetailPageBrowser:
     def __init__(
         self,
@@ -126,6 +130,10 @@ class DetailPageBrowser:
             if has_listing_detail_content(html, listing_type=listing_type):
                 if listing_type != "sale":
                     return
+                if _UNRENDERED_TEMPLATE in html:
+                    # Vue has not filled the detail rows yet; parsing now reads placeholders.
+                    time.sleep(0.5)
+                    continue
                 if (
                     "detail-house-key" in html
                     and "detail-house-value" in html

@@ -106,6 +106,15 @@ _LAYOUT_RE = re.compile(
     r"(?P<bathrooms>\d+)\s*衛"
 )
 _FLOOR_RE = re.compile(r"(?P<floor>\d+)\s*[Ff]")
+_BEDROOMS_ONLY_RE = re.compile(r"(?P<bedrooms>\d+)\s*房")
+# ValuationInput accepts station distances up to 2 km (the life-circle radius).
+MAX_STATION_DISTANCE_M = 2000.0
+
+
+class ListingOutOfArea(ValueError):
+    """The listing lies outside the A17–A19 life circles the model covers."""
+
+
 # 591 sometimes renders 8.516坪 as "8.5 16坪" or "10. 32坪"; only a number that already
 # has a decimal point may absorb a following space-split digit run, so "B2 16坪" stays 16.
 _PARKING_AREA_RE = re.compile(
@@ -254,9 +263,24 @@ def valuate_listing_with_context(
     the context to judge how far each estimate can be trusted.
     """
     transaction_type = "presale" if payload.get("listing_type") == "newhouse" else "resale"
-    layout = _LAYOUT_RE.search(str(payload.get("layout") or ""))
+    layout_text = str(payload.get("layout") or "")
+    layout = _LAYOUT_RE.search(layout_text)
     floor_match = _FLOOR_RE.search(str(payload.get("floor") or ""))
-    if layout is None or floor_match is None:
+    layout_note = None
+    if layout is not None:
+        bedrooms = int(layout.group("bedrooms"))
+        living_rooms = int(layout.group("living_rooms"))
+        bathrooms = int(layout.group("bathrooms"))
+    elif (bedrooms_only := _BEDROOMS_ONLY_RE.search(layout_text)) is not None:
+        # Some 591 listings show only "2房"; use the common hall/bath count for that size.
+        bedrooms = int(bedrooms_only.group("bedrooms"))
+        living_rooms = 2 if bedrooms >= 2 else 1
+        bathrooms = 2 if bedrooms >= 3 else 1
+        layout_note = (
+            f"591 格局只有房數（{bedrooms} 房），廳衛以常見配置"
+            f"（{living_rooms} 廳 {bathrooms} 衛）推估"
+        )
+    if floor_match is None or (layout is None and layout_note is None):
         raise ValueError("listing lacks required valuation features")
 
     longitude = payload.get("longitude")
@@ -266,6 +290,10 @@ def valuate_listing_with_context(
     station_code, station_distance_m = station_from_coords(
         float(longitude), float(latitude)
     )
+    if station_distance_m > MAX_STATION_DISTANCE_M:
+        raise ListingOutOfArea(
+            f"listing is {station_distance_m:.0f} m from the nearest A17–A19 station"
+        )
 
     total_floors = int(payload["total_floors"])
     floor = int(floor_match.group("floor"))
@@ -303,9 +331,9 @@ def valuate_listing_with_context(
         station_distance_m=station_distance_m,
         building_area_ping=area,
         building_type=building_type,
-        bedrooms=int(layout.group("bedrooms")),
-        living_rooms=int(layout.group("living_rooms")),
-        bathrooms=int(layout.group("bathrooms")),
+        bedrooms=bedrooms,
+        living_rooms=living_rooms,
+        bathrooms=bathrooms,
         building_age_years=age,
         floor=floor,
         total_floors=total_floors,
@@ -350,6 +378,8 @@ def valuate_listing_with_context(
             f"房屋坪數已從建物總坪數扣除車位 {parking_area:g} 坪"
         )
     limitations.append(common_area_note)
+    if layout_note is not None:
+        limitations.append(layout_note)
     context = {
         "transaction_type": transaction_type,
         "station_code": station_code,

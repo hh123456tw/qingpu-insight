@@ -45,6 +45,7 @@ from qingpu_insight.conversation_urls import (
     Unsupported591Url,
     parse_initial_591_url,
 )
+from qingpu_insight.conversation_valuation import ListingOutOfArea
 
 RADAR_STATIONS = ("A17", "A18", "A19")
 DEFAULT_MAX_LISTINGS = 60
@@ -696,6 +697,9 @@ class ListingRadarRunner:
             return {**record, "status": "not_sale", "status_reason": "僅支援中古屋"}
         try:
             public, context = self._valuate(payload)
+        except ListingOutOfArea:
+            return {**record, "status": "out_of_area",
+                    "status_reason": "不在 A17–A19 生活圈範圍內"}
         except Exception as error:
             message = str(error) if isinstance(error, ValueError) else type(error).__name__
             return {**record, "status": "valuation_failed",

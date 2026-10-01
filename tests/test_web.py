@@ -5579,3 +5579,15 @@ def test_post_report_schema_errors_return_field_codes_not_exception_text(
     assert response.status_code == 400
     fields = response.get_json()["error"]["fields"]
     assert fields == {"candidate_ids.0": "invalid"}
+
+
+def test_conversation_valuation_imputes_halls_and_baths_for_bedroom_only_layouts(monkeypatch):
+    ratio, result = _conversation_common_area(monkeypatch, layout="2房")
+    assert any("格局只有房數" in note for note in result["limitations"])
+
+
+def test_conversation_valuation_reports_listings_outside_the_life_circle(monkeypatch):
+    from qingpu_insight.conversation_valuation import ListingOutOfArea
+
+    with pytest.raises(ListingOutOfArea):
+        _conversation_common_area(monkeypatch, longitude=121.30, latitude=24.96)
