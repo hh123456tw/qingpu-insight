@@ -2340,7 +2340,7 @@ def test_listing_update_active_duplicate_reports_existing_without_execution(
             pytest.fail("active duplicate must not execute")
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli, "_create_listing_update_service", lambda root: Service())
+    monkeypatch.setattr(cli, "_create_listing_update_service", lambda root, **_: Service())
 
     assert main(["listing-update", "--types", "sale", "--max-pages", "1"]) == 2
     payload = json.loads(capsys.readouterr().out)
@@ -2367,7 +2367,7 @@ def test_listing_update_runtime_failure_is_exit_one(tmp_path, monkeypatch, capsy
             raise ListingUpdateError("preparation_failed", "listing preparation failed")
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli, "_create_listing_update_service", lambda root: Service())
+    monkeypatch.setattr(cli, "_create_listing_update_service", lambda root, **_: Service())
 
     assert main(["listing-update", "--types", "sale", "--max-pages", "1"]) == 1
     assert len(handoffs) == 1
@@ -2380,7 +2380,7 @@ def test_listing_update_service_construction_failure_redacts_secrets(
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
-    def failing_factory(root):
+    def failing_factory(root, **_):
         raise RuntimeError(
             "mysql://admin:password@localhost/private SQL phone 0912-345-678"
         )
@@ -2427,7 +2427,7 @@ def test_listing_update_factory_uses_connection_factories_and_real_runner(
     monkeypatch.setattr(
         cli,
         "M3ListingPreparationRunner",
-        lambda root, connection_factory: (
+        lambda root, connection_factory, **_: (
             captured.update(preparation_factory=connection_factory) or runner
         ),
         raising=False,

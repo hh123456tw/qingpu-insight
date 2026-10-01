@@ -4,9 +4,12 @@ import os
 import re
 import sys
 import tempfile
+import time
 import urllib.parse
 from collections import Counter
 from concurrent.futures import Future
+from dataclasses import dataclass
+from dataclasses import replace as dataclass_replace
 from datetime import UTC, datetime
 from math import isfinite
 from numbers import Real
@@ -36,9 +39,23 @@ from qingpu_insight.jobs import JobService
 from qingpu_insight.listing_591 import (
     ListingSchemaError,
     SourceListing,
-    extract_rendered_page,
 )
-from qingpu_insight.listing_capture import ChromeConfig, Selenium591Source, create_chrome
+from qingpu_insight.listing_api_591 import (
+    API_DEFAULT_MAX_PAGES,
+    MIN_API_DELAY_SECONDS,
+    Logged591ApiSource,
+    MissingProfileDir,
+    apply_listed_stations,
+    extract_captured_page,
+    page_file_name,
+    resolve_profile_dir,
+)
+from qingpu_insight.listing_capture import (
+    ROUTES,
+    ChromeConfig,
+    Selenium591Source,
+    create_chrome,
+)
 from qingpu_insight.listing_detail_enrichment import (
     DetailEnrichmentBlocked,
     ListingDetailEnricher,
@@ -181,6 +198,74 @@ def create_listing_source(
     root: Path, config: ChromeConfig | None = None
 ) -> ListingSource:
     return Selenium591Source(base_dir=root, config=config or ChromeConfig())
+
+
+LISTING_SOURCE_KINDS = ("api", "dom")
+API_DEFAULT_DELAY_SECONDS = (3.0, 6.0)
+
+
+@dataclass(frozen=True)
+class ListingSourceOptions:
+    """Which 591 source feeds sale listings: the logged-in API or the rendered list pages."""
+
+    kind: str = "dom"
+    profile_dir: str | None = None
+    api_max_pages: int = API_DEFAULT_MAX_PAGES
+
+    def __post_init__(self) -> None:
+        if self.kind not in LISTING_SOURCE_KINDS:
+            raise ValueError(f"unsupported listing source: {self.kind!r}")
+        if self.kind == "api" and not self.profile_dir:
+            raise MissingProfileDir()
+        if type(self.api_max_pages) is not int or not 1 <= self.api_max_pages <= 1000:
+            raise ValueError("api max pages must be an integer from 1 through 1000")
+
+    @classmethod
+    def resolve(
+        cls,
+        requested: str | None = None,
+        profile_dir: str | None = None,
+        api_max_pages: int | None = None,
+    ) -> "ListingSourceOptions":
+        """Default to the API source whenever a dedicated 591 profile is configured."""
+        profile = resolve_profile_dir(profile_dir)
+        kind = requested or ("api" if profile else "dom")
+        return cls(
+            kind=kind,
+            profile_dir=profile,
+            api_max_pages=api_max_pages if api_max_pages is not None else API_DEFAULT_MAX_PAGES,
+        )
+
+
+class RoutedListingSource:
+    """Sale listings through the logged-in API; newhouse and rental keep the DOM source."""
+
+    def __init__(self, api_factory, dom_factory, api_max_pages: int) -> None:
+        self._api_factory = api_factory
+        self._dom_factory = dom_factory
+        self._api_max_pages = api_max_pages
+
+    def capture(self, listing_type: ListingType, max_pages: int) -> CaptureBatch:
+        if listing_type == "sale":
+            return self._api_factory().capture("sale", max_pages=self._api_max_pages)
+        return self._dom_factory().capture(listing_type, max_pages=max_pages)
+
+
+def create_api_listing_source(
+    root: Path, config: ChromeConfig, api_max_pages: int = API_DEFAULT_MAX_PAGES
+) -> ListingSource:
+    if not config.profile_dir:
+        raise MissingProfileDir()
+    api_config = (
+        config
+        if config.delay_seconds[0] >= MIN_API_DELAY_SECONDS
+        else dataclass_replace(config, delay_seconds=API_DEFAULT_DELAY_SECONDS)
+    )
+    return RoutedListingSource(
+        lambda: Logged591ApiSource(base_dir=root, config=api_config),
+        lambda: create_listing_source(root, config),
+        api_max_pages,
+    )
 
 
 def create_mysql_connection_factory():
@@ -468,15 +553,25 @@ def listing_scrape(root: Path, args) -> int:
         print("delay-min 不能大於 delay-max", file=sys.stderr)
         return 1
 
+    try:
+        options = _scrape_source_options(args)
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+
     exit_code = 0
     for listing_type in args.types:
         config = ChromeConfig(
             headless=args.headless,
-            profile_dir=args.profile_dir,
+            profile_dir=options.profile_dir if options.kind == "api" else args.profile_dir,
             page_timeout_seconds=args.page_timeout,
             delay_seconds=(args.delay_min, args.delay_max),
         )
-        source = create_listing_source(root, config)
+        source = (
+            create_api_listing_source(root, config, options.api_max_pages)
+            if options.kind == "api"
+            else create_listing_source(root, config)
+        )
         batch = source.capture(listing_type, max_pages=args.max_pages)
         print(f"[{listing_type}] {_capture_summary(batch)}")
         if sum(page.accepted_count for page in batch.pages) == 0:
@@ -489,6 +584,16 @@ def listing_scrape(root: Path, args) -> int:
                     file=sys.stderr,
                 )
     return exit_code
+
+
+def _scrape_source_options(args) -> ListingSourceOptions:
+    """listing-scrape keeps the DOM source unless --source api is given."""
+    kind = getattr(args, "source", None) or "dom"
+    if kind == "dom":
+        return ListingSourceOptions(kind="dom", profile_dir=args.profile_dir)
+    if args.delay_min < MIN_API_DELAY_SECONDS:
+        raise ValueError(f"API 來源的 delay-min 必須 >= {MIN_API_DELAY_SECONDS:g} 秒")
+    return ListingSourceOptions.resolve("api", args.profile_dir, min(args.max_pages, 1000))
 
 
 def _load_listing_manifest(manifest_path: Path) -> object | None:
@@ -675,14 +780,16 @@ def listing_build(root: Path, args, *, detail_enricher=None) -> int:
     listings_map: dict[str, SourceListing] = {}
     rejection_reasons: Counter[str] = Counter()
     for page_info in sorted(manifest["pages"], key=lambda p: p["page_number"]):
-        html_path = batch_root / f"page-{page_info['page_number']:04d}.html"
+        representation = str(page_info.get("representation", "unknown"))
+        html_path = batch_root / page_file_name(page_info["page_number"], representation)
         if not html_path.exists():
             print(f"批次缺少頁面檔案: {html_path}", file=sys.stderr)
             return 1
         try:
-            extraction = extract_rendered_page(
+            extraction = extract_captured_page(
                 html_path.read_text(encoding="utf-8"),
                 listing_type,
+                representation,
             )
             rejection_reasons.update(
                 rejected.reason_code for rejected in extraction.rejected
@@ -744,7 +851,9 @@ def listing_build(root: Path, args, *, detail_enricher=None) -> int:
             print(f"無法啟用官方門牌 geocoder: {exc}", file=sys.stderr)
             return 1
         df = _enrich_rows_with_geocoder(df, geocoding_service)
-    located = assign_listing_life_circle(df, stations, settings.radius_m)
+    located = apply_listed_stations(
+        assign_listing_life_circle(df, stations, settings.radius_m), source_listings
+    )
 
     privacy_violations = _contact_shaped_title_count(located)
     if privacy_violations:
@@ -815,10 +924,13 @@ def _prepare_listing_type(
         )
 
     all_listings: list[SourceListing] = []
+    seen_ids: set[str] = set()
     rejection_reasons: Counter[str] = Counter()
     for page in batch.pages:
         try:
-            extraction = extract_rendered_page(page.html, listing_type)
+            extraction = extract_captured_page(
+                page.html, listing_type, page.representation
+            )
         except ListingSchemaError:
             raise ListingUpdateError(
                 "schema_error",
@@ -827,11 +939,15 @@ def _prepare_listing_type(
         rejection_reasons.update(
             rejected.reason_code for rejected in extraction.rejected
         )
-        all_listings.extend(
-            _source_listings_from_extraction(
-                extraction, page.representation, page.schema_version
-            )
-        )
+        for listing in _source_listings_from_extraction(
+            extraction, page.representation, page.schema_version
+        ):
+            # Listings can shift between pages while 591 re-sorts; keep the first sighting.
+            if listing.source_listing_id in seen_ids:
+                rejection_reasons["duplicate"] += 1
+                continue
+            seen_ids.add(listing.source_listing_id)
+            all_listings.append(listing)
 
     if verbose and rejection_reasons:
         print(
@@ -844,8 +960,11 @@ def _prepare_listing_type(
         )
 
     normalized = [normalize_listing(item, batch.started_at) for item in all_listings]
-    located = assign_listing_life_circle(
-        pd.DataFrame(_normalized_to_rows(normalized)), stations, radius_m
+    located = apply_listed_stations(
+        assign_listing_life_circle(
+            pd.DataFrame(_normalized_to_rows(normalized)), stations, radius_m
+        ),
+        all_listings,
     )
     located["active"] = True
     located["consecutive_absences"] = 0
@@ -928,13 +1047,21 @@ def _prepare_listing_type(
 class M3ListingPreparationRunner:
     """Visible-Selenium production adapter for the shared M3 transformation."""
 
-    def __init__(self, root: Path, connection_factory, *, source_factory=None) -> None:
+    def __init__(
+        self,
+        root: Path,
+        connection_factory,
+        *,
+        source_factory=None,
+        source_options: ListingSourceOptions | None = None,
+    ) -> None:
         doorplates_path = root / "data" / "raw" / "doorplates.csv"
         if not doorplates_path.is_file():
             raise FileNotFoundError("data/raw/doorplates.csv is required")
         self._root = root
         self._connection_factory = connection_factory
         self._source_factory = source_factory
+        self._source_options = source_options or ListingSourceOptions()
         self._settings = get_settings(root)
         doorplates = build_doorplate_frame(doorplates_path)
         self._stations = station_points(self._settings.stations, doorplates)
@@ -952,8 +1079,7 @@ class M3ListingPreparationRunner:
         connection = self._connection_factory()
         try:
             repository = MySQLListingRepository(connection)
-            build_source = self._source_factory or create_listing_source
-            source = build_source(self._root, ChromeConfig(headless=False))
+            source = self._build_source()
             return _prepare_listing_type(
                 listing_type,
                 max_pages,
@@ -966,6 +1092,22 @@ class M3ListingPreparationRunner:
             )
         finally:
             connection.close()
+
+    def _build_source(self) -> ListingSource:
+        if self._source_factory is not None:
+            return self._source_factory(self._root, ChromeConfig(headless=False))
+        options = self._source_options
+        if options.kind == "api":
+            return create_api_listing_source(
+                self._root,
+                ChromeConfig(
+                    headless=False,
+                    profile_dir=options.profile_dir,
+                    delay_seconds=API_DEFAULT_DELAY_SECONDS,
+                ),
+                options.api_max_pages,
+            )
+        return create_listing_source(self._root, ChromeConfig(headless=False))
 
 
 def listing_sync(root: Path, args) -> int:
@@ -1051,6 +1193,7 @@ def _create_listing_update_service(
     *,
     connection_factory=None,
     source_factory=None,
+    source_options: ListingSourceOptions | None = None,
 ) -> ListingUpdateService:
     operation_connection_factory = (
         connection_factory or create_mysql_connection_factory()
@@ -1063,6 +1206,9 @@ def _create_listing_update_service(
     runner_kwargs = {}
     if source_factory is not None:
         runner_kwargs["source_factory"] = source_factory
+    else:
+        # The admin page and the CLI both use the API source once a profile is configured.
+        runner_kwargs["source_options"] = source_options or ListingSourceOptions.resolve()
     preparation_runner = M3ListingPreparationRunner(
         root, operation_connection_factory, **runner_kwargs
     )
@@ -1301,14 +1447,24 @@ class _ForegroundJobExecutor:
 
 def listing_update(root: Path, args) -> int:
     try:
+        source_options = ListingSourceOptions.resolve(
+            args.source, args.profile_dir, args.max_pages
+        )
+        if args.max_pages is None:
+            dom_pages = 10
+        elif source_options.kind == "api":
+            # --max-pages caps the API walk; newhouse/rental keep the DOM page bound.
+            dom_pages = min(args.max_pages, 100)
+        else:
+            dom_pages = args.max_pages
         request = ListingUpdateRequest(
-            types=tuple(args.types), max_pages=args.max_pages, trigger="manual",
+            types=tuple(args.types), max_pages=dom_pages, trigger="manual",
         )
     except ValueError as error:
         print(str(error), file=sys.stderr)
         return 1
     try:
-        service = _create_listing_update_service(root)
+        service = _create_listing_update_service(root, source_options=source_options)
     except (RuntimeError, ValueError, OSError, pymysql.MySQLError):
         print(
             json.dumps(
@@ -1356,6 +1512,55 @@ def listing_update(root: Path, args) -> int:
         return 1
     print(json.dumps(_safe_job_payload(result), ensure_ascii=False))
     return 0 if result.status == "succeeded" else 1
+
+
+LOGIN_URL = ROUTES["sale"]
+
+
+def login_591(
+    root: Path,
+    args,
+    *,
+    browser_factory=create_chrome,
+    sleep=time.sleep,
+) -> int:
+    """Open the dedicated profile at 591 and wait until the person closes Chrome.
+
+    The person logs in by hand in that window; this command never sees, types or
+    stores credentials. Cookies stay in the profile directory, which must stay untracked.
+    """
+    profile = resolve_profile_dir(args.profile_dir)
+    if not profile:
+        print(str(MissingProfileDir()), file=sys.stderr)
+        return 1
+    profile_path = Path(profile)
+    if not profile_path.is_absolute():
+        profile_path = root / profile_path
+    profile_path.mkdir(parents=True, exist_ok=True)
+    driver = browser_factory(
+        ChromeConfig(headless=False, profile_dir=str(profile_path), page_timeout_seconds=60)
+    )
+    try:
+        driver.get(LOGIN_URL)
+        print(
+            f"已用專用 profile 開啟 591（{profile_path}）。請在 Chrome 視窗中自行登入，"
+            "完成後直接關閉 Chrome 視窗即可；本指令不會讀取或儲存帳號密碼。",
+            flush=True,
+        )
+        while True:
+            try:
+                if not driver.window_handles:
+                    break
+            except Exception:
+                break
+            sleep(2.0)
+    finally:
+        try:
+            driver.quit()
+        except Exception:
+            pass
+    print("Chrome 已關閉；之後 listing-update 會使用這個 profile 的 591 API 來源。")
+    return 0
 
 
 def listing_radar(root: Path, args) -> int:
@@ -1666,6 +1871,12 @@ def build_parser() -> argparse.ArgumentParser:
     scrape_parser.add_argument("--page-timeout", type=int, default=30)
     scrape_parser.add_argument("--headless", action="store_true")
     scrape_parser.add_argument("--profile-dir", default=None)
+    scrape_parser.add_argument(
+        "--source",
+        choices=LISTING_SOURCE_KINDS,
+        default="dom",
+        help="sale source: dom (rendered list pages, default) or api (logged-in profile)",
+    )
 
     build_parser = subparsers.add_parser(
         "listing-build",
@@ -1724,7 +1935,39 @@ def build_parser() -> argparse.ArgumentParser:
         "--types", nargs="+", default=["sale", "newhouse", "rental"],
         choices=listing_type_choices,
     )
-    listing_update_parser.add_argument("--max-pages", type=int, default=10)
+    listing_update_parser.add_argument(
+        "--max-pages",
+        type=int,
+        default=None,
+        help=(
+            "page cap (default: 10 for dom; for api the walk ends at 591's total, "
+            f"capped at {API_DEFAULT_MAX_PAGES} pages)"
+        ),
+    )
+    listing_update_parser.add_argument(
+        "--source",
+        choices=LISTING_SOURCE_KINDS,
+        default=None,
+        help=(
+            "sale source: api (logged-in 591 list API) or dom; default api when "
+            "QINGPU_591_PROFILE_DIR or --profile-dir is set, else dom"
+        ),
+    )
+    listing_update_parser.add_argument(
+        "--profile-dir",
+        default=None,
+        help="dedicated, logged-in Chrome profile (overrides QINGPU_591_PROFILE_DIR)",
+    )
+
+    login_parser = subparsers.add_parser(
+        "591-login",
+        help="open the dedicated Chrome profile at 591 so you can log in by hand once",
+    )
+    login_parser.add_argument(
+        "--profile-dir",
+        default=None,
+        help="dedicated Chrome user-data directory (overrides QINGPU_591_PROFILE_DIR)",
+    )
 
     radar_parser = subparsers.add_parser(
         "listing-radar",
@@ -2051,6 +2294,8 @@ def main(argv: list[str] | None = None) -> int:
         return listing_sync(root, args)
     if args.command == "listing-update":
         return listing_update(root, args)
+    if args.command == "591-login":
+        return login_591(root, args)
     if args.command == "listing-radar":
         return listing_radar(root, args)
     if args.command == "job-status":

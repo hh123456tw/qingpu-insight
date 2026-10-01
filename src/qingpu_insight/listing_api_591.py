@@ -29,6 +29,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlsplit
 
+import pandas as pd
+
 from qingpu_insight.conversation_listing_parser import scrub_contact_text
 from qingpu_insight.listing_591 import (
     ExtractionResult,
@@ -441,6 +443,35 @@ def extract_captured_page(
     return extract_rendered_page(content, listing_type)
 
 
+def apply_listed_stations(located: Any, listings: list[SourceListing]) -> Any:
+    """Fill station code/distance from 591's own nearest-station label where no coordinates.
+
+    API listings carry no coordinates, so ``assign_listing_life_circle`` leaves them without
+    a station. 591 states the nearest A17–A19 station and the distance; that is kept as the
+    station evidence, but ``location_eligible`` stays False because nothing was geolocated.
+    """
+    if located is None or located.empty or "source_listing_id" not in located:
+        return located
+    hints = {
+        listing.source_listing_id: listing.payload
+        for listing in listings
+        if listing.payload.get("station_code")
+    }
+    if not hints:
+        return located
+    output = located.copy()
+    for index, row in output.iterrows():
+        payload = hints.get(str(row.get("source_listing_id")))
+        if payload is None:
+            continue
+        current = row.get("station_code")
+        if not pd.isna(current) and str(current).strip():
+            continue
+        output.at[index, "station_code"] = payload["station_code"]
+        output.at[index, "station_distance_m"] = payload.get("station_distance_m")
+    return output
+
+
 def page_file_name(page_number: int, representation: str) -> str:
     suffix = "json" if representation == API_REPRESENTATION else "html"
     return f"page-{page_number:04d}.{suffix}"
@@ -511,7 +542,7 @@ class Logged591ApiSource:
         sleep: Callable[[float], None] = time.sleep,
         rng: random.Random | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
-        browser_factory: Callable[[ChromeConfig], Any] = create_chrome,
+        browser_factory: Callable[[ChromeConfig], Any] | None = None,
     ) -> None:
         self._config = config or ChromeConfig()
         if not self._config.profile_dir:
@@ -534,7 +565,8 @@ class Logged591ApiSource:
 
     def capture(self, listing_type: ListingType, max_pages: int = API_DEFAULT_MAX_PAGES
                 ) -> CaptureBatch:
-        browser = self._browser or self._browser_factory(self._config)
+        factory = self._browser_factory or create_chrome
+        browser = self._browser or factory(self._config)
         started = self._clock()
         if listing_type != "sale":
             batch = CaptureBatch(
