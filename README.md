@@ -32,7 +32,7 @@
 
 - **新建案會被以預售價等級估價**：大園區水源南路一個 2025 年完工的新華廈建案（final test 92 筆）以接近預售價轉手，模型依歷史「新建案轉手高於預售價」而高估，該建案總價誤差約 70%（§20 實驗），是 A18 與整體誤差的最大來源。屋齡 2 年內、主要依完工前成交推估的估價會加註說明，可信度最高為中。
 - **首頁須填門牌地址才能使用同棟錨點**：未填地址時只能依生活圈與距捷運距離估價，誤差明顯較大。
-- **只支援 Windows**：`listing_update.py` 以 `msvcrt` 做檔案鎖，`qingpu-web` 與 `qingpu-data` 都會匯入它，在 macOS／Linux 無法啟動。
+- **Windows 與 Linux**：CI 在 `windows-latest` 與 `ubuntu-latest` 都跑完整測試；檔案鎖在 Windows 用 `msvcrt`、其他平台用 `fcntl.flock`。PowerShell 腳本（每日排程）只適用 Windows，Linux 請改用 cron（見「每日排程」）。
 - 只涵蓋 A17～A19 兩公里生活圈，模型估計目前合理價格，不預測漲跌；上漲期樹模型無法外推，回測各窗口平均低估 2～9%。
 
 **資料污染案例**：更早的正式模型 `57cf2ba9` 的 MAE 4.24 萬／坪、R² 0.775 來自預售移轉混入中古屋的污染資料，並非真實能力。追查過程、重現方式與修正決策見[問題紀錄 §16、§18](docs/project-issue-log.md)，改用同棟錨點的過程見 §19。
@@ -65,7 +65,7 @@
 
 ### 1. 前置需求
 
-- **Windows 10／11**（見「主要限制」）
+- **Windows 10／11 或 Linux**（Linux 指令把 `.\.venv\Scripts\X.exe` 換成 `.venv/bin/X`）
 - **Python 3.11**
 - Node.js；只有執行前端 JavaScript 契約測試時需要
 - Chrome；更新 591 刊登或分析 591 詳細頁時需要
@@ -317,6 +317,14 @@ $env:QINGPU_591_PROFILE_DIR = "instance/chrome-591"   # 或寫進 .env
 pwsh -File scripts/register-daily-listings.ps1            # -At 07:00 可改時間，-Remove 移除
 ```
 
+Linux 沒有這兩支 PowerShell 腳本，用 cron 依序執行同樣三個指令即可，例如 `crontab -e` 加入：
+
+```bash
+30 9 * * * cd /path/to/qingpu-insight && export QINGPU_591_PROFILE_DIR=instance/chrome-591 && .venv/bin/qingpu-data listing-update --types sale && .venv/bin/qingpu-data listing-history && .venv/bin/qingpu-data listing-radar --max-listings 60 >> logs/daily-listings.log 2>&1
+```
+
+第一次登入（`591-login`）需要有畫面的桌面環境；登入後的抓取與雷達預設無頭，可在沒有螢幕的伺服器執行（需安裝 Chrome）。
+
 591 登入過期時，`listing-update` 會記錄 `login_required` 並停止；重新執行 `qingpu-data 591-login` 即可。
 
 ## 模型訓練與發布
@@ -460,7 +468,6 @@ $env:QINGPU_SECRET_KEY = "<至少 32 字元的本機隨機密鑰>"
 - 新建案以接近預售價轉手時會被高估（水源南路），詳見「成果與限制」。
 - 首頁未填門牌地址時無法使用同棟錨點；沒有同棟中古屋成交紀錄的建物誤差較大。
 - 90% 區間在 final test 的覆蓋率 79.0%，低於名目值。
-- 只能在 Windows 執行（`listing_update.py` 匯入 `msvcrt`）。
 - 未納入利率、政策、景觀、裝潢與建商品牌等難以穩定量化的特徵；不預測未來漲跌。
 - 管理中心是本機單人工具，不是多使用者 SaaS，也沒有雲端部署。
 
