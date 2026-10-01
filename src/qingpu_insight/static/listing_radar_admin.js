@@ -39,6 +39,10 @@
         (summary.valued || 0) + "，即時擷取 " + (summary.captured_live || 0) + "，沿用快取 " +
         (summary.from_cache || 0) + "。";
     }
+    if (summary.stage === "prescreening") {
+      return "初篩中 " + (summary.processed || 0) + "/" + (summary.total || 0) +
+        "（列表欄位快速估價，不連 591）…";
+    }
     if (summary.stage === "selected") return "已選出 " + (summary.total || 0) + " 筆候選，開始擷取…";
     return "已排入佇列…";
   }

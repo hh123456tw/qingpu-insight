@@ -54,7 +54,7 @@
 | 市場分析 | A17～A19 中古屋成交摘要、價格趨勢、交易量、近期成交與互動地圖 |
 | AI 條件估價 | 總價與單價估值、90% 區間、可信度、影響因素、相似成交與開價評估 |
 | 591 物件助理 | 貼入中古屋詳細頁 → 秒回初始摘要 → 持續對話，回答附驗證證據 |
-| 低估物件雷達 | 最新 591 中古屋逐一估價，列出開價明顯低於模型 90% 區間的物件與風險說明（`/radar`） |
+| 低估物件雷達 | 兩階段：最新 591 列表全部初篩，分數最高者開詳細頁精算，列出開價明顯低於模型 90% 區間的物件、社區、降價與風險說明（`/radar`） |
 | 買方報告 | 後端保留完整報告 API 與 CLI；首頁不顯示報告表單 |
 | 管理中心 | 資料更新、591 刊登更新、模型訓練／發布／回滾、LLM Benchmark、健康檢查與備份 |
 
@@ -255,9 +255,29 @@ pwsh -NoProfile -Command {
 } -args $batchDir
 ```
 
+## 591 列表 API 來源（已登入的專用 profile）
+
+591 的匿名列表在第 2 頁後會要求登入，逐頁擷取永遠拿不到完整批次。已取得 591 授權時，可改用登入後的列表 API：
+
+```powershell
+# 1. 只需一次：用專用 profile 開啟 591，在 Chrome 視窗中自行登入，完成後關閉視窗
+$env:QINGPU_591_PROFILE_DIR = "instance/chrome-591"   # 或寫進 .env
+.\.venv\Scripts\qingpu-data.exe 591-login
+# 2. 更新刊登：有 profile 時 sale 自動走 API（--source dom 可改回逐頁擷取）
+.\.venv\Scripts\qingpu-data.exe listing-update --types sale
+# 只擷取原始批次、不發布（之後可 listing-build 離線處理）
+.\.venv\Scripts\qingpu-data.exe listing-scrape --types sale --source api --delay-min 3 --delay-max 6
+```
+
+- **流程**：以專用 profile 開啟 A17～A19 中古屋列表頁一次（遇驗證頁或被導向登入頁即停止），之後在頁面內以 `fetch(..., {credentials: "include"})` 呼叫 591 列表 API（`bff-house.591.com.tw/v1/web/sale/list`），`firstRow` 每次加 30，直到 `firstRow ≥ total`（批次完整，`listing-update` 才會發布）或達 `--max-pages`（API 預設上限 300 頁）。每次呼叫間隔 3～6 秒隨機延遲，低於 3 秒拒絕執行。
+- **停止條件**：HTTP 非 200、`status ≠ 1`、要求登入、驗證頁、空白頁都會記錄 CaptureError 並停止（批次標為不完整、不發布），不嘗試繞過；請重新執行 `591-login` 或手動完成驗證。
+- **隱私**：每頁 JSON 在寫入 `data/raw/listings/591/<日期>/<批次>/page-NNNN.json` 前只保留白名單欄位；仲介姓名、暱稱、電話、頭像、user id 等聯絡欄位不會寫入磁碟、資料庫或報告，標題再移除電話與 e-mail，新建案廣告整筆丟棄。`591-login` 不讀取、不輸入也不儲存帳號密碼；登入狀態只存在 profile 目錄（已被 `.gitignore` 排除）。
+- **對應**：`distance_name` 領航／高鐵桃園站／桃園體育園區 → A17／A18／A19，只保留距站 2 公里內；以 houseid 去重。列表沒有座標，因此 `station_code`／`station_distance_m` 採 591 標示值，`location_eligible` 仍為 false（未經定位）；建物型態、屋齡、車位型式寫入既有欄位。社區名稱、主建物坪數、原價／降幅、刊登時間保留在原始批次，供雷達使用，不改 MySQL schema。
+- `newhouse`／`rental` 仍走逐頁擷取。管理中心的「591 刊登更新」在設定 `QINGPU_591_PROFILE_DIR` 時同樣改用 API 來源。
+
 ## 低估物件雷達
 
-把最新一批 591 中古屋刊登逐一用「591 物件助理」相同的模型與換算估價，找出開價明顯低於模型區間的物件，結果在 <http://127.0.0.1:5000/radar>（公開唯讀，首頁有連結）與 `GET /api/listing-radar?station=A18&sort=score&limit=20`。
+有 API 列表批次時分兩階段：先替最新一批列表的**所有**物件做列表欄位快速估價（初篩），只替初篩分數最高的 `--max-listings` 筆開詳細頁，用「591 物件助理」相同的模型與換算精確估價，找出開價明顯低於模型區間的物件，結果在 <http://127.0.0.1:5000/radar>（公開唯讀，首頁有連結）與 `GET /api/listing-radar?station=A18&sort=score&limit=20`。
 
 ```powershell
 # 一個指令完成：選物件 → 可見 Chrome 擷取詳細頁 → 估價 → 排名 → 儲存與報告
@@ -266,11 +286,13 @@ pwsh -NoProfile -Command {
 .\.venv\Scripts\qingpu-data.exe listing-radar --offline
 ```
 
-- **物件來源**：已發布的 `listing_current`（有 MySQL 時）中仍在架的中古屋，否則用 `data/processed/listing_snapshots.parquet` 最新一批；已知不在 A17～A19 的略過，新到舊取前 `--max-listings` 筆（預設 60）。
+- **第一階段（初篩，不連 591）**：讀 `data/raw/listings/591/` 最新的完整 API 批次（沒有完整批次時用最新的部分批次，並在報告標示），以 591 標示的站點與距離、權狀坪數、格局、樓層、屋齡、建物型態、標示公設比（若有；591 公設比不含車位）一次批次估價；沒有座標所以不使用同棟成交錨定，車位只知有無與型式、坪數未知（以含車位坪數估算並標示）。初篩分數與排名同一公式。
+- **第二階段（精算）**：初篩分數最高的 `--max-listings` 筆（預設 60），加上 `--refresh-hours` 內已擷取過詳細頁的物件（沿用快取、不重抓），走下面的詳細頁擷取與估價。其餘物件以 `prescreen_only`（僅初篩）保存在批次中，**不列入排名**。`--no-prescreen` 或沒有 API 批次時，改回舊流程：已發布的 `listing_current`（有 MySQL 時）或 `listing_snapshots.parquet` 最新一批，新到舊取前 `--max-listings` 筆。
 - **禮貌擷取**：整批共用一個可見 Chrome；每頁間隔 3～6 秒隨機延遲（低於 3 秒會拒絕執行）；遇到 591 驗證頁立即停止整批（結束碼 2，已完成的物件照常保存），不嘗試繞過；已下架頁面略過；連續 3 頁載入失敗也會停止。`--refresh-hours`（預設 24）內擷取過的物件不重抓，因此中斷後重跑會從斷點接續。
 - **估價**：與 591 物件助理同一條路徑（`conversation_valuation.valuate_listing_with_context`）：座標算捷運站距離、扣除可驗證的車位坪數、公設比依主建物／附屬／共用換算、正式模型與總價 90% 區間。
 - **排名**：分數 = ln(估值 ÷ 開價) ÷ ln(估值 ÷ 區間下限)，1 代表剛好在區間下限，大於 1 為「明顯低於區間」；同樣的價差，區間越窄排越前。只排名有座標、格局、屋齡、扣車位後 8～120 坪、信心度非低、非降級估價、在生活圈內且開價低於估值的中古屋。新成屋（屋齡未滿 2 年）、依同棟預售錨定、未使用公設比、車位坪數無法確認、區間偏寬會加上提醒。
 - **「比模型低」不等於便宜**：開價偏低可能代表頂樓加蓋、凶宅、海砂屋、持分、地上權等未揭露瑕疵；模型也看不到裝潢、採光、景觀與屋況。頁面與報告都會顯示這段說明。
+- **顯示**：卡片與 API 另外顯示社區名稱、降價（原價與降幅，標記「近期降價」）與初篩估值；狀態列顯示初篩與精算筆數。
 - **儲存**：`data/processed/listing_radar/`（`captures.parquet` 擷取快取、`runs/<radar_batch_id>.parquet|json`、`latest.json`），報告在 `outputs/listing-radar/<radar_batch_id>.json|md`，皆含批次 ID、時間與模型版本，不需要 MySQL。快取只保留估價需要的欄位（不存地址），文字欄位再次移除電話與 e-mail。
 - **管理中心**：「刊登」區塊的「執行雷達」會以背景工作執行同一流程（`POST /api/admin/listing-radar-runs`，限本機＋CSRF，需要 MySQL 工作中心），進度顯示在按鈕下方。
 
@@ -364,7 +386,7 @@ $env:QINGPU_SECRET_KEY = "<至少 32 字元的本機隨機密鑰>"
 .\.venv\Scripts\qingpu-data.exe --help
 ```
 
-子指令：`acquire`、`analyse`、`run`、`market-build`、`mysql-load`、`model-train`、`listing-scrape`、`listing-build`、`listing-sync`、`listing-update`、`listing-radar`、`job-status`、`health-run`、`backup-create`、`backup-restore-drill`、`report-generate`、`llm-benchmark`、`llm-smoke`。常用維運指令：
+子指令：`acquire`、`analyse`、`run`、`market-build`、`mysql-load`、`model-train`、`listing-scrape`、`listing-build`、`listing-sync`、`listing-update`、`591-login`、`listing-radar`、`job-status`、`health-run`、`backup-create`、`backup-restore-drill`、`report-generate`、`llm-benchmark`、`llm-smoke`。常用維運指令：
 
 ```powershell
 .\.venv\Scripts\qingpu-data.exe health-run                           # 健康檢查（MySQL、資料集、備份）
@@ -385,7 +407,7 @@ $env:QINGPU_SECRET_KEY = "<至少 32 字元的本機隨機密鑰>"
 
 只納入通過住宅、價格、面積、日期與兩公里生活圈規則的交易；座標不足的交易或刊登保留為未定位，不以標題或地標猜測。`market-build` 保留中古屋與預售屋分類供追溯，並輸出 `precompletion_transfers.parquet`（完工前移轉，只作為同棟價格錨點，不進入中古屋目標值）。
 
-591 擷取使用可見 Chrome，不繞過驗證，也不刻意收集帳號、密碼、Cookie 或聯絡欄位；發布前會執行聯絡資訊偵測／清理 gate，原始 HTML 只保留在本機忽略路徑。591 頁面結構或驗證流程變更時可能需要人工處理或程式更新。
+591 擷取使用可見 Chrome，不繞過驗證或登入要求，也不刻意收集帳號、密碼、Cookie 或聯絡欄位（API 來源以白名單在寫檔前移除仲介聯絡欄位）；發布前會執行聯絡資訊偵測／清理 gate，原始 HTML 只保留在本機忽略路徑。591 頁面結構或驗證流程變更時可能需要人工處理或程式更新。
 
 | 產出檔案 | 由誰產生 | 說明 |
 |------|------|------|
@@ -398,7 +420,7 @@ $env:QINGPU_SECRET_KEY = "<至少 32 字元的本機隨機密鑰>"
 
 ## 公開儲存庫邊界
 
-不提交 Git：`.env`、`instance/secrets.env` 與任何 API Key；`data/raw/`、`data/processed/` 與 Parquet；`candidates/`（訓練候選）；`outputs/`（備份、估價紀錄與執行輸出）；591 原始 HTML、Chrome profile、Cookie 與聯絡資訊。
+不提交 Git：`.env`、`instance/secrets.env` 與任何 API Key；`data/raw/`、`data/processed/` 與 Parquet；`candidates/`（訓練候選）；`outputs/`（備份、估價紀錄與執行輸出）；591 原始 HTML／API JSON、Chrome profile（含 `instance/chrome-591/`）、Cookie 與聯絡資訊。
 
 **會**提交的模型只有 `artifacts/official/resale/`：`current.json`、`versions/92cd01ec/`（目前正式模型）與 `versions/ad50841d/`（上一版，回滾目標）。因此公開 clone 在建立市場資料之前首頁沒有資料點，這不是前端故障。
 

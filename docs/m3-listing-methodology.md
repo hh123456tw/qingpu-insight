@@ -188,6 +188,8 @@ Listing valuation（`listing_valuation.py`）在 M2 模型可用時，可為 sal
 
 ## 9. 隱私規範
 
+- 591 列表 API 來源（`listing_api_591.py`，需已登入的專用 profile `QINGPU_591_PROFILE_DIR`）在寫入 `page-NNNN.json` 前只保留白名單欄位；`linkman`、`nick_name`、`phonenum`、`mobile`、`avatar`、`user_id`、`call_num`、`agent_label_text`、`email` 等聯絡欄位永遠不寫入磁碟、資料庫或報告，新建案廣告整筆丟棄，標題再移除電話與 e-mail。遇到登入、驗證、非 200 或 `status ≠ 1` 即停止，不繞過。
+
 1. **不刻意抽取** 591 帳號、密碼、Cookie、Session Token 或專用聯絡欄位；結構化 schema 沒有專用 contact fields
 2. title 等 free text 與本機 raw HTML 仍可能含 contact-shaped text；發布 snapshot 或 API 前必須通過偵測／清理 gate，否則不得保證姓名、電話或 Email 不會出現在結構化輸出
 3. **不儲存** 原始 HTML 在 Git 追蹤路徑內（`data/raw/listings/` 已排除）；Chrome profile 也必須留在本機忽略位置

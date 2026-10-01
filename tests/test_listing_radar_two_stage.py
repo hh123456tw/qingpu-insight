@@ -239,6 +239,36 @@ def test_price_cut_is_carried_to_the_ranked_card(tmp_path: Path) -> None:
     assert "原 2,198 萬（−27.3%）" in md_path.read_text(encoding="utf-8")
 
 
+def test_public_api_shows_community_and_price_cut(tmp_path: Path) -> None:
+    from tests.test_listing_radar_web import _app
+
+    _api_batch(tmp_path)
+    capture = _FakeCapture({CUT_ID: _captured(CUT_ID, price_wan="1,280")})
+
+    def prescreen(payloads):
+        return [
+            ({"point_estimate_twd": 30_000_000 if p["source_listing_id"] == CUT_ID else 1,
+              "low_estimate_twd": 24_000_000 if p["source_listing_id"] == CUT_ID else 1,
+              "high_estimate_twd": 36_000_000}, {})
+            for p in payloads
+        ]
+
+    run_listing_radar(
+        tmp_path, RadarRunOptions(max_listings=1), valuate=_fake_valuate(),
+        prescreen=prescreen, capture=capture, sleep=lambda _: None, clock=lambda: NOW,
+    )
+    client = _app(tmp_path, radar_store(tmp_path)).test_client()
+    body = client.get("/api/listing-radar").get_json()
+
+    assert [item["source_listing_id"] for item in body["items"]] == [CUT_ID]
+    item = body["items"][0]
+    assert item["community_name"] == "站前新鋭"
+    assert item["original_price_twd"] == 21_980_000
+    assert item["down_price_percent"] == 27.3
+    assert body["batch"]["counts"]["prescreened"] == 62
+    assert body["batch"]["counts"]["prescreen_only"] == 61
+
+
 def test_fresh_cached_listings_join_without_live_requests(tmp_path: Path) -> None:
     _api_batch(tmp_path)
     listings = load_latest_api_batch(tmp_path / RAW_LISTING_DIR).listings

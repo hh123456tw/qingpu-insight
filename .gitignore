@@ -31,6 +31,8 @@ outputs/valuations/
 /data/locks/
 /outputs/backups/
 /instance/secrets.env
+# Dedicated, logged-in 591 Chrome profile (cookies); never commit it.
+/instance/chrome-591/
 /instance/*.log
 /outputs/m45-admin-acceptance/
 /outputs/automl/

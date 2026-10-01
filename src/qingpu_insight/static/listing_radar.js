@@ -25,6 +25,7 @@
     common_area_unused: "未使用公設比",
     parking_unverified: "車位坪數無法確認",
     wide_interval: "估價區間偏寬",
+    price_cut: "近期降價",
   };
   var CONFIDENCE_LABELS = { high: "高", medium: "中", low: "低" };
 
@@ -75,6 +76,16 @@
       .filter(function (label) { return Boolean(label); });
   }
 
+  function priceCut(item) {
+    var original = Number(item.original_price_twd);
+    var percent = Number(item.down_price_percent);
+    if (!item.original_price_twd || !Number.isFinite(original) || !Number.isFinite(percent) ||
+        item.down_price_percent === null || item.down_price_percent === undefined) {
+      return "—";
+    }
+    return "原 " + wan(original) + "（−" + String(Math.round(percent * 10) / 10) + "%）";
+  }
+
   function cardModel(item) {
     return {
       rank: "#" + (item.rank || "—"),
@@ -84,7 +95,10 @@
       title: typeof item.title === "string" && item.title ? item.title : "591 物件",
       url: safeListingUrl(item.url),
       facts: [
+        ["社區", typeof item.community_name === "string" && item.community_name
+          ? item.community_name : "—"],
         ["開價", wan(item.asking_price_twd)],
+        ["降價", priceCut(item)],
         ["模型估值", wan(item.estimate_twd)],
         ["90% 區間", wan(item.interval_low_twd) + "–" + wan(item.interval_high_twd)],
         ["坪數", number(item.area_ping, " 坪") +
@@ -166,7 +180,11 @@
       ? "（遇到 591 驗證頁而提早停止，結果不完整）"
       : batch.status === "stopped_failures" ? "（多頁擷取失敗而提早停止，結果不完整）" : "";
     var items = Array.isArray(body.items) ? body.items.length : 0;
-    return "更新於 " + formatTaipeiTime(batch.finished_at) + stopped + "：共估價 " +
+    var prescreen = counts.prescreened
+      ? "初篩 " + counts.prescreened + " 筆列表物件後，"
+      : "";
+    return "更新於 " + formatTaipeiTime(batch.finished_at) + stopped + "：" + prescreen +
+      "開詳細頁精算 " +
       (counts.valued || 0) + " 筆，符合條件且開價低於估值 " + (counts.ranked || 0) +
       " 筆，其中明顯低於區間 " + (counts.below_interval || 0) + " 筆；目前顯示 " + items + " 筆。";
   }
@@ -230,6 +248,7 @@
     renderCard: renderCard,
     renderRadar: renderRadar,
     statusText: statusText,
+    priceCut: priceCut,
     formatTaipeiTime: formatTaipeiTime,
     init: init,
   };

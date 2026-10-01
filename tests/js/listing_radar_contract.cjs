@@ -82,9 +82,22 @@ assert.equal(model.station, "A18 高鐵桃園站");
 assert.equal(model.gap, "−28.9%");
 assert.equal(model.below, true);
 assert.deepEqual(model.flags, ["新成屋（屋齡未滿 2 年）", "依同棟預售／完工前成交推估"]);
-assert.deepEqual(model.facts[0], ["開價", "1,280 萬"]);
-assert.deepEqual(model.facts[2], ["90% 區間", "1,600 萬–2,000 萬"]);
-assert.deepEqual(model.facts[6], ["估價錨點", "同棟成交錨定"]);
+assert.deepEqual(model.facts[0], ["社區", "—"]);
+assert.deepEqual(model.facts[1], ["開價", "1,280 萬"]);
+assert.deepEqual(model.facts[2], ["降價", "—"]);
+assert.deepEqual(model.facts[4], ["90% 區間", "1,600 萬–2,000 萬"]);
+assert.deepEqual(model.facts[8], ["估價錨點", "同棟成交錨定"]);
+
+const cut = radar.cardModel(Object.assign({}, item, {
+  community_name: "站前新鋭",
+  original_price_twd: 21980000,
+  down_price_percent: 27.3,
+  flags: ["price_cut"],
+}));
+assert.deepEqual(cut.facts[0], ["社區", "站前新鋭"]);
+assert.deepEqual(cut.facts[2], ["降價", "原 2,198 萬（−27.3%）"]);
+assert.deepEqual(cut.flags, ["近期降價"]);
+assert.equal(radar.priceCut({ original_price_twd: null, down_price_percent: 10 }), "—");
 
 const doc = fakeDocument();
 const card = radar.renderCard(doc, item);
@@ -113,7 +126,11 @@ radar.renderRadar(doc, list, status, {
 assert.match(status.textContent, /驗證頁/);
 assert.match(status.textContent, /2026\/10\/01 12:00/);
 assert.equal(radar.formatTaipeiTime(null), "—");
-assert.match(status.textContent, /共估價 12 筆/);
+assert.match(status.textContent, /精算 12 筆/);
+assert.match(
+  radar.statusText({ batch: { counts: { prescreened: 5400, valued: 60 } }, items: [] }),
+  /初篩 5400 筆列表物件後，開詳細頁精算 60 筆/
+);
 assert.equal(list.children.length, 1);
 
 // --- admin trigger -----------------------------------------------------------------
@@ -129,6 +146,13 @@ assert.match(
     summary: { stage: "capturing", processed: 3, total: 60, valued: 2, captured_live: 3 },
   }),
   /處理中 3\/60/
+);
+assert.match(
+  radarAdmin.progressText({
+    status: "running",
+    summary: { stage: "prescreening", processed: 500, total: 5400 },
+  }),
+  /初篩中 500\/5400/
 );
 assert.match(
   radarAdmin.progressText({ status: "failed", error_code: "verification_required" }),
