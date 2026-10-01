@@ -54,6 +54,7 @@
 | 市場分析 | A17～A19 中古屋成交摘要、價格趨勢、交易量、近期成交與互動地圖 |
 | AI 條件估價 | 總價與單價估值、90% 區間、可信度、影響因素、相似成交與開價評估 |
 | 591 物件助理 | 貼入中古屋詳細頁 → 秒回初始摘要 → 持續對話，回答附驗證證據 |
+| 低估物件雷達 | 最新 591 中古屋逐一估價，列出開價明顯低於模型 90% 區間的物件與風險說明（`/radar`） |
 | 買方報告 | 後端保留完整報告 API 與 CLI；首頁不顯示報告表單 |
 | 管理中心 | 資料更新、591 刊登更新、模型訓練／發布／回滾、LLM Benchmark、健康檢查與備份 |
 
@@ -179,7 +180,7 @@ static/, templates/       原生 JavaScript 前端與 Jinja 範本
 # Python 測試（1,960 個，約 1 分鐘）
 .\.venv\Scripts\python.exe -m pytest
 
-# 前端 JavaScript 契約（10 個檔案，需要 Node.js）
+# 前端 JavaScript 契約（11 個檔案，需要 Node.js）
 Get-ChildItem tests\js\*.cjs, tests\js\*.mjs | ForEach-Object { node $_.FullName; if ($LASTEXITCODE) { throw "failed: $($_.Name)" } }
 
 # Lint
@@ -253,6 +254,25 @@ pwsh -NoProfile -Command {
   & .\.venv\Scripts\qingpu-data.exe listing-build --batch-dir $inputBatch
 } -args $batchDir
 ```
+
+## 低估物件雷達
+
+把最新一批 591 中古屋刊登逐一用「591 物件助理」相同的模型與換算估價，找出開價明顯低於模型區間的物件，結果在 <http://127.0.0.1:5000/radar>（公開唯讀，首頁有連結）與 `GET /api/listing-radar?station=A18&sort=score&limit=20`。
+
+```powershell
+# 一個指令完成：選物件 → 可見 Chrome 擷取詳細頁 → 估價 → 排名 → 儲存與報告
+.\.venv\Scripts\qingpu-data.exe listing-radar --max-listings 60
+# 不開 Chrome，只用 --refresh-hours 內已擷取的頁面重新估價（例如換模型後）
+.\.venv\Scripts\qingpu-data.exe listing-radar --offline
+```
+
+- **物件來源**：已發布的 `listing_current`（有 MySQL 時）中仍在架的中古屋，否則用 `data/processed/listing_snapshots.parquet` 最新一批；已知不在 A17～A19 的略過，新到舊取前 `--max-listings` 筆（預設 60）。
+- **禮貌擷取**：整批共用一個可見 Chrome；每頁間隔 3～6 秒隨機延遲（低於 3 秒會拒絕執行）；遇到 591 驗證頁立即停止整批（結束碼 2，已完成的物件照常保存），不嘗試繞過；已下架頁面略過；連續 3 頁載入失敗也會停止。`--refresh-hours`（預設 24）內擷取過的物件不重抓，因此中斷後重跑會從斷點接續。
+- **估價**：與 591 物件助理同一條路徑（`conversation_valuation.valuate_listing_with_context`）：座標算捷運站距離、扣除可驗證的車位坪數、公設比依主建物／附屬／共用換算、正式模型與總價 90% 區間。
+- **排名**：分數 = ln(估值 ÷ 開價) ÷ ln(估值 ÷ 區間下限)，1 代表剛好在區間下限，大於 1 為「明顯低於區間」；同樣的價差，區間越窄排越前。只排名有座標、格局、屋齡、扣車位後 8～120 坪、信心度非低、非降級估價、在生活圈內且開價低於估值的中古屋。新成屋（屋齡未滿 2 年）、依同棟預售錨定、未使用公設比、車位坪數無法確認、區間偏寬會加上提醒。
+- **「比模型低」不等於便宜**：開價偏低可能代表頂樓加蓋、凶宅、海砂屋、持分、地上權等未揭露瑕疵；模型也看不到裝潢、採光、景觀與屋況。頁面與報告都會顯示這段說明。
+- **儲存**：`data/processed/listing_radar/`（`captures.parquet` 擷取快取、`runs/<radar_batch_id>.parquet|json`、`latest.json`），報告在 `outputs/listing-radar/<radar_batch_id>.json|md`，皆含批次 ID、時間與模型版本，不需要 MySQL。快取只保留估價需要的欄位（不存地址），文字欄位再次移除電話與 e-mail。
+- **管理中心**：「刊登」區塊的「執行雷達」會以背景工作執行同一流程（`POST /api/admin/listing-radar-runs`，限本機＋CSRF，需要 MySQL 工作中心），進度顯示在按鈕下方。
 
 ## 模型訓練與發布
 
@@ -330,6 +350,7 @@ $env:QINGPU_SECRET_KEY = "<至少 32 字元的本機隨機密鑰>"
 | `/api/admin/restore-previews`、`/api/admin/restores`（別名 `/api/ops/...`） | POST | 還原預覽與確認文字／以預覽 ID 執行還原 |
 | `/api/admin/official-data-updates` | POST | 更新官方資料 |
 | `/api/admin/listing-updates` | POST | 更新 591 刊登 |
+| `/api/admin/listing-radar-runs` | POST | 執行低估物件雷達（`max_listings` 1–200、`refresh_hours` 0–336） |
 | `/api/admin/model-training-runs` | GET／POST | 訓練紀錄／送出訓練（`/<run_id>`、`/stop`、`/reports/<type>`） |
 | `/api/admin/model-release-previews`、`/api/admin/model-releases` | POST（releases 另有 GET） | 發布預覽、發布／回滾與發布紀錄 |
 | `/api/admin/models/status` | GET | 正式模型狀態 |
@@ -343,7 +364,7 @@ $env:QINGPU_SECRET_KEY = "<至少 32 字元的本機隨機密鑰>"
 .\.venv\Scripts\qingpu-data.exe --help
 ```
 
-子指令：`acquire`、`analyse`、`run`、`market-build`、`mysql-load`、`model-train`、`listing-scrape`、`listing-build`、`listing-sync`、`listing-update`、`job-status`、`health-run`、`backup-create`、`backup-restore-drill`、`report-generate`、`llm-benchmark`、`llm-smoke`。常用維運指令：
+子指令：`acquire`、`analyse`、`run`、`market-build`、`mysql-load`、`model-train`、`listing-scrape`、`listing-build`、`listing-sync`、`listing-update`、`listing-radar`、`job-status`、`health-run`、`backup-create`、`backup-restore-drill`、`report-generate`、`llm-benchmark`、`llm-smoke`。常用維運指令：
 
 ```powershell
 .\.venv\Scripts\qingpu-data.exe health-run                           # 健康檢查（MySQL、資料集、備份）

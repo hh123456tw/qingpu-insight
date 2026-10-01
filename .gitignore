@@ -10,6 +10,7 @@ data/raw/
 data/raw/listings/
 data/processed/
 outputs/reports/
+outputs/listing-radar/
 *.py[cod]
 *.parquet
 
