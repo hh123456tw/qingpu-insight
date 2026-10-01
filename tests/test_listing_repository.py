@@ -1022,3 +1022,53 @@ class TestMySQLRepositoryActualAdapter:
         assert len(updates) == 1
         assert updates[0][1]["active"] == 0
         assert updates[0][1]["consecutive_absences"] == 2
+
+
+class _DecimalCursor:
+    description = [
+        ("source_listing_id",),
+        ("building_area_ping",),
+        ("asking_price_twd",),
+        ("location_eligible",),
+        ("active",),
+        ("snapshot_at",),
+    ]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, sql, params=None):
+        self.sql = sql
+
+    def fetchall(self):
+        from decimal import Decimal
+
+        return [
+            ("1", Decimal("20.16"), 9_880_000, 1, 0, datetime(2026, 7, 21, 17, 51, 30)),
+            ("2", None, 12_000_000, 0, 1, datetime(2026, 7, 21, 17, 51, 30)),
+        ]
+
+
+class _DecimalConnection:
+    def cursor(self):
+        return _DecimalCursor()
+
+
+def test_mysql_reads_return_floats_not_decimals() -> None:
+    # pymysql returns DECIMAL columns as Decimal; mixed with floats from a new batch,
+    # pyarrow then cannot write the listing artifact.
+    # Only the read path is under test; skip the constructor's schema migration check.
+    repository = MySQLListingRepository.__new__(MySQLListingRepository)
+    repository._conn = _DecimalConnection()
+    for frame in (repository.load_current("sale"), repository.load_snapshots()):
+        assert frame["building_area_ping"].dtype == "float64"
+        assert frame["building_area_ping"].iloc[0] == 20.16
+        assert frame["source_listing_id"].tolist() == ["1", "2"]
+        # BOOLEAN columns come back as TINYINT 0/1.
+        assert frame["location_eligible"].tolist() == [True, False]
+        assert frame["active"].dtype == bool
+        # DATETIME columns hold UTC wall-clock time; new batches carry tz-aware UTC.
+        assert frame["snapshot_at"].iloc[0] == pd.Timestamp("2026-07-21T17:51:30Z")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -591,6 +592,27 @@ def _upgrade_range_schema(cursor) -> None:
                 )
 
 
+# Declared BOOLEAN (TINYINT(1)) in the listing tables; pymysql returns 0/1.
+_BOOLEAN_COLUMNS = frozenset({"location_eligible", "active"})
+# DATETIME columns written as UTC wall-clock time; pymysql returns them naive.
+_UTC_DATETIME_COLUMNS = frozenset(
+    {"snapshot_at", "occurred_at", "started_at", "address_observed_at", "geocoded_at"}
+)
+
+
+def _frame_from_rows(rows: list, columns: list[str]) -> pd.DataFrame:
+    """DataFrame from DB rows with the Parquet path's dtypes (floats, real booleans)."""
+    frame = pd.DataFrame(rows, columns=columns)
+    for column in _BOOLEAN_COLUMNS & set(frame.columns):
+        frame[column] = frame[column].astype(bool)
+    for column in _UTC_DATETIME_COLUMNS & set(frame.columns):
+        frame[column] = pd.to_datetime(frame[column], utc=True)
+    for column in frame.columns:
+        if frame[column].map(lambda value: isinstance(value, Decimal)).any():
+            frame[column] = pd.to_numeric(frame[column], errors="coerce").astype("float64")
+    return frame
+
+
 class MySQLListingRepository:
     """MySQL-backed repository using PyMySQL.
 
@@ -648,7 +670,7 @@ class MySQLListingRepository:
 
         if not rows:
             return pd.DataFrame()
-        return pd.DataFrame(rows, columns=cols)
+        return _frame_from_rows(rows, cols)
 
     # ------------------------------------------------------------------
     # load_snapshots
@@ -670,7 +692,7 @@ class MySQLListingRepository:
 
         if not rows:
             return pd.DataFrame()
-        return pd.DataFrame(rows, columns=cols)
+        return _frame_from_rows(rows, cols)
 
     # ------------------------------------------------------------------
     # append_events
@@ -717,7 +739,7 @@ class MySQLListingRepository:
 
         if not rows:
             return pd.DataFrame()
-        return pd.DataFrame(rows, columns=cols)
+        return _frame_from_rows(rows, cols)
 
     # ------------------------------------------------------------------
     # merge_state
